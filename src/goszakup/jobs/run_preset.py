@@ -345,6 +345,7 @@ def execute_search(
     download_docs: bool = True,
     run_llm: bool = True,
     max_pages: int | None = None,
+    listing_only: bool = False,
 ) -> RunStats:
     """Одна фаза listing+details в уже открытой сессии. Возвращает счётчики.
 
@@ -382,6 +383,9 @@ def execute_search(
 
     stats.new_lots = len(new_hits)
     stats.updated_lots = len(status_changes)
+
+    if listing_only:
+        return stats
 
     # Phase 2: детали только для тех, кого мы выбрали (новые + сменившие статус)
     targets = {h.announcement_id: h for h in new_hits}
@@ -432,6 +436,7 @@ def run_preset(
     run_llm: bool = True,
     max_pages: int | None = None,
     it_categories: list[str] | None = None,
+    listing_only: bool = False,
 ) -> ScrapeRun:
     """Прогоняет один preset. Если передан preset — берёт фильтры из БД."""
     init_db()
@@ -461,6 +466,7 @@ def run_preset(
             download_docs=download_docs,
             run_llm=run_llm,
             max_pages=max_pages,
+            listing_only=listing_only,
         )
 
         run = session.get(ScrapeRun, run_id)

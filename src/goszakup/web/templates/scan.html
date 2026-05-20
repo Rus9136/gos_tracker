@@ -1,0 +1,177 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Сканировать — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Сканировать</span></div>
+    <h1 class="page-title">Ad-hoc прогон по фильтрам</h1>
+    <div class="page-sub">
+      Разовый прогон с произвольными KATO / суммой / статусами / IT-категориями.
+      Результат — на странице прогона <a href="/runs">/runs</a>.
+      <span class="strong">Не запускайте параллельно с ежедневным прогоном</span> —
+      на goszakup глобальный Crawl-delay 5с.
+    </div>
+  </div>
+</div>
+
+{% if active_run %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--warn) 30%, transparent); background: var(--warn-bg)">
+  <div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 16px; color: var(--warn)">
+    {{ icon("clock", 16) }}
+    <span>Сейчас идёт прогон <a href="/runs/{{ active_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ active_run.id }}</a>
+      (старт {{ active_run.started_at|dt }}). Новый запустить нельзя.</span>
+  </div>
+</div>
+{% endif %}
+
+{% if error == "busy" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Уже идёт другой прогон. Дождитесь его завершения.</div>
+</div>
+{% elif error == "kato_invalid" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Неизвестный код региона.</div>
+</div>
+{% elif error == "amount_range" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">«Сумма до» меньше «сумма от».</div>
+</div>
+{% elif error == "amount_from_negative" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Сумма не может быть отрицательной.</div>
+</div>
+{% elif error == "mode_invalid" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Неизвестный режим запуска.</div>
+</div>
+{% elif error %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">{{ error }}</div>
+</div>
+{% endif %}
+
+<form method="post" action="/scan/run" class="card mb-3"
+      onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Запускаем…';">
+  <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px">
+
+    <div class="field" style="grid-column: 1 / -1">
+      <label>Регион (KATO)</label>
+      <select class="select" name="kato">
+        <option value="" {% if not defaults.kato %}selected{% endif %}>— Весь РК —</option>
+        {% for r in regions %}
+        <option value="{{ r.code }}" {% if defaults.kato == r.code %}selected{% endif %}>
+          {{ r.name }} <span class="dim">({{ r.code }})</span>
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Сумма от, ₸</label>
+      <input class="input" type="number" name="amount_from" min="0" value="{{ defaults.amount_from }}">
+    </div>
+    <div class="field">
+      <label>Сумма до, ₸ (опц.)</label>
+      <input class="input" type="number" name="amount_to" min="0" value="{{ defaults.amount_to }}" placeholder="без ограничения">
+    </div>
+    <div></div>
+
+    <div style="grid-column: 1 / -1">
+      <div class="flex items-center" style="justify-content: space-between; margin-bottom:8px">
+        <div class="uc">Статусы (несколько; пусто — любые)</div>
+        <div class="flex gap-2">
+          <button type="button" class="btn sm" onclick="scanSetStatuses(this.form, 'actual')">Все актуальные</button>
+          <button type="button" class="btn sm" onclick="scanSetStatuses(this.form, 'past')">Все прошедшие</button>
+          <button type="button" class="btn sm" onclick="scanSetStatuses(this.form, 'none')">Снять</button>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px">
+        {% for group_name, items in status_groups %}
+        <div>
+          <div class="uc mb-2">{{ group_name }}</div>
+          {% for code, name in items %}
+          <label class="flex items-start gap-2 scan-status" style="font-size:12px; margin-bottom:6px; cursor:pointer"
+                 data-group="{{ group_name }}">
+            <input type="checkbox" name="status" value="{{ code }}"
+                   {% if defaults.actual_preselected and group_name == "Актуальные" %}checked{% endif %}>
+            <span><span class="dim mono">{{ code }}</span> {{ name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="grid-column: 1 / -1">
+      <div class="uc mb-2">IT-категории (пусто — без фильтра)</div>
+      <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px">
+        {% for cat in it_categories %}
+        <label class="flex items-start gap-2" style="font-size:12.5px; margin-bottom:0; cursor:pointer">
+          <input type="checkbox" name="it" value="{{ cat }}">
+          <span>{{ cat }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="grid-column: 1 / -1">
+      <div class="uc mb-2">Режим запуска</div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px">
+        {% for code, label, descr in scan_modes %}
+        <label class="card" style="padding:12px; cursor:pointer; margin:0">
+          <div class="flex items-start gap-2">
+            <input type="radio" name="mode" value="{{ code }}" style="margin-top:3px"
+                   {% if defaults.mode == code %}checked{% endif %}>
+            <div>
+              <div class="strong">{{ label }}</div>
+              <div class="dim" style="font-size:12px; margin-top:2px">{{ descr }}</div>
+            </div>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="grid-column: 1 / -1; display:flex; align-items:center; gap:12px; padding-top:8px">
+      <button type="submit" class="btn primary" {% if active_run %}disabled{% endif %}>
+        {{ icon("play", 13) }} Запустить прогон
+      </button>
+      <span class="dim" style="font-size:12px">Crawl-delay 5с между запросами. На «весь РК» listing идёт ~15–20 мин на каждые ~10 000 лотов в выдаче.</span>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Как это работает</div>
+  </div>
+  <div class="card-body dim" style="font-size:13px">
+    <ol style="margin:0; padding-left:20px; line-height:1.7">
+      <li>Создаётся <span class="mono">ScrapeRun</span> с описанием параметров и шлётся <span class="mono">scan_actor</span> в очередь Dramatiq — worker подберёт его сразу.</li>
+      <li>Фаза 1: walk listing с фильтрами <span class="mono">filter[kato]</span>, <span class="mono">filter[amount_from/to]</span>, <span class="mono">filter[status][]</span>. Если выбраны IT-категории — лоты вне их отбрасываются.</li>
+      <li>Фаза 2 (если режим не «только листинг»): для новых / сменивших статус объявлений тянутся detail-карточки. Документы и LLM — опционально, по режиму.</li>
+      <li>Прогресс смотри на <a href="/runs">/runs</a> — страница run'а сама обновляется каждые 3с, пока он идёт.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+// Преселекторы статусов. Простой DOM-обход, без Alpine — экономим JS-сложность.
+function scanSetStatuses(form, kind) {
+  form.querySelectorAll('.scan-status').forEach(label => {
+    const group = label.dataset.group;
+    const cb = label.querySelector('input[type=checkbox]');
+    if (kind === 'none') {
+      cb.checked = false;
+    } else if (kind === 'actual') {
+      cb.checked = (group === 'Актуальные');
+    } else if (kind === 'past') {
+      cb.checked = (group === 'Прошедшие');
+    }
+  });
+}
+</script>
+
+{% endblock %}

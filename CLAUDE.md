@@ -54,7 +54,11 @@
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
-  — ежедневный entry-point. `ingest_actor` — ad-hoc по БИН. Очереди именованы:
+  — ежедневный entry-point. `ingest_actor` — ad-hoc по БИН.
+  **`scan_actor`** — ad-hoc по произвольным kato/amount/status/IT-категориям
+  из UI (`/scan`); умеет режимы `listing_only` / без LLM-документов / полный
+  через флаги `with_docs`, `with_llm` (передаются дальше в `detail_actor`).
+  Очереди именованы:
   `goszakup_daily`, `goszakup_listing`, `goszakup_detail`, `goszakup_llm`.
   Cross-process rate-limit на goszakup — `RedisThrottledSession` (SET NX EX
   с TTL=5s, global mutex). `ScrapeRun.finished_at` закрывается, когда
@@ -277,6 +281,12 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   ту же логику, что и пайплайн). На странице `/actual` и `/past` есть
   колонка «Короткое ТЗ» — берётся из `lot_analyses.tz_summary`,
   ограничена 3 строками через CSS `-webkit-line-clamp`.
+  Страница **`/scan`** (`scan.html`) — форма ad-hoc прогона: регион,
+  amount, статусы, IT-категории, режим запуска (только листинг / без
+  LLM-документов / полный). POST `/scan/run` зовёт
+  `jobs.scan.create_scan_run` (ScrapeRun stub), затем `scan_actor.send(...)`
+  → 303 на `/runs/{id}`. Эта же `find_active_run` блокирует параллельные
+  запуски — чтобы не нарушить Crawl-delay.
 - `scraper/modal_files.py` — разворачивает кнопку «Перейти» через ajax,
   возвращает прямые ссылки на файлы на `v3bl`. Содержит публичный
   `is_tz_like_name(text)` — переиспользуется в `classify/llm.pick_tz_document`.
@@ -284,7 +294,15 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   потом details для новых/сменивших статус. IT-фильтр применяется на фазе 1.
   В фазе 2 `_save_documents` сначала качает прямые `<a href>`, затем для
   строк за «Перейти» проверяет `is_tz_like_name` и разворачивает modal.
-  LLM-шаг — следом, только для лотов с `it_category`.
+  LLM-шаг — следом, только для лотов с `it_category`. Флаг `listing_only`
+  на `execute_search`/`run_preset` (и CLI `run-once --listing-only`)
+  останавливается после фазы 1 — нужен для ad-hoc стабования по большим
+  выборкам, когда details ходить дорого/нежелательно.
+- `jobs/scan.py` — `create_scan_run(...)` для UI `/scan`. Собирает
+  человекочитаемый `note` (регион, диапазон сумм, статусы, IT-категории,
+  режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.
+  Режимы (`MODE_LISTING` / `MODE_NO_HEAVY` / `MODE_FULL`) преобразуются в
+  тройку флагов `(listing_only, with_docs, with_llm)` через `mode_flags`.
 - `db/models.py` — 9 таблиц. `Organization` — общая для customer/organizer/supplier.
   `LotAnalysis` — 1:1 к `Lot` через FK + UniqueConstraint.
 - `db/engine.py` — `init_db()` делает `create_all` + узкий `_ensure_columns()`

@@ -62,6 +62,10 @@
         <span class="nav-ic">{{ icon("refresh", 15) }}</span>
         <span class="nav-label">Прогоны</span>
       </a>
+      <a href="/scan"         class="{{ 'active' if _active == 'scan' else '' }}">
+        <span class="nav-ic">{{ icon("play", 15) }}</span>
+        <span class="nav-label">Сканировать</span>
+      </a>
       <a href="/ingest"       class="{{ 'active' if _active == 'ingest' else '' }}">
         <span class="nav-ic">{{ icon("download", 15) }}</span>
         <span class="nav-label">Догрузка по БИН</span>

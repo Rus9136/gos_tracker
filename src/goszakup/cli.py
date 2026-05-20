@@ -98,6 +98,9 @@ def run_once(
         None, "--it", help="оставить только эти IT-категории (можно повторять)"
     ),
     docs: bool = typer.Option(True, "--docs/--no-docs"),
+    listing_only: bool = typer.Option(
+        False, "--listing-only", help="только листинг (без деталей/документов/LLM)"
+    ),
     verbose: bool = typer.Option(False, "-v"),
 ) -> None:
     """Разовый прогон без сохранения preset'а."""
@@ -108,7 +111,12 @@ def run_once(
     params = SearchParams(
         kato=kato, amount_from=amount_from, amount_to=amount_to, status_codes=codes
     )
-    run = run_preset(params=params, it_categories=it_only, download_docs=docs)
+    run = run_preset(
+        params=params,
+        it_categories=it_only,
+        download_docs=docs,
+        listing_only=listing_only,
+    )
     typer.echo(
         f"run #{run.id}: listing={run.listing_count} new={run.new_lots} "
         f"updated={run.updated_lots} docs={run.new_documents} errors={run.errors}"

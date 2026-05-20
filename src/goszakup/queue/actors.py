@@ -206,8 +206,19 @@ def listing_actor(preset_id: int) -> None:
     max_backoff=10 * 60_000,  # 10 min
     time_limit=10 * 60 * 1000,
 )
-def detail_actor(anno_id: int, run_id: int) -> None:
-    """Fetch деталей одного объявления, save в БД, enqueue LLM для IT-лотов."""
+def detail_actor(
+    anno_id: int,
+    run_id: int,
+    with_docs: bool = True,
+    with_llm: bool = True,
+) -> None:
+    """Fetch деталей одного объявления, save в БД, enqueue LLM для IT-лотов.
+
+    Флаги `with_docs` / `with_llm` управляют тяжёлыми побочками — нужны
+    для ad-hoc сканирования (`scan_actor`), где обычно хочется получить
+    organizer/контакты, но не качать пачки PDF и не дёргать Cerebras.
+    Default-ы оставлены True — `listing_actor` (пресет-прогоны) не меняется.
+    """
     r = _redis_client()
     http = make_http_session(r)
 
@@ -223,12 +234,15 @@ def detail_actor(anno_id: int, run_id: int) -> None:
                 _apply_details(session, lot, detail)
             lots_by_number = {lt.number: lt for lt in lots if lt.number}
             _save_contracts(session, lots_by_number, detail)
-            new_docs = _save_documents(session, anno, detail, http)
+            new_docs = 0
+            if with_docs:
+                new_docs = _save_documents(session, anno, detail, http)
             session.commit()
             _increment_run(
                 session, run_id, details_fetched=1, new_documents=new_docs
             )
-            it_lot_ids = [lt.id for lt in lots if lt.it_category]
+            if with_llm:
+                it_lot_ids = [lt.id for lt in lots if lt.it_category]
     except Exception:
         log.exception("detail_actor failed for anno=%s run=%s", anno_id, run_id)
         with SessionLocal() as session:
@@ -338,6 +352,96 @@ def ingest_actor(
         # ingest он избыточен. Раздельный actor имеет смысл, но для v1
         # хватит флага: detail_actor сам понимает, что делать.
         detail_actor.send(anno_id, run_id)
+
+
+# === Ad-hoc сканирование (UI: /scan) — kato/amount/status/IT-категории ===
+
+
+@dramatiq.actor(
+    queue_name="goszakup_listing",
+    max_retries=2,
+    time_limit=2 * 60 * 60 * 1000,  # «весь РК» при шаге 5с может идти часа полтора
+)
+def scan_actor(
+    run_id: int,
+    kato: str,
+    amount_from: int,
+    amount_to: int | None,
+    status_codes: list[int],
+    it_categories: list[str],
+    listing_only: bool = False,
+    with_docs: bool = True,
+    with_llm: bool = True,
+) -> None:
+    """Ad-hoc прогон по произвольным SearchParams + опциональному IT-prefilter.
+
+    Семантически близко к `listing_actor` (тот же two-phase pipeline), но
+    параметры приходят из UI-формы, а не из Preset. ScrapeRun уже создан в
+    `jobs/scan.create_scan_run` — этот actor только исполняет.
+    """
+
+    from ..scraper.search import SearchParams
+
+    r = _redis_client()
+    http = make_http_session(r)
+    status_codes = list(status_codes or [])
+    it_categories = list(it_categories or [])
+
+    params = SearchParams(
+        kato=kato or "",
+        amount_from=amount_from,
+        amount_to=amount_to,
+        status_codes=status_codes,
+    )
+
+    new_hits = []
+    status_changes = []
+    listing_count = 0
+
+    with SessionLocal() as session:
+        try:
+            for hit in iter_listing(params, session=http):
+                listing_count += 1
+                if it_categories:
+                    cat = classify(hit.enstru, hit.lot_name)
+                    if cat not in it_categories:
+                        continue
+                _upsert_lot_from_listing(
+                    session, hit, kato=params.kato,
+                    on_new=new_hits, on_status_change=status_changes,
+                )
+                if listing_count % 100 == 0:
+                    session.commit()
+            session.commit()
+        except Exception:
+            log.exception("scan_actor listing failed for run %d", run_id)
+            session.rollback()
+            _increment_run(session, run_id, errors=1)
+            _close_run(session, run_id)
+            raise  # Dramatiq ретрайнет
+
+        _update_run(
+            session, run_id,
+            listing_count=listing_count,
+            new_lots=len(new_hits),
+            updated_lots=len(status_changes),
+        )
+
+        if listing_only:
+            _close_run(session, run_id)
+            return
+
+        targets = {h.announcement_id for h in new_hits}
+        for h, _prev in status_changes:
+            targets.add(h.announcement_id)
+
+        if not targets:
+            _close_run(session, run_id)
+            return
+
+    _set_pending(r, run_id, len(targets))
+    for anno_id in targets:
+        detail_actor.send(anno_id, run_id, with_docs, with_llm)
 
 
 def _walk_listing(

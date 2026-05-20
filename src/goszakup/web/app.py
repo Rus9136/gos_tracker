@@ -40,6 +40,14 @@ from ..jobs.ingest import (
     find_active_run,
 )
 from ..jobs.run_preset import _save_announcement, _save_documents
+from ..jobs.scan import (
+    ALL_MODES,
+    MODE_FULL,
+    MODE_LISTING,
+    MODE_NO_HEAVY,
+    create_scan_run,
+    mode_flags,
+)
 from ..observability import setup_sentry
 from ..scraper.announce import fetch_announcement
 from ..scraper.http import ThrottledSession
@@ -89,6 +97,8 @@ def _nav_active(request: Request) -> str:
         return "runs"
     if path.startswith("/ingest"):
         return "ingest"
+    if path.startswith("/scan"):
+        return "scan"
     return ""
 
 
@@ -987,5 +997,100 @@ def ingest_start(
         list(status),
         amount_from,
         amount_to_int,
+    )
+    return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+
+# === /scan — ad-hoc прогон по kato/amount/status/IT-категориям ===
+
+
+_SCAN_MODES = [
+    (MODE_LISTING, "Только листинг", "Быстрый разведочный проход — без HTTP-нагрузки на детали."),
+    (MODE_NO_HEAVY, "Листинг + детали", "Тянет organizer, контакты и договоры. Без документов и LLM."),
+    (MODE_FULL, "Полный (как daily)", "Детали + документы + LLM-анализ для IT-лотов."),
+]
+
+
+@app.get("/scan", response_class=HTMLResponse)
+def scan_form(
+    request: Request,
+    db: Session = Depends(get_db),
+    _=Depends(_auth_dep()),
+    error: str = "",
+):
+    active = find_active_run(db)
+    return templates.TemplateResponse(
+        request,
+        "scan.html",
+        {
+            **_base_ctx(request, db),
+            "regions": REGIONS,
+            "status_groups": _STATUS_GROUPS,
+            "it_categories": IT_CATEGORIES,
+            "scan_modes": _SCAN_MODES,
+            "defaults": {
+                "kato": "",
+                "amount_from": 500_000,
+                "amount_to": "",
+                "mode": MODE_FULL,
+                "actual_preselected": True,
+            },
+            "active_run": active,
+            "error": error,
+        },
+    )
+
+
+@app.post("/scan/run")
+def scan_start(
+    kato: str = Form(""),
+    amount_from: int = Form(0),
+    amount_to: str = Form(""),
+    status: list[int] = Form(default=[]),
+    it: list[str] = Form(default=[]),
+    mode: str = Form(MODE_FULL),
+    _=Depends(_auth_dep()),
+):
+    kato = (kato or "").strip()
+    if kato and kato not in BY_CODE:
+        return RedirectResponse("/scan?error=kato_invalid", status_code=303)
+    if amount_from < 0:
+        return RedirectResponse("/scan?error=amount_from_negative", status_code=303)
+    amount_to_int = _maybe_int(amount_to)
+    if amount_to_int is not None and amount_to_int < amount_from:
+        return RedirectResponse("/scan?error=amount_range", status_code=303)
+    if mode not in ALL_MODES:
+        return RedirectResponse("/scan?error=mode_invalid", status_code=303)
+    # Чекбоксы IT приходят строками — отфильтруем мусор.
+    it_clean = [c for c in (it or []) if c in IT_CATEGORIES]
+    status_clean = list(status or [])
+
+    try:
+        run_id = create_scan_run(
+            kato=kato,
+            amount_from=amount_from,
+            amount_to=amount_to_int,
+            status_codes=status_clean,
+            it_categories=it_clean,
+            mode=mode,
+        )
+    except RuntimeError:
+        return RedirectResponse("/scan?error=busy", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/scan?error={e}", status_code=303)
+
+    listing_only, with_docs, with_llm = mode_flags(mode)
+
+    from ..queue.actors import scan_actor
+    scan_actor.send(
+        run_id,
+        kato,
+        amount_from,
+        amount_to_int,
+        status_clean,
+        it_clean,
+        listing_only,
+        with_docs,
+        with_llm,
     )
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
