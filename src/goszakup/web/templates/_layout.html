@@ -1,0 +1,105 @@
+{% from "_macros/icons.html" import icon %}
+<!doctype html>
+<html lang="ru" data-theme="dark" data-density="cozy">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1320">
+<title>{% block title %}Goszakup Tracker{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+<script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<script defer src="/static/js/hotkeys.js"></script>
+</head>
+<body>
+
+{% set _active = nav_active(request) %}
+{% set _counts = nav_counts %}
+
+<div class="app">
+  <aside class="sidebar">
+    <a href="/" class="brand" style="text-decoration:none;color:inherit">
+      <div class="brand-mark">GZ</div>
+      <div class="brand-name">Goszakup<br>Tracker</div>
+      <div class="brand-ver mono">v{{ version }}</div>
+    </a>
+
+    <nav class="nav">
+      <div class="nav-group-label">Тендеры</div>
+      <a href="/"             class="{{ 'active' if _active == 'dashboard' else '' }}">
+        <span class="nav-ic">{{ icon("grid", 15) }}</span>
+        <span class="nav-label">Дашборд</span>
+      </a>
+      <a href="/actual"       class="{{ 'active' if _active == 'actual' else '' }}">
+        <span class="nav-ic">{{ icon("flame", 15) }}</span>
+        <span class="nav-label">Актуальные</span>
+        <span class="nav-count">{{ _counts.actual }}</span>
+      </a>
+      <a href="/past"         class="{{ 'active' if _active == 'past' else '' }}">
+        <span class="nav-ic">{{ icon("clock", 15) }}</span>
+        <span class="nav-label">Прошедшие</span>
+        <span class="nav-count">{{ _counts.past }}</span>
+      </a>
+      <a href="/starred"      class="{{ 'active' if _active == 'starred' else '' }}">
+        <span class="nav-ic">{{ icon("star", 15) }}</span>
+        <span class="nav-label">Избранное</span>
+        <span class="nav-count">{{ _counts.starred }}</span>
+      </a>
+      <a href="/organizations" class="{{ 'active' if _active == 'customers' else '' }}">
+        <span class="nav-ic">{{ icon("list", 15) }}</span>
+        <span class="nav-label">Заказчики</span>
+        <span class="nav-count">{{ _counts.customers }}</span>
+      </a>
+
+      <div class="nav-group-label">Система</div>
+      <a href="/presets"      class="{{ 'active' if _active == 'presets' else '' }}">
+        <span class="nav-ic">{{ icon("star", 15) }}</span>
+        <span class="nav-label">Preset'ы</span>
+        <span class="nav-count">{{ _counts.presets }}</span>
+      </a>
+      <a href="/runs"         class="{{ 'active' if _active == 'runs' else '' }}">
+        <span class="nav-ic">{{ icon("refresh", 15) }}</span>
+        <span class="nav-label">Прогоны</span>
+      </a>
+      <a href="/ingest"       class="{{ 'active' if _active == 'ingest' else '' }}">
+        <span class="nav-ic">{{ icon("download", 15) }}</span>
+        <span class="nav-label">Догрузка по БИН</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="sidebar-user" title="GZ_NO_AUTH режим — без логина">
+      <div class="avatar" style="background: var(--accent-tint); color: var(--accent-hi)">Р</div>
+      <div class="user-meta">
+        <div class="user-name">Локально</div>
+        <div class="user-role">v{{ version }}</div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="col" style="min-width:0">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <form class="global-search" method="get" action="/actual">
+          <span class="ic">{{ icon("search", 14) }}</span>
+          <input name="q" placeholder="Поиск по лотам, БИН, заказчикам…" autocomplete="off">
+          <span class="kbd">⌘K</span>
+        </form>
+        <div class="topbar-right">
+          <a class="btn sm" href="/ingest">{{ icon("refresh", 12) }} Прогон</a>
+          <button class="icon-btn" title="Уведомления — скоро" type="button">{{ icon("bell", 15) }}</button>
+          <a class="icon-btn" href="/presets" title="Preset'ы">{{ icon("settings", 15) }}</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

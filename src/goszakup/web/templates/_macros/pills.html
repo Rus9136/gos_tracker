@@ -1,0 +1,88 @@
+{# Унифицированные пилюли/чипы. Использует status_tone() и dev_category_label()
+   глобалы из app.py. Подключение:
+   {% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge, sparkline %}
+#}
+
+{%- set _IT_HUES = {
+  "Услуги ИТ": 200,
+  "Оборудование": 80,
+  "ПО и лицензии": 280,
+  "Связь и интернет": 160,
+} -%}
+
+{%- set _DEV_HUES = {
+  "1c_development": 220,
+  "web_development": 250,
+  "mobile_dev": 290,
+  "integration": 180,
+  "software_support": 140,
+  "it_infra": 60,
+  "hardware": 30,
+  "not_dev": 0,
+} -%}
+
+{%- macro status_pill(code, mini=False, with_code=True) -%}
+  {%- set tone = status_tone(code) -%}
+  {%- set label = status_name(code) or (code|string if code is not none else "—") -%}
+  <span class="spill {{ tone }}" title="{{ label }}">
+    {%- if not mini %}<span class="dot" style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>{% endif -%}
+    <span class="truncate" style="max-width:{{ 130 if mini else 220 }}px">{{ label }}</span>
+    {%- if with_code and code is not none %}<span class="code">{{ code }}</span>{% endif -%}
+  </span>
+{%- endmacro -%}
+
+{%- macro cat_tag(category) -%}
+  {%- if not category -%}<span class="tag">—</span>
+  {%- else -%}
+    {%- set hue = _IT_HUES.get(category, 200) -%}
+    <span class="tag" title="{{ category }}">
+      <span class="swatch" style="background: oklch(0.7 0.14 {{ hue }})"></span>
+      {{ category }}
+    </span>
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro dev_tag(dev_code) -%}
+  {%- if not dev_code -%}{%- else -%}
+    {%- set hue = _DEV_HUES.get(dev_code, 0) -%}
+    <span class="tag">
+      <span class="swatch" style="background: oklch(0.72 0.16 {{ hue }}); border-radius:50%"></span>
+      {{ dev_category_label(dev_code) }}
+    </span>
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro risk_badge(level) -%}
+  {%- if not level -%}{%- else -%}
+    {%- set tone = {"low": "ok", "medium": "warn", "high": "bad"}.get(level, "muted") -%}
+    {%- set label = {"low": "низкий", "medium": "средний", "high": "высокий"}.get(level, level) -%}
+    <span class="badge {{ tone }}"><span class="dot"></span>{{ label }}</span>
+  {%- endif -%}
+{%- endmacro -%}
+
+{# Inline-spark SVG. values — список чисел; w/h — размеры. #}
+{%- macro sparkline(values, w=80, h=24, color="var(--accent)") -%}
+  {%- if not values or values|length < 2 -%}
+    <svg width="{{ w }}" height="{{ h }}"></svg>
+  {%- else -%}
+    {%- set mx = values|max -%}
+    {%- set mn = values|min -%}
+    {%- set span = (mx - mn) if (mx - mn) > 0 else 1 -%}
+    {%- set n = values|length -%}
+    {%- set pts = [] -%}
+    {%- for v in values -%}
+      {%- set x = (loop.index0 / (n - 1)) * w -%}
+      {%- set y = h - ((v - mn) / span) * (h - 4) - 2 -%}
+      {%- set _ = pts.append("%.2f,%.2f"|format(x, y)) -%}
+    {%- endfor -%}
+    {%- set d_line = "M" + pts|join(" L") -%}
+    {%- set d_area = d_line + " L" + (w|string) + "," + (h|string) + " L0," + (h|string) + " Z" -%}
+    {%- set last_x = (pts[-1].split(","))[0] -%}
+    {%- set last_y = (pts[-1].split(","))[1] -%}
+    <svg width="{{ w }}" height="{{ h }}" style="display:block">
+      <path d="{{ d_area }}" fill="color-mix(in oklch, {{ color }} 18%, transparent)"/>
+      <path d="{{ d_line }}" stroke="{{ color }}" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <circle cx="{{ last_x }}" cy="{{ last_y }}" r="2.4" fill="{{ color }}" stroke="var(--bg-1)" stroke-width="1"/>
+    </svg>
+  {%- endif -%}
+{%- endmacro -%}

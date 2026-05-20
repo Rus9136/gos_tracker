@@ -1,0 +1,106 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import status_pill, cat_tag %}
+{% block title %}{{ org.name[:80] }} — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="crumb">
+  <a href="/organizations">{{ icon("arrowLeft", 12) }} Заказчики</a>
+  <span class="sep">/</span>
+  <span class="strong">{{ org.name[:80] }}</span>
+</div>
+
+<div class="page-head">
+  <div style="min-width:0">
+    <h1 class="page-title">{{ org.name }}</h1>
+    <div class="page-sub">
+      {% if org.bin %}БИН: <span class="mono strong" style="color: var(--accent-hi)">{{ org.bin }}</span> • {% endif %}
+      Лотов всего: <span class="strong">{{ (actual|length + past|length)|n }}</span>
+      • Сумма плана: <span class="strong mono">{{ total_plan|n }} ₸</span>
+    </div>
+    {% if org.address %}<div class="dim mt-1" style="font-size:12px">{{ org.address }}</div>{% endif %}
+  </div>
+  <div class="flex gap-2">
+    {% if org.bin %}
+    <button class="btn" type="button" onclick="navigator.clipboard.writeText('{{ org.bin }}'); this.textContent='✓ скопирован'">{{ icon("copy", 13) }} Скопировать БИН</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-head">
+    <div>
+      <div class="card-title">Актуальные <span class="dim">({{ actual|length }})</span></div>
+    </div>
+  </div>
+  {% if actual %}
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:120px">Лот</th>
+        <th>Название</th>
+        <th style="width:160px">Категория</th>
+        <th style="width:200px">Статус</th>
+        <th class="num" style="width:140px">Сумма ₸</th>
+        <th style="width:140px">Замечен</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lot in actual %}
+      <tr onclick="window.location='/lot/{{ lot.id }}'">
+        <td class="mono dim" style="font-size:12px">#{{ lot.number or lot.id }}</td>
+        <td><div class="strong clamp-2" style="max-width:500px">{{ lot.name or '—' }}</div></td>
+        <td>{{ cat_tag(lot.it_category) }}</td>
+        <td>{{ status_pill(lot.status_code, mini=True) }}</td>
+        <td class="num mono">{{ lot.plan_amount|n }}</td>
+        <td class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="card-body dim">Нет актуальных лотов.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div>
+      <div class="card-title">Прошедшие <span class="dim">({{ past|length }})</span></div>
+    </div>
+  </div>
+  {% if past %}
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:120px">Лот</th>
+        <th>Название</th>
+        <th style="width:160px">Категория</th>
+        <th style="width:200px">Статус</th>
+        <th class="num" style="width:140px">Сумма ₸</th>
+        <th style="width:140px">Замечен</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lot in past %}
+      <tr onclick="window.location='/lot/{{ lot.id }}'">
+        <td class="mono dim" style="font-size:12px">#{{ lot.number or lot.id }}</td>
+        <td><div class="strong clamp-2" style="max-width:500px">{{ lot.name or '—' }}</div></td>
+        <td>{{ cat_tag(lot.it_category) }}</td>
+        <td>{{ status_pill(lot.status_code, mini=True) }}</td>
+        <td class="num mono">{{ lot.plan_amount|n }}</td>
+        <td class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="card-body dim">Нет прошедших лотов.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

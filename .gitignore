@@ -1,0 +1,30 @@
+# Окружение и креды
+.env
+.env.*
+!env.example
+
+# Виртуальное окружение и кеши Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Локальные настройки Claude Code
+.claude/
+
+# Данные приложения (SQLite, документы, логи прогонов)
+data/goszakup.sqlite
+data/goszakup.sqlite-*
+data/docs/
+data/logs/
+data/org_runs/
+
+# Логи и одноразовые CSV-выгрузки в корне
+*.log
+*.csv

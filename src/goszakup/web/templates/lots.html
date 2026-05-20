@@ -1,0 +1,320 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge %}
+{% block title %}{{ title }} — Goszakup Tracker{% endblock %}
+{% block content %}
+
+{% set is_actual_page = (base_path == "/actual") %}
+{% set is_starred_page = (base_path == "/starred") %}
+{% set total_sum = lots | sum(attribute='plan_amount', start=0) %}
+{% set crumb_label = 'Избранное' if is_starred_page else ('Актуальные' if is_actual_page else 'Прошедшие') %}
+
+{# Список активных фильтров — для чипов под filter-card #}
+{% set active = [] %}
+{% if filters.q %}{% set _ = active.append({'k':'q', 'label': 'Поиск: ' + filters.q}) %}{% endif %}
+{% if filters.kato %}{% set _ = active.append({'k':'kato', 'label': 'Регион: ' + (region_name(filters.kato) or filters.kato)}) %}{% endif %}
+{% if filters.it %}{% set _ = active.append({'k':'it', 'label': 'Категория: ' + filters.it}) %}{% endif %}
+{% if filters.dev %}{% set _ = active.append({'k':'dev', 'label': 'Разработка: ' + dev_category_label(filters.dev)}) %}{% endif %}
+{% if filters.risk %}{% set _ = active.append({'k':'risk', 'label': 'Риск: ' + vendor_lock_label(filters.risk)}) %}{% endif %}
+{% if filters.amount_from %}{% set _ = active.append({'k':'amount_from', 'label': 'От ' + filters.amount_from|compact + ' ₸'}) %}{% endif %}
+{% if filters.amount_to %}{% set _ = active.append({'k':'amount_to', 'label': 'До ' + filters.amount_to|compact + ' ₸'}) %}{% endif %}
+{% if filters.starred %}{% set _ = active.append({'k':'starred', 'label': 'Только избранные'}) %}{% endif %}
+{% if filters.status %}{% set _ = active.append({'k':'status', 'label': 'Статус: ' + (status_name(filters.status) or filters.status|string)}) %}{% endif %}
+
+{# Какие статусы предлагать в select. На /starred — оба списка. #}
+{% set status_options = actual_statuses if is_actual_page else (past_statuses if not is_starred_page else (actual_statuses + past_statuses)) %}
+
+<div x-data="lotList('compact')" x-cloak class="lots-page">
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><a href="/">Тендеры</a><span class="sep">/</span><span class="strong">{{ crumb_label }}</span></div>
+    <h1 class="page-title">{{ title }}</h1>
+  </div>
+  <div class="flex gap-2 items-center">
+    <span class="hint mono">найдено {{ total|n }} • ∑ {{ total_sum|n }} ₸</span>
+    <div class="seg">
+      <button type="button" :class="view==='compact' ? 'active' : ''" @click="view='compact'" title="Таблица">{{ icon("list", 13) }}</button>
+      <button type="button" :class="view==='cards' ? 'active' : ''"   @click="view='cards'"   title="Карточки">{{ icon("grid", 13) }}</button>
+    </div>
+    <a class="btn" href="?{{ pagination_qs(page) }}&export=csv" onclick="alert('Экспорт — скоро'); return false;">{{ icon("download") }} Экспорт</a>
+  </div>
+</div>
+
+{# Фильтр-карта #}
+<form method="get" class="card mb-3">
+  <div class="card-body" style="padding:14px">
+    <div class="filterbar">
+      <div class="field">
+        <label>Поиск</label>
+        <div style="position:relative">
+          <input class="input" name="q" value="{{ filters.q }}" placeholder="название, заказчик, ENSTRU"
+                 style="padding-left:32px; width:100%">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--fg-3)">{{ icon("search", 14) }}</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>Регион</label>
+        <select class="select" name="kato">
+          <option value="">— все —</option>
+          {% for r in regions %}
+          <option value="{{ r.code }}" {% if filters.kato == r.code %}selected{% endif %}>{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>IT-категория</label>
+        <select class="select" name="it">
+          <option value="">— все —</option>
+          {% for c in categories %}
+          <option value="{{ c }}" {% if filters.it == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Тип разработки</label>
+        <select class="select" name="dev">
+          <option value="">— все —</option>
+          {% for d in dev_categories %}
+          <option value="{{ d }}" {% if filters.dev == d %}selected{% endif %}>{{ dev_category_label(d) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Риск заточки</label>
+        <select class="select" name="risk">
+          <option value="">— все —</option>
+          {% for r in vendor_lock_risks %}
+          <option value="{{ r }}" {% if filters.risk == r %}selected{% endif %}>{{ vendor_lock_label(r) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn primary" type="submit">{{ icon("filter") }} Применить</button>
+    </div>
+    <div class="filterbar mt-2" style="grid-template-columns: repeat(4, 1fr) 1fr auto">
+      <div class="field">
+        <label>Сумма от, ₸</label>
+        <input class="input" type="number" name="amount_from" value="{{ filters.amount_from or '' }}" placeholder="0">
+      </div>
+      <div class="field">
+        <label>Сумма до, ₸</label>
+        <input class="input" type="number" name="amount_to" value="{{ filters.amount_to or '' }}" placeholder="—">
+      </div>
+      <div class="field">
+        <label>Сортировка</label>
+        <select class="select" name="sort">
+          <option value="-first_seen" {% if filters.sort == '-first_seen' %}selected{% endif %}>Новые первыми</option>
+          <option value="first_seen"  {% if filters.sort == 'first_seen'  %}selected{% endif %}>Старые первыми</option>
+          <option value="-plan_amount" {% if filters.sort == '-plan_amount' %}selected{% endif %}>Сумма ↓</option>
+          <option value="plan_amount"  {% if filters.sort == 'plan_amount'  %}selected{% endif %}>Сумма ↑</option>
+          <option value="-last_synced" {% if filters.sort == '-last_synced' %}selected{% endif %}>Недавно обновлены</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Статус</label>
+        {% if is_starred_page %}
+          {% set only_v = request.query_params.get('only', '') %}
+          <div class="seg" style="height:36px">
+            <a class="{{ 'active' if only_v == '' else '' }}" href="?{{ pagination_qs(1) | replace('only=' + only_v, '') | replace('&&','&') }}">Все</a>
+            <a class="{{ 'active' if only_v == 'actual' else '' }}" href="?only=actual">Актуальные</a>
+            <a class="{{ 'active' if only_v == 'past' else '' }}" href="?only=past">Прошедшие</a>
+          </div>
+        {% else %}
+        <select class="select" name="status">
+          <option value="">— все {{ 'актуальные' if is_actual_page else 'прошедшие' }} —</option>
+          {% for code, label in status_options %}
+          <option value="{{ code }}" {% if filters.status and filters.status|int == code %}selected{% endif %}>{{ code }} · {{ label }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+      </div>
+      {% if not is_starred_page %}
+      <div class="field">
+        <label>Избранное</label>
+        <label class="flex items-center gap-2" style="height:36px; cursor:pointer">
+          <input type="checkbox" name="starred" value="1" {% if filters.starred %}checked{% endif %}>
+          <span class="dim" style="font-size:12px">только отмеченные</span>
+        </label>
+      </div>
+      {% else %}
+      <div class="field">
+        <label>Код статуса</label>
+        <select class="select" name="status">
+          <option value="">— любой —</option>
+          {% for code, label in status_options %}
+          <option value="{{ code }}" {% if filters.status and filters.status|int == code %}selected{% endif %}>{{ code }} · {{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="flex items-end">
+        <a class="btn ghost sm" href="{{ base_path }}">Сбросить</a>
+      </div>
+    </div>
+    {% if active %}
+    <div class="flex items-center gap-2 mt-2" style="flex-wrap:wrap">
+      <span class="uc">Активные</span>
+      {% for f in active %}
+        <a class="chip active" href="?{{ pagination_qs(1) | replace(f.k + '=' + (filters[f.k]|string), '') | replace('&&','&') }}">
+          {{ f.label }} <span class="x">✕</span>
+        </a>
+      {% endfor %}
+      <a class="btn sm ghost" href="{{ base_path }}">очистить все</a>
+    </div>
+    {% endif %}
+  </div>
+</form>
+
+{# Bulk-action bar — появляется при выделении #}
+<div class="card mb-3 bulk-bar" x-show="count > 0" x-transition.slide-y>
+  <div class="card-body flex items-center justify-between" style="padding:10px 16px">
+    <div class="flex items-center gap-3">
+      <span class="strong">Выбрано: <span x-text="count"></span></span>
+      <button type="button" class="btn sm" title="скоро">{{ icon("star", 12) }} В избранное</button>
+      <button type="button" class="btn sm" title="скоро">{{ icon("sparkle", 12) }} LLM-анализ</button>
+      <button type="button" class="btn sm" title="скоро">{{ icon("download", 12) }} Скачать ТЗ</button>
+    </div>
+    <button type="button" class="btn sm ghost" @click="clear()">Снять выделение</button>
+  </div>
+</div>
+
+{# COMPACT TABLE #}
+<div class="card lots-table" x-show="view==='compact'">
+  <div class="tbl-scroll">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:32px">
+          <input type="checkbox"
+                 :checked="count === {{ lots|length }} && {{ lots|length }} > 0"
+                 @click="selectAll([{% for l in lots %}{{ l.id }}{% if not loop.last %},{% endif %}{% endfor %}])">
+        </th>
+        <th style="width:28px"></th>
+        <th style="width:130px">Лот</th>
+        <th>Наименование / Заказчик</th>
+        <th style="width:320px">Резюме ТЗ от LLM</th>
+        <th style="width:160px">Категория</th>
+        <th style="width:200px">Статус</th>
+        <th class="num" style="width:140px">Сумма ₸</th>
+        <th style="width:130px">Регион</th>
+        <th style="width:140px">Замечен</th>
+        <th style="width:90px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lot in lots %}
+      <tr :class="has({{ lot.id }}) ? 'is-selected' : ''" @click.self="window.location='/lot/{{ lot.id }}'">
+        <td @click.stop>
+          <input type="checkbox" :checked="has({{ lot.id }})" @click="toggle({{ lot.id }})">
+        </td>
+        <td>
+          <button class="icon-btn star-btn {{ 'starred' if lot.is_starred else '' }}"
+                  type="button"
+                  data-starred="{{ '1' if lot.is_starred else '0' }}"
+                  title="{{ 'Убрать из избранного' if lot.is_starred else 'В избранное' }}"
+                  @click.stop
+                  onclick="toggleStar(event, {{ lot.id }})">
+            {{ icon("star", 14) }}
+          </button>
+        </td>
+        <td class="mono dimer" style="font-size:11.5px" @click="window.location='/lot/{{ lot.id }}'">
+          <div class="strong" style="color: var(--fg-1)">#{{ lot.number or lot.id }}</div>
+          {% if lot.announcement %}<div style="font-size:10.5px">anno {{ lot.announcement.number or lot.announcement.id }}</div>{% endif %}
+        </td>
+        <td @click="window.location='/lot/{{ lot.id }}'" style="min-width:0">
+          <div class="strong clamp-2" style="font-size:13.5px; max-width:520px">{{ lot.name or '—' }}</div>
+          <div class="dim truncate" style="font-size:12px; max-width:520px">{{ lot.customer.name if lot.customer else '—' }}</div>
+          {% if lot.analysis %}
+            <div class="mt-1 flex gap-1 items-center" style="flex-wrap:wrap">
+              {% if lot.analysis.dev_category and lot.analysis.dev_category != 'not_dev' %}{{ dev_tag(lot.analysis.dev_category) }}{% endif %}
+              {% if lot.analysis.vendor_lock_risk and lot.analysis.vendor_lock_risk != 'low' %}{{ risk_badge(lot.analysis.vendor_lock_risk) }}{% endif %}
+              {% if lot.analysis.solo_feasible %}<span class="badge accent">соло-ok</span>{% endif %}
+            </div>
+          {% endif %}
+        </td>
+        <td @click="window.location='/lot/{{ lot.id }}'" class="dim" style="font-size:12px; max-width:320px">
+          {% if lot.analysis and lot.analysis.tz_summary %}
+            <div class="clamp-3"
+                 @mouseenter="showTip($event, {{ lot.analysis.tz_summary|tojson }})"
+                 @mouseleave="hideTip()">{{ lot.analysis.tz_summary }}</div>
+          {% else %}
+            <span class="dimer">—</span>
+          {% endif %}
+        </td>
+        <td @click="window.location='/lot/{{ lot.id }}'">{{ cat_tag(lot.it_category) }}</td>
+        <td @click="window.location='/lot/{{ lot.id }}'">{{ status_pill(lot.status_code, mini=True) }}</td>
+        <td class="num strong mono" @click="window.location='/lot/{{ lot.id }}'" style="font-size:13.5px">{{ lot.plan_amount|n }}</td>
+        <td @click="window.location='/lot/{{ lot.id }}'" class="dim">{{ region_name(lot.kato) or '—' }}</td>
+        <td @click="window.location='/lot/{{ lot.id }}'" class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
+        <td @click.stop>
+          <div class="row-actions">
+            <a class="icon-btn" href="/lot/{{ lot.id }}" title="Карточка">{{ icon("file", 13) }}</a>
+            <a class="icon-btn" href="{{ lot.url }}" target="_blank" rel="noopener" title="goszakup.gov.kz">{{ icon("external", 13) }}</a>
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="11" class="dim" style="text-align:center; padding:32px">Ничего не найдено</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot flex items-center justify-between">
+    <span>Показано <span class="strong">{{ lots|length }}</span> из {{ total|n }} {{ 'избранных' if is_starred_page else ('актуальных' if is_actual_page else 'прошедших') }}</span>
+    {% if pages > 1 %}
+    <div class="flex items-center gap-2">
+      {% if page > 1 %}<a class="btn sm" href="?{{ pagination_qs(page - 1) }}">{{ icon("chevronLeft", 12) }} Назад</a>
+      {% else %}<button class="btn sm" disabled style="opacity:0.5">{{ icon("chevronLeft", 12) }} Назад</button>{% endif %}
+      <span class="mono">{{ page }} / {{ pages }}</span>
+      {% if page < pages %}<a class="btn sm" href="?{{ pagination_qs(page + 1) }}">Вперёд {{ icon("chevronRight", 12) }}</a>
+      {% else %}<button class="btn sm" disabled style="opacity:0.5">Вперёд {{ icon("chevronRight", 12) }}</button>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# CARDS VIEW #}
+<div x-show="view==='cards'" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap:12px">
+  {% for lot in lots %}
+  <a class="card" href="/lot/{{ lot.id }}" style="cursor:pointer; text-decoration:none; color:inherit; display:block">
+    <div class="card-body" style="padding:16px">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">{{ status_pill(lot.status_code, mini=True) }} {{ cat_tag(lot.it_category) }}</div>
+        <button class="icon-btn star-btn {{ 'starred' if lot.is_starred else '' }}"
+                type="button"
+                data-starred="{{ '1' if lot.is_starred else '0' }}"
+                title="{{ 'Убрать из избранного' if lot.is_starred else 'В избранное' }}"
+                onclick="toggleStar(event, {{ lot.id }})">{{ icon("star", 14) }}</button>
+      </div>
+      <div class="mono dimer mb-1" style="font-size:11px">#{{ lot.number or lot.id }}</div>
+      <div class="strong clamp-2 mb-1" style="font-size:14px">{{ lot.name or '—' }}</div>
+      <div class="dim truncate mb-2" style="font-size:12px">{{ lot.customer.name if lot.customer else '—' }}</div>
+      {% if lot.analysis %}
+        <div class="flex gap-1 items-center mb-3" style="flex-wrap:wrap">
+          {% if lot.analysis.dev_category and lot.analysis.dev_category != 'not_dev' %}{{ dev_tag(lot.analysis.dev_category) }}{% endif %}
+          {% if lot.analysis.vendor_lock_risk and lot.analysis.vendor_lock_risk != 'low' %}{{ risk_badge(lot.analysis.vendor_lock_risk) }}{% endif %}
+          {% if lot.analysis.solo_feasible %}<span class="badge accent">соло-ok</span>{% endif %}
+        </div>
+      {% endif %}
+      <div class="flex items-end justify-between">
+        <div class="num mono strong" style="font-size:18px">{{ lot.plan_amount|n }} ₸</div>
+        <div class="dim mono" style="font-size:11px">{{ region_name(lot.kato) or '—' }} • {{ lot.first_seen|dt }}</div>
+      </div>
+    </div>
+  </a>
+  {% else %}
+  <div class="card" style="grid-column: 1 / -1"><div class="card-body dim" style="text-align:center; padding:32px">Ничего не найдено</div></div>
+  {% endfor %}
+</div>
+
+{# Tooltip для длинных полей таблицы (например, резюме ТЗ). Один на страницу,
+   позиция и текст управляются Alpine (см. showTip/hideTip в list.js). #}
+<div class="cell-tip" x-show="tip.visible" x-cloak
+     :style="{top: tip.y + 'px', left: tip.x + 'px'}"
+     x-text="tip.text"></div>
+
+</div> {# x-data #}
+
+<script src="/static/js/list.js"></script>
+
+{% endblock %}

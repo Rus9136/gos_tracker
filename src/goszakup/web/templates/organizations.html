@@ -1,0 +1,121 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Заказчики — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Заказчики и организаторы</span></div>
+    <h1 class="page-title">Заказчики и организаторы</h1>
+    <div class="page-sub">{{ total|n }} организаций
+      {% if top10_share %}• топ-10 держат {{ top10_share }}% бюджета{% endif %}
+    </div>
+  </div>
+  <div class="flex gap-2 items-center">
+    <a class="btn" href="?{{ q and 'q=' + q + '&' or '' }}export=csv" onclick="alert('Экспорт — скоро'); return false;">{{ icon("download") }} Экспорт CSV</a>
+    <a class="btn primary" href="/ingest">{{ icon("plus") }} Догрузка по БИН</a>
+  </div>
+</div>
+
+<form method="get" class="card mb-3">
+  <div class="card-body" style="display:grid; grid-template-columns: 2fr 1fr auto; gap:10px; align-items:end; padding:14px">
+    <div class="field">
+      <label>Поиск (название / БИН)</label>
+      <div style="position:relative">
+        <input class="input w-full" type="search" name="q" value="{{ q }}"
+               placeholder="название организации или 12-значный БИН"
+               style="padding-left:32px">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--fg-3)">{{ icon("search", 14) }}</span>
+      </div>
+    </div>
+    <div class="field">
+      <label>Сортировка</label>
+      <select class="select" name="sort">
+        <option value="-total" {% if sort == '-total' %}selected{% endif %}>По сумме ↓</option>
+        <option value="total"  {% if sort == 'total'  %}selected{% endif %}>По сумме ↑</option>
+        <option value="-lots"  {% if sort == '-lots'  %}selected{% endif %}>По числу лотов ↓</option>
+        <option value="name"   {% if sort == 'name'   %}selected{% endif %}>По названию</option>
+      </select>
+    </div>
+    <button class="btn primary" type="submit">Применить</button>
+  </div>
+</form>
+
+{% set max_total = rows | map(attribute='total') | list | max if rows else 1 %}
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:36px">#</th>
+        <th>Организация</th>
+        <th style="width:140px">БИН</th>
+        <th class="num" style="width:90px">Лотов</th>
+        <th class="num" style="width:110px">Актуальных</th>
+        <th class="num" style="width:380px">Сумма всего ₸</th>
+        <th style="width:60px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {% set offset = (page - 1) * 50 %}
+      {% set hue = ((row.bin or row.name)[-1]|int * 37) % 360 if (row.bin or row.name) else 0 %}
+      <tr onclick="window.location='/organization/{{ row.id }}'">
+        <td class="dim mono" style="font-size:12px">{{ "%02d"|format(offset + loop.index) }}</td>
+        <td>
+          <div class="flex items-start gap-2">
+            <div class="avatar" style="background: oklch(0.30 0.06 {{ hue }}); color: var(--fg-0)">{{ (row.name or 'Z')[:1] }}</div>
+            <div style="min-width:0">
+              <div class="strong clamp-2" style="font-size:13.5px; max-width:560px">{{ row.name }}</div>
+              {% if row.actual_cnt and row.actual_cnt > 0 %}
+              <div class="flex items-center gap-1 mt-1">
+                <span class="pulse"></span>
+                <span class="dim" style="font-size:11.5px">{{ row.actual_cnt }} актуальных лот{{ 'ов' if row.actual_cnt != 1 else '' }}</span>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </td>
+        <td>{% if row.bin %}<span class="mono" style="color: var(--accent-hi); font-size:12px">{{ row.bin }}</span>{% else %}<span class="dimer">—</span>{% endif %}</td>
+        <td class="num mono">{{ row.lots_cnt|n }}</td>
+        <td class="num">
+          {% if row.actual_cnt and row.actual_cnt > 0 %}<span class="badge ok"><span class="dot"></span>{{ row.actual_cnt }}</span>
+          {% else %}<span class="dimer mono">0</span>{% endif %}
+        </td>
+        <td>
+          <div class="flex items-center gap-3 justify-end">
+            <div class="bar org-bar">
+              <i style="width: {{ (row.total / max_total * 100) if max_total else 0 }}%"></i>
+            </div>
+            <div class="mono strong" style="min-width:130px; text-align:right">{{ row.total|n }}</div>
+          </div>
+        </td>
+        <td onclick="event.stopPropagation()">
+          <div class="row-actions">
+            {% if row.bin %}
+            <button class="icon-btn" type="button" onclick="navigator.clipboard.writeText('{{ row.bin }}'); this.title='скопирован'" title="Скопировать БИН">{{ icon("copy", 13) }}</button>
+            {% endif %}
+            <a class="icon-btn" href="/organization/{{ row.id }}" title="Открыть">{{ icon("chevronRight", 13) }}</a>
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="dim" style="text-align:center; padding:32px">Ничего не найдено</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot flex items-center justify-between">
+    <span>Показано <span class="strong">{{ rows|length }}</span> из {{ total|n }} организаций</span>
+    {% if pages > 1 %}
+    <div class="flex items-center gap-2">
+      {% if page > 1 %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&page={{ page - 1 }}">{{ icon("chevronLeft", 12) }} Назад</a>{% endif %}
+      <span class="mono">{{ page }} / {{ pages }}</span>
+      {% if page < pages %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&page={{ page + 1 }}">Вперёд {{ icon("chevronRight", 12) }}</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

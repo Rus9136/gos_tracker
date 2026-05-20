@@ -1,0 +1,65 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Прогоны — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Прогоны</span></div>
+    <h1 class="page-title">Журнал прогонов</h1>
+    <div class="page-sub">{{ runs|length }} последних • ежедневный launchd-агент + ad-hoc запуски</div>
+  </div>
+  <div class="flex gap-2">
+    <a class="btn primary" href="/ingest">{{ icon("plus") }} Догрузка по БИН</a>
+  </div>
+</div>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:48px">#</th>
+        <th style="width:160px">Старт</th>
+        <th style="width:160px">Финиш</th>
+        <th>Источник</th>
+        <th class="num">listing</th>
+        <th class="num">details</th>
+        <th class="num">new</th>
+        <th class="num">upd</th>
+        <th class="num">docs</th>
+        <th class="num">llm</th>
+        <th class="num">err</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr onclick="window.location='/runs/{{ r.id }}'">
+        <td class="mono dim"><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+        <td class="mono" style="font-size:12.5px">{{ r.started_at|dt }}</td>
+        <td class="mono dim" style="font-size:12.5px">{{ r.finished_at|dt if r.finished_at else '…' }}</td>
+        <td>
+          {% if r.preset_name %}<span class="badge muted">{{ r.preset_name }}</span>
+          {% elif r.note %}<span class="dim" style="font-size:12px">{{ r.note }}</span>
+          {% else %}<span class="badge muted">(adhoc)</span>{% endif %}
+        </td>
+        <td class="num mono">{{ r.listing_count|n }}</td>
+        <td class="num mono">{{ r.details_fetched|n }}</td>
+        <td class="num mono"><span class="strong">{{ r.new_lots or '—' }}</span></td>
+        <td class="num mono">{{ r.updated_lots or '—' }}</td>
+        <td class="num mono">{{ r.new_documents or '—' }}</td>
+        <td class="num mono">{{ r.llm_analyzed or '—' }}</td>
+        <td class="num">
+          {% if r.errors and r.errors > 0 %}<span class="badge bad"><span class="dot"></span>{{ r.errors }}</span>
+          {% else %}<span class="dim">0</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="11" class="dim" style="text-align:center; padding:32px">Прогонов пока нет</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% endblock %}

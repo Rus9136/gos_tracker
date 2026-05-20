@@ -1,0 +1,81 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import status_pill %}
+{% block title %}Прогон #{{ run.id }} — Goszakup Tracker{% endblock %}
+{% block content %}
+{% if in_progress %}
+  {# Авто-обновление страницы, пока прогон идёт. #}
+  <meta http-equiv="refresh" content="3">
+{% endif %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><a href="/runs">{{ icon("arrowLeft", 12) }} Прогоны</a><span class="sep">/</span><span class="strong mono">#{{ run.id }}</span></div>
+    <h1 class="page-title flex items-center gap-3">
+      Прогон #{{ run.id }}
+      {% if in_progress %}<span class="badge warn"><span class="dot"></span>в работе</span>
+      {% elif run.errors %}<span class="badge bad"><span class="dot"></span>с ошибками</span>
+      {% else %}<span class="badge ok"><span class="dot"></span>завершён</span>{% endif %}
+    </h1>
+    <div class="page-sub">
+      {% if preset_name %}Preset: <span class="strong">{{ preset_name }}</span>
+      {% elif run.note %}{{ run.note }}
+      {% else %}ad-hoc{% endif %}
+      • старт {{ run.started_at|dt }} • финиш {{ run.finished_at|dt if run.finished_at else '…' }}
+    </div>
+  </div>
+</div>
+
+<div class="kpi-grid" style="grid-template-columns: repeat(7, 1fr)">
+  <div class="kpi"><div class="k-label">listing</div><div class="k-value num">{{ run.listing_count|n }}</div></div>
+  <div class="kpi"><div class="k-label">новых</div><div class="k-value num">{{ run.new_lots|n }}</div></div>
+  <div class="kpi"><div class="k-label">обновлено</div><div class="k-value num">{{ run.updated_lots|n }}</div></div>
+  <div class="kpi"><div class="k-label">details</div><div class="k-value num">{{ run.details_fetched|n }}</div></div>
+  <div class="kpi"><div class="k-label">документов</div><div class="k-value num">{{ run.new_documents|n }}</div></div>
+  <div class="kpi"><div class="k-label">LLM</div><div class="k-value num">{{ run.llm_analyzed|n }}</div></div>
+  <div class="kpi"><div class="k-label">ошибок</div><div class="k-value num" style="{% if run.errors %}color: var(--bad){% endif %}">{{ run.errors|n }}</div></div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-head">
+    <div>
+      <div class="card-title">Лоты, затронутые прогоном</div>
+      <div class="card-sub">{{ lots|length }} {% if lots|length == 500 %}(показаны первые 500){% endif %}</div>
+    </div>
+  </div>
+  {% if lots %}
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:120px">Лот</th>
+        <th>Заказчик</th>
+        <th style="width:200px">Статус</th>
+        <th class="num" style="width:140px">Сумма, ₸</th>
+        <th style="width:160px">Обновлён</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in lots %}
+      <tr onclick="window.location='/lot/{{ l.id }}'">
+        <td>
+          <div class="mono strong" style="font-size:12.5px">#{{ l.number or l.id }}</div>
+          <div class="dim truncate" style="font-size:12px; max-width:420px">{{ (l.name or '—') }}</div>
+        </td>
+        <td class="dim" style="font-size:12px">{{ l.customer.name if l.customer else '—' }}</td>
+        <td>{{ status_pill(l.status_code, mini=True) }}</td>
+        <td class="num mono">{{ l.plan_amount|n }}</td>
+        <td class="mono dim" style="font-size:12px">{{ l.last_synced|dt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="card-body dim">Лотов в окне прогона пока не видно.
+    {% if in_progress %}Страница обновляется автоматически каждые 3с.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

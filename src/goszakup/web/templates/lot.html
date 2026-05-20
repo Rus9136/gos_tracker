@@ -1,0 +1,369 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge %}
+{% block title %}Лот #{{ lot.number or lot.id }} — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="crumb">
+  <a href="/actual">{{ icon("arrowLeft", 12) }} Актуальные</a>
+  <span class="sep">/</span>
+  <a href="/past">Прошедшие</a>
+  <span class="sep">/</span>
+  <span class="strong mono">#{{ lot.number or lot.id }}</span>
+</div>
+
+<div class="flex items-start justify-between gap-4 mb-4">
+  <div style="min-width:0">
+    <h1 class="page-title" style="font-size:24px; margin-bottom:6px; text-wrap:pretty">{{ lot.name or '—' }}</h1>
+    <div class="meta">
+      <span class="mono">Лот #{{ lot.number or lot.id }}</span>
+      <span class="sep"></span>
+      {% if lot.announcement %}<span class="mono">Объявление #{{ lot.announcement.number or lot.announcement.id }}</span><span class="sep"></span>{% endif %}
+      <a href="{{ lot.url }}" target="_blank" rel="noopener" class="flex items-center gap-1" style="color: var(--accent-hi)">открыть на goszakup.gov.kz {{ icon("external", 11) }}</a>
+      <span class="sep"></span>
+      <span>замечен {{ lot.first_seen|dt }} • обновлён {{ lot.last_synced|dt }}</span>
+    </div>
+  </div>
+  <div class="flex gap-2 items-center">
+    <form method="post" action="/lot/{{ lot.id }}/star" style="display:inline">
+      <button class="btn {{ 'primary' if lot.is_starred else '' }}" type="submit"
+              title="{{ 'Убрать из избранного' if lot.is_starred else 'Добавить в избранное' }}">
+        {{ icon("star", 13, "var(--accent-hi)" if lot.is_starred else "var(--fg-3)") }}
+        {{ 'В избранном' if lot.is_starred else 'В избранное' }}
+      </button>
+    </form>
+    <button class="btn" type="button" title="скоро">{{ icon("eye", 13) }} Следить</button>
+    {% if lot.customer and lot.customer.bin %}
+    <button class="btn" type="button" onclick="navigator.clipboard.writeText('{{ lot.customer.bin }}').then(()=>this.textContent='✓ скопирован')">{{ icon("copy", 13) }} Скопировать БИН</button>
+    {% endif %}
+    <a class="btn primary" href="{{ lot.url }}" target="_blank" rel="noopener">{{ icon("external", 13) }} На goszakup</a>
+  </div>
+</div>
+
+{# Horizontal status flow #}
+{% set flow = [210, 220, 250, 320, 325, 330, 360] %}
+{% set current = lot.status_code if lot.status_code in flow else flow[0] %}
+{% set ix = flow.index(current) if current in flow else -1 %}
+<div class="card mb-4">
+  <div class="card-body" style="padding:16px">
+    <div style="display:flex; align-items:center; gap:0; position:relative; overflow-x:auto">
+      {% for code in flow %}
+      {% set reached = loop.index0 <= ix %}
+      {% set is_current = loop.index0 == ix %}
+      <div class="flex items-center gap-2" style="flex:0 0 auto; padding:0 4px">
+        <div style="width:22px; height:22px; border-radius:50%; display:grid; place-items:center;
+                    background: {{ 'var(--accent)' if reached else 'var(--bg-2)' }};
+                    color: {{ 'var(--accent-fg)' if reached else 'var(--fg-3)' }};
+                    border: {{ '0' if is_current else '1px solid var(--bd-1)' }};
+                    box-shadow: {{ '0 0 0 4px color-mix(in oklch, var(--accent) 25%, transparent)' if is_current else 'none' }};
+                    font-family: var(--font-mono); font-size:10px; font-weight:700">
+          {% if reached %}{{ icon("check", 11) }}{% else %}{{ loop.index }}{% endif %}
+        </div>
+        <div class="col" style="min-width:0">
+          <div class="mono dimer" style="font-size:10px">{{ code }}</div>
+          <div style="font-size:12px; font-weight: {{ '600' if is_current else '500' }}; color: {{ 'var(--fg-0)' if reached else 'var(--fg-3)' }}; white-space:nowrap">{{ status_name(code) or code }}</div>
+        </div>
+      </div>
+      {% if not loop.last %}
+      <div style="flex:1; min-width:24px; height:2px; margin:0 8px; background: {{ 'var(--accent)' if loop.index0 < ix else 'var(--bd-1)' }}; border-radius:1px"></div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  {# LEFT #}
+  <div class="col gap-3" style="display:flex; flex-direction:column; gap:12px">
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Сведения по лоту</div>
+        {{ status_pill(lot.status_code) }}
+      </div>
+      <div class="card-body" style="padding-top:0; padding-bottom:0">
+        <dl class="dl">
+          <dt>IT-категория</dt><dd>{% if lot.it_category %}{{ cat_tag(lot.it_category) }}{% else %}<span class="dim">—</span>{% endif %}</dd>
+          {% if lot.analysis %}
+          <dt>Тип разработки (LLM)</dt><dd>{{ dev_tag(lot.analysis.dev_category) }}</dd>
+          {% endif %}
+          <dt>ENSTRU</dt><dd class="dim">{{ lot.enstru or '—' }}</dd>
+          <dt>Доп. характеристика</dt><dd>{{ lot.extra or '—' }}</dd>
+          <dt>Плановая сумма</dt><dd class="mono strong" style="font-size:16px">{{ lot.plan_amount|n }} ₸</dd>
+          <dt>Цена за ед.</dt><dd class="mono">{{ lot.price_per_unit|n }} ₸</dd>
+          <dt>Количество</dt><dd class="mono">{{ lot.quantity or '—' }} {{ lot.unit or '' }}</dd>
+          <dt>Сумма 1/2/3 год</dt><dd class="mono">{{ lot.amount_y1|n }} / {{ lot.amount_y2|n }} / {{ lot.amount_y3|n }}</dd>
+          <dt>Способ закупки</dt><dd>{{ lot.method or '—' }}</dd>
+          <dt>Регион (КАТО)</dt><dd>{% if lot.kato %}{{ region_name(lot.kato) or '—' }} <span class="mono dimer">{{ lot.kato }}</span>{% else %}<span class="dim">—</span>{% endif %}</dd>
+        </dl>
+      </div>
+    </div>
+
+    {% if lot.announcement_id %}
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Документация {% if documents %}<span class="dim">({{ documents|length }})</span>{% endif %}</div>
+          <div class="card-sub">Серым — не отнесены к ТЗ • акцентом — выгружены и проиндексированы</div>
+        </div>
+        <div class="flex gap-2">
+          <form method="post" action="/lot/{{ lot.id }}/fetch_documents" id="fetch-docs-form">
+            <button type="submit" class="btn sm" id="fetch-docs-btn">{{ icon("refresh", 12) }} {{ 'Обновить' if documents else 'Загрузить' }}</button>
+          </form>
+        </div>
+      </div>
+      {% if fetched_docs is not none %}
+        <div style="padding:8px 20px 0">
+          {% if fetched_docs|int > 0 %}<span class="badge ok"><span class="dot"></span>скачано новых файлов: {{ fetched_docs }}</span>
+          {% else %}<span class="badge muted">новых файлов не появилось</span>{% endif %}
+        </div>
+      {% elif fetch_error == 'no_announcement' %}
+        <div style="padding:8px 20px 0"><span class="badge bad"><span class="dot"></span>у лота нет привязки к объявлению</span></div>
+      {% elif fetch_error %}
+        <div style="padding:8px 20px 0"><span class="badge bad"><span class="dot"></span>парсер упал — см. логи uvicorn</span></div>
+      {% endif %}
+      {% if documents %}
+      {% set primary_doc_id = lot.analysis.source_document_id if lot.analysis else None %}
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Документ</th>
+            <th style="width:80px">ТЗ</th>
+            <th class="num" style="width:80px">Размер</th>
+            <th style="width:140px">Скачано</th>
+            <th style="width:90px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in documents %}
+          {% set is_tz = d.attribute and ('Техническая' in d.attribute or 'спецификац' in d.attribute or 'ТЗ' in (d.attribute or '')) %}
+          {% set is_primary = primary_doc_id and d.id == primary_doc_id %}
+          <tr>
+            <td>
+              <div class="flex items-center gap-2">
+                {{ icon("file", 14, "var(--accent-hi)" if is_primary else ("var(--accent-hi)" if is_tz else "var(--fg-3)")) }}
+                <span class="{{ 'strong' if is_primary else '' }}">{{ d.name }}</span>
+                {% if is_primary %}<span class="badge accent">основное ТЗ</span>{% endif %}
+              </div>
+            </td>
+            <td>
+              {% if is_tz %}<span class="badge ok">{{ icon("check", 10) }} Да</span>
+              {% else %}<span class="badge muted">Нет</span>{% endif %}
+            </td>
+            <td class="num mono dim">{% if d.size %}{{ (d.size / 1024)|round(1) }} KB{% else %}—{% endif %}</td>
+            <td class="mono dim">{{ d.downloaded_at|dt if d.downloaded_at else '—' }}</td>
+            <td>
+              {% if d.local_path %}<a class="btn sm" href="/document/{{ d.id }}/download">скачать</a>
+              {% else %}<a class="btn sm ghost" href="{{ d.url }}" target="_blank">{{ icon("external", 11) }}</a>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="card-body dim">
+        Документы ещё не подтягивались с goszakup. Нажмите «Загрузить» — парсер сходит на сайт,
+        скачает прямые файлы и ТЗ из модалок (Crawl-delay 5s, запрос может занять 30–60 секунд).
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if history %}
+    <div class="card">
+      <div class="card-head"><div class="card-title">Хронология статусов</div></div>
+      <div class="card-body">
+        <div class="timeline">
+          {% for h in history %}
+          <div class="ev {{ 'current' if loop.first else '' }}">
+            <div class="t mono">{{ h.observed_at|dt }}</div>
+            <div class="label">{{ h.status_name or status_name(h.status_code) or '—' }} <span class="dim mono">· {{ h.status_code or '' }}</span></div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if contracts %}
+    <div class="card">
+      <div class="card-head"><div class="card-title">Договоры</div></div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Номер</th>
+            <th>Статус</th>
+            <th class="num">План</th>
+            <th class="num">Контракт</th>
+            <th class="num">Факт</th>
+            <th>Поставщик</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in contracts %}
+          <tr>
+            <td class="mono">{{ c.contract_number or '—' }}</td>
+            <td>{{ c.status or '—' }}</td>
+            <td class="num">{{ c.plan_amount|n }}</td>
+            <td class="num">{{ c.contract_amount|n }}</td>
+            <td class="num">{{ c.fact_amount|n }}</td>
+            <td>{% if c.supplier %}<a href="/organization/{{ c.supplier.id }}">{{ c.supplier.name }}</a> <span class="dim mono">{{ c.supplier.bin or '' }}</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+  {# RIGHT — sticky panel #}
+  <div style="display:flex; flex-direction:column; gap:12px; position: sticky; top:80px; align-self:start">
+
+    {# Customer #}
+    {% if lot.customer or (lot.announcement and lot.announcement.organizer) %}
+    <div class="card">
+      <div class="card-head"><div class="card-title">Заказчик</div></div>
+      <div class="card-body">
+        {% if lot.customer %}
+        <div class="flex items-start gap-2 mb-2">
+          {% set hue = (lot.customer.bin or lot.customer.name)[-1]|int if (lot.customer.bin or lot.customer.name) else 0 %}
+          <div class="avatar lg" style="background: oklch(0.32 0.08 {{ (hue * 31) % 360 }}); color: var(--fg-0)">{{ (lot.customer.name or 'Z')[:1] }}</div>
+          <div style="min-width:0">
+            <div class="strong" style="font-size:13.5px">{{ lot.customer.name }}</div>
+            <div class="mt-1 mono dim" style="font-size:11.5px">БИН: {{ lot.customer.bin or '—' }}</div>
+          </div>
+        </div>
+        <div class="flex gap-1 mt-2">
+          <a class="btn sm" href="/organization/{{ lot.customer.id }}">Все лоты заказчика</a>
+          {% if lot.customer.bin %}
+          <button class="btn sm ghost" type="button" onclick="navigator.clipboard.writeText('{{ lot.customer.bin }}'); this.textContent='✓'">{{ icon("copy", 11) }}</button>
+          {% endif %}
+        </div>
+        {% endif %}
+        {% if lot.announcement and lot.announcement.organizer and (not lot.customer or lot.announcement.organizer.id != lot.customer.id) %}
+        <hr style="border:0; border-top:1px solid var(--bd-1); margin:12px 0">
+        <div class="uc mb-1">Организатор</div>
+        <div class="strong" style="font-size:13px">{{ lot.announcement.organizer.name }}</div>
+        {% if lot.announcement.organizer.bin %}<div class="mono dim mt-1" style="font-size:11.5px">БИН: {{ lot.announcement.organizer.bin }}</div>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# LLM analysis #}
+    <div class="card accent-border">
+      <div class="card-head">
+        <div class="flex items-center gap-2">
+          {{ icon("sparkle", 14, "var(--accent-hi)") }}
+          <div class="card-title" style="color: var(--accent-hi)">LLM-анализ ТЗ</div>
+          {% if lot.analysis %}<span class="badge accent">{{ lot.analysis.analysis_confidence or 'low' }}</span>{% endif %}
+        </div>
+        {% if lot.it_category and has_downloaded_doc %}
+        <form method="post" action="/lot/{{ lot.id }}/analyze">
+          <button type="submit" class="btn sm">{% if lot.analysis %}Перезапустить{% else %}Запустить{% endif %}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% if analyze_status == 'ok' %}
+      <div style="padding:8px 20px 0"><span class="badge ok"><span class="dot"></span>анализ обновлён</span></div>
+      {% elif analyze_status == 'fail' %}
+      <div style="padding:8px 20px 0"><span class="badge bad"><span class="dot"></span>LLM не отработал — см. логи</span></div>
+      {% endif %}
+      <div class="card-body">
+        {% if lot.analysis %}
+        {% set a = lot.analysis %}
+        {% if a.tz_summary %}
+        <div class="uc mb-1">Резюме ТЗ</div>
+        <div class="mb-3" style="font-size:13px; color: var(--fg-1); text-wrap:pretty">{{ a.tz_summary }}</div>
+        {% endif %}
+
+        {% if a.tech_stack %}
+        <div class="uc mb-1">Стек</div>
+        <div class="flex gap-1 mb-3" style="flex-wrap:wrap">
+          {% for t in a.tech_stack %}<span class="tag mono" style="font-size:11px">{{ t }}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px">
+          <div>
+            <div class="uc mb-1">Соло-разработчик</div>
+            {% if a.solo_feasible %}<span class="badge ok">{{ icon("check", 10) }} справится</span>
+            {% else %}<span class="badge warn"><span class="dot"></span>команда</span>{% endif %}
+          </div>
+          <div>
+            <div class="uc mb-1">Риск заточки</div>
+            {{ risk_badge(a.vendor_lock_risk) }}
+          </div>
+        </div>
+      </div>
+      <div class="card-foot mono" style="font-size:11px">
+        {{ a.analyzer_version }} • проанализирован {{ a.analyzed_at|dt }}
+        {% if a.source_document_id %} • по документу #{{ a.source_document_id }}{% endif %}
+      </div>
+      {% else %}
+        <div class="dim">Лот ещё не проанализирован.
+          {% if not lot.it_category %}<br>Не прошёл IT-фильтр — анализ не запускается.
+          {% elif not has_downloaded_doc %}<br>Нужны документы — сначала нажмите «Загрузить документы».{% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    {# Chat #}
+    {% if has_downloaded_doc %}
+    <div class="card" id="chat-root" data-lot-id="{{ lot.id }}">
+      <div class="card-head">
+        <div>
+          <div class="card-title flex items-center gap-2">{{ icon("sparkle", 13) }} Чат по ТЗ</div>
+          <div class="card-sub">В контекст уходит ТЗ + поля объявления. История — в браузере.</div>
+        </div>
+        <button class="btn sm ghost" type="button" id="chat-clear">Очистить</button>
+      </div>
+      <div class="card-body">
+        <div class="chat" id="chat-list" style="max-height:280px; overflow-y:auto; padding-right:4px; min-height:80px"></div>
+        <div class="mt-3" style="position:relative">
+          <textarea class="input w-full" id="chat-input" rows="2"
+                    placeholder="Спроси что-нибудь по ТЗ (Cmd/Ctrl+Enter — отправить)"
+                    style="padding-right:120px"></textarea>
+          <button class="btn primary" id="chat-send" type="button" style="position:absolute; right:6px; bottom:6px">
+            {{ icon("send", 13) }} Отправить
+          </button>
+        </div>
+        <div class="flex gap-1 mt-2" style="flex-wrap:wrap">
+          <button class="chip" type="button" data-quick="Какие требования к опыту участника?">Требования к опыту</button>
+          <button class="chip" type="button" data-quick="Какой срок выполнения?">Срок</button>
+          <button class="chip" type="button" data-quick="Что в обеспечении заявки?">Обеспечение</button>
+          <button class="chip" type="button" data-quick="Есть ли скрытая заточка?">Заточка?</button>
+        </div>
+      </div>
+    </div>
+    <script src="/static/js/chat.js"></script>
+    {% endif %}
+
+    {# Contact #}
+    {% if lot.announcement and lot.announcement.contact_name %}
+    <div class="card">
+      <div class="card-head"><div class="card-title">Контактное лицо</div></div>
+      <div class="card-body">
+        <div class="strong">{{ lot.announcement.contact_name }}</div>
+        {% if lot.announcement.contact_role %}<div class="dim mb-1" style="font-size:12px">{{ lot.announcement.contact_role }}</div>{% endif %}
+        {% if lot.announcement.contact_email %}<a class="mono" style="color: var(--accent-hi); font-size:12px" href="mailto:{{ lot.announcement.contact_email }}">{{ lot.announcement.contact_email }}</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+// Disable fetch-docs button on submit, чтобы не нажали дважды.
+(() => {
+  const f = document.getElementById('fetch-docs-form');
+  if (!f) return;
+  f.addEventListener('submit', () => {
+    const b = document.getElementById('fetch-docs-btn');
+    if (b) { b.disabled = true; b.textContent = 'качаю с goszakup…'; }
+  });
+})();
+</script>
+
+{% endblock %}

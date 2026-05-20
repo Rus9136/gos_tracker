@@ -1,0 +1,227 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import status_pill, cat_tag, sparkline %}
+{% block title %}Дашборд — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Дашборд</h1>
+    <div class="page-sub">
+      База: {{ stats.total_lots|n }} лотов
+      {% if last_runs %} • последний прогон {{ last_runs[0].started_at|dt }}{% endif %}
+    </div>
+  </div>
+  <div class="flex gap-2">
+    <a href="/runs" class="btn">{{ icon("refresh") }} Прогоны</a>
+    <a href="/actual" class="btn primary">{{ icon("play") }} Открыть актуальные</a>
+  </div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="flex justify-between items-center">
+      <div class="k-label">Всего лотов</div>
+      {{ sparkline(spark_runs.listing, 80, 24, "oklch(0.75 0.08 255)") }}
+    </div>
+    <div class="k-value num">{{ stats.total_lots|n }}</div>
+    <div class="k-delta">{{ stats.actual_lots }} актуальных • {{ stats.total_lots - stats.actual_lots }} прошедших</div>
+  </div>
+  <div class="kpi accent">
+    <div class="flex justify-between items-center">
+      <div class="k-label" style="color: var(--accent-hi)">Актуальных</div>
+      {{ sparkline(spark_runs.new_lots, 80, 24) }}
+    </div>
+    <div class="k-value num">{{ stats.actual_lots|n }}</div>
+    <div class="k-delta up">
+      {{ icon("arrowUp", 12) }}
+      {% set total_new = spark_runs.new_lots | sum %}
+      {{ total_new }} новых за последние прогоны
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="flex justify-between items-center">
+      <div class="k-label">Заказчиков</div>
+      {{ sparkline(spark_runs.updated, 80, 24, "oklch(0.75 0.12 220)") }}
+    </div>
+    <div class="k-value num">{{ stats.orgs|n }}</div>
+    <div class="k-delta">уникальных по БИН/имени</div>
+  </div>
+  <div class="kpi">
+    <div class="flex justify-between items-center">
+      <div class="k-label">Документов</div>
+      {{ sparkline(spark_runs.docs, 80, 24, "oklch(0.75 0.12 155)") }}
+    </div>
+    <div class="k-value num">{{ stats.docs|n }}</div>
+    <div class="k-delta">{{ spark_runs.docs | sum }} скачано за последние прогоны</div>
+  </div>
+</div>
+
+{% if quick_presets %}
+<div class="card mt-4">
+  <div class="card-head">
+    <div class="flex items-center gap-3">
+      <div class="card-title">Быстрый старт по preset'ам</div>
+      <span class="dim">— активные сохранённые фильтры</span>
+    </div>
+    <a class="btn sm ghost" href="/presets">Управлять preset'ами</a>
+  </div>
+  <div class="card-body" style="display:flex; flex-wrap:wrap; gap:8px">
+    {% for p in quick_presets %}
+      {% set hue = 200 %}
+      {% if p.it_categories %}
+        {% set cat0 = p.it_categories[0] %}
+        {% if cat0 == "Оборудование" %}{% set hue = 80 %}
+        {% elif cat0 == "ПО и лицензии" %}{% set hue = 280 %}
+        {% elif cat0 == "Связь и интернет" %}{% set hue = 160 %}
+        {% endif %}
+      {% endif %}
+      <a class="chip" href="/actual{% if p.kato %}?kato={{ p.kato }}{% endif %}" title="{{ p.name }}">
+        <span class="swatch" style="width:8px;height:8px;border-radius:2px;background: oklch(0.7 0.14 {{ hue }})"></span>
+        {{ p.name }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="panels">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="card-title">По регионам</div>
+        <div class="card-sub">Актуальные лоты — сумма ₸</div>
+      </div>
+    </div>
+    <div class="card-body">
+      {% set max_r = by_region | map(attribute='total') | list | max if by_region else 1 %}
+      <div class="barlist">
+        {% for r in by_region %}
+        <div class="row">
+          <div class="rail">
+            <div class="fill" style="width: {{ (r.total / max_r * 100) if max_r else 0 }}%"></div>
+            <span class="lbl">{{ r.region }}</span>
+          </div>
+          <div class="val">
+            <span class="dim">{{ r.count }} лот.</span>
+            <span style="margin-left:12px" class="strong mono">{{ r.total|n }} ₸</span>
+          </div>
+        </div>
+        {% else %}
+        <div class="dim">нет данных</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="card-title">По IT-категориям</div>
+        <div class="card-sub">Актуальные лоты</div>
+      </div>
+    </div>
+    <div class="card-body">
+      {% set max_c = by_category | map(attribute='total') | list | max if by_category else 1 %}
+      {% set hues = {"Услуги ИТ": 200, "Оборудование": 80, "ПО и лицензии": 280, "Связь и интернет": 160} %}
+      <div style="display:grid; gap:14px">
+        {% for c in by_category %}
+        {% set hue = hues.get(c.category, 200) %}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <div class="flex items-center gap-2">
+              <span style="width:8px;height:8px;border-radius:2px;background: oklch(0.72 0.14 {{ hue }})"></span>
+              <span class="strong">{{ c.category or '—' }}</span>
+              <span class="dim num">— {{ c.count }} лот.</span>
+            </div>
+            <div class="mono dim">{{ c.total|n }} ₸</div>
+          </div>
+          <div class="bar">
+            <i style="width: {{ (c.total / max_c * 100) if max_c else 0 }}%; background: oklch(0.72 0.14 {{ hue }})"></i>
+          </div>
+        </div>
+        {% else %}
+        <div class="dim">нет данных</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panels">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="card-title">Требуют внимания</div>
+        <div class="card-sub">Актуальные лоты со сменой статуса за последние 24 часа</div>
+      </div>
+      <a class="btn sm ghost" href="/actual">Все актуальные {{ icon("arrowRight", 12) }}</a>
+    </div>
+    <div>
+      {% for l in attention_lots %}
+      <a href="/lot/{{ l.id }}" class="att-row"
+         style="display:grid; grid-template-columns: 1fr auto auto; gap:12px; align-items:center;
+                padding:14px 20px; border-bottom: {{ '0' if loop.last else '1px solid var(--bd-1)' }};
+                text-decoration:none; color:inherit">
+        <div style="min-width:0">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="icon-btn" title="скоро" style="cursor:default;width:auto;height:auto;border:0;padding:0">{{ icon("star", 12, "var(--fg-3)") }}</span>
+            <span class="mono dimer" style="font-size:11px">#{{ l.number or l.id }}</span>
+            {{ cat_tag(l.it_category) }}
+          </div>
+          <div class="truncate strong" style="font-size:13.5px">{{ l.name or '—' }}</div>
+          <div class="truncate dim" style="font-size:12px">{{ l.customer.name if l.customer else '—' }}</div>
+        </div>
+        {{ status_pill(l.status_code, mini=True) }}
+        <div class="mono strong" style="font-size:13px">{{ l.plan_amount|n }} ₸</div>
+      </a>
+      {% else %}
+      <div class="card-body dim">За последние 24 часа изменений нет.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="card-title">Последние прогоны</div>
+        <div class="card-sub">Журнал scrape-runs</div>
+      </div>
+      <a class="btn sm ghost" href="/runs">Все прогоны</a>
+    </div>
+    <div style="overflow:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Когда</th>
+            <th>Preset</th>
+            <th class="num">listing</th>
+            <th class="num">new</th>
+            <th class="num">upd</th>
+            <th class="num">docs</th>
+            <th class="num">err</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in last_runs %}
+          <tr>
+            <td class="mono" style="font-size:12.5px">{{ r.started_at|dt }}</td>
+            <td><span class="badge muted">{{ r.preset_name or '(adhoc)' }}</span></td>
+            <td class="num mono">{{ r.listing_count }}</td>
+            <td class="num mono"><span class="strong">{{ r.new_lots or '—' }}</span></td>
+            <td class="num mono">{{ r.updated_lots or '—' }}</td>
+            <td class="num mono">{{ r.new_documents or '—' }}</td>
+            <td class="num">
+              {% if r.errors and r.errors > 0 %}
+                <span class="badge bad"><span class="dot"></span>{{ r.errors }}</span>
+              {% else %}<span class="dim">0</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

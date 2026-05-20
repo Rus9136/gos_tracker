@@ -1,0 +1,123 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Догрузка по БИН — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Догрузка по БИН</span></div>
+    <h1 class="page-title">Догрузка лотов по БИН</h1>
+    <div class="page-sub">
+      Разово подтягивает с goszakup лоты одной организации за указанный диапазон лет
+      и кладёт в БД. <span class="strong">Документы не качаются</span> — это делается
+      отдельно, кнопкой на карточке лота. LLM-анализ тоже не запускается.
+    </div>
+  </div>
+</div>
+
+{% if active_run %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--warn) 30%, transparent); background: var(--warn-bg)">
+  <div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 16px; color: var(--warn)">
+    {{ icon("clock", 16) }}
+    <span>Сейчас идёт прогон <a href="/runs/{{ active_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ active_run.id }}</a>
+      (старт {{ active_run.started_at|dt }}). Новый запустить нельзя, иначе нарушим Crawl-delay goszakup.</span>
+  </div>
+</div>
+{% endif %}
+
+{% if error == "bin_invalid" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">БИН должен быть из 12 цифр.</div>
+</div>
+{% elif error == "year_range" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">«Год от» не может быть больше «Год до».</div>
+</div>
+{% elif error == "busy" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Уже идёт другой прогон. Дождитесь его завершения.</div>
+</div>
+{% elif error %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">{{ error }}</div>
+</div>
+{% endif %}
+
+<form method="post" action="/ingest/run" class="card mb-3"
+      onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Запускаем…';">
+  <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px">
+
+    <div class="field" style="grid-column: 1 / -1">
+      <label>БИН организации (12 цифр)</label>
+      <input class="input mono" type="text" name="customer_bin" required pattern="\d{12}"
+             inputmode="numeric" value="{{ defaults.customer_bin }}" placeholder="990440004229">
+    </div>
+
+    <div class="field">
+      <label>Год от</label>
+      <input class="input" type="number" name="year_from" required min="2010" max="2030" value="{{ defaults.year_from }}">
+    </div>
+    <div class="field">
+      <label>Год до</label>
+      <input class="input" type="number" name="year_to" required min="2010" max="2030" value="{{ defaults.year_to }}">
+    </div>
+    <div class="field">
+      <label>Вид предмета закупки</label>
+      <select class="select" name="trade_type">
+        {% for code, label in trade_types %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Сумма от, ₸</label>
+      <input class="input" type="number" name="amount_from" min="0" value="{{ defaults.amount_from }}">
+    </div>
+    <div class="field">
+      <label>Сумма до, ₸ (опц.)</label>
+      <input class="input" type="number" name="amount_to" min="0">
+    </div>
+    <div></div>
+
+    <div style="grid-column: 1 / -1">
+      <div class="uc mb-2">Статусы (несколько; пусто — любые)</div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px">
+        {% for group_name, items in status_groups %}
+        <div>
+          <div class="uc mb-2">{{ group_name }}</div>
+          {% for code, name in items %}
+          <label class="flex items-start gap-2" style="font-size:12px; margin-bottom:6px; cursor:pointer">
+            <input type="checkbox" name="status" value="{{ code }}"
+                   {% if group_name == "Прошедшие" and code == 360 %}checked{% endif %}>
+            <span><span class="dim mono">{{ code }}</span> {{ name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="grid-column: 1 / -1; display:flex; align-items:center; gap:12px; padding-top:8px">
+      <button type="submit" class="btn primary" {% if active_run %}disabled{% endif %}>
+        {{ icon("play", 13) }} Запустить догрузку
+      </button>
+      <span class="dim" style="font-size:12px">Crawl-delay 5с между запросами — на 100 лотов ~3–5 минут.</span>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Как это работает</div>
+  </div>
+  <div class="card-body dim" style="font-size:13px">
+    <ol style="margin:0; padding-left:20px; line-height:1.7">
+      <li>Скрейпит листинг goszakup с фильтрами <span class="mono">filter[customer]</span>, <span class="mono">filter[trade_type]</span>, <span class="mono">filter[year]</span>, <span class="mono">filter[status][]</span>, <span class="mono">filter[amount_from/to]</span>.</li>
+      <li>Идёт по каждому году отдельно (на сайте фильтр годовой), всё пишется в один прогон.</li>
+      <li>По новым / сменившим статус лотам дополнительно тянет детальную карточку: organizer, договоры, контакты.</li>
+      <li>Документы и LLM пропускает — это отдельный шаг.</li>
+      <li>Закрытые лоты, которые уже есть в БД, повторно не пересканируются.</li>
+    </ol>
+  </div>
+</div>
+
+{% endblock %}

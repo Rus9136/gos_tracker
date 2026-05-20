@@ -1,0 +1,62 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Preset'ы — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Preset'ы</span></div>
+    <h1 class="page-title">Preset'ы <span class="dim">({{ presets|length }})</span></h1>
+    <div class="page-sub">Сохранённые наборы фильтров для ежедневного launchd-агента.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:48px">#</th>
+        <th>Название</th>
+        <th style="width:200px">КАТО</th>
+        <th class="num" style="width:140px">Сумма от</th>
+        <th>Статусы</th>
+        <th>IT</th>
+        <th style="width:90px">Активен</th>
+        <th style="width:120px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in presets %}
+      <tr>
+        <td class="mono dim">{{ p.id }}</td>
+        <td class="strong">{{ p.name }}</td>
+        <td>
+          {% if p.kato %}
+          <span class="mono dimer">{{ p.kato }}</span>
+          <span class="dim">{{ region_lookup[p.kato].name if p.kato in region_lookup else '' }}</span>
+          {% else %}<span class="dim">—</span>{% endif %}
+        </td>
+        <td class="num mono">{{ p.amount_from|n }}</td>
+        <td class="dim mono" style="font-size:12px">{{ p.status_codes|join(', ') if p.status_codes else '—' }}</td>
+        <td class="dim" style="font-size:12px">{{ p.it_categories|join(', ') if p.it_categories else '—' }}</td>
+        <td>
+          {% if p.active %}<span class="badge ok"><span class="dot"></span>да</span>
+          {% else %}<span class="badge muted">нет</span>{% endif %}
+        </td>
+        <td>
+          <form method="post" action="/presets/{{ p.id }}/toggle" style="display:inline">
+            <button type="submit" class="btn sm">{% if p.active %}выключить{% else %}включить{% endif %}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot dim" style="font-size:12px">
+    CRUD добавим позже. Сейчас preset'ы создаются командой <span class="mono">python -m goszakup.cli seed-presets</span>.
+  </div>
+</div>
+
+{% endblock %}
