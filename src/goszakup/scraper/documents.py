@@ -43,12 +43,32 @@ class DownloadResult:
 
 _UNSAFE = re.compile(r"[^\w\-.()\[\] ]+", re.UNICODE)
 
+# ext4: 255 байт на имя файла. Кириллица в UTF-8 = 2 байта/символ, поэтому
+# 200 байт ≈ 100 русских букв + расширение — с запасом, чтобы не споткнуться
+# на длинных официальных названиях вроде «Приложение 10 (Сведения о ...)».
+_FILENAME_MAX_BYTES = 200
+
 
 def _safe_filename(name: str, fallback: str) -> str:
     name = unquote(name).strip()
     name = _UNSAFE.sub("_", name)
     name = name.strip(" .")
-    return name or fallback
+    if not name:
+        return fallback
+    encoded = name.encode("utf-8")
+    if len(encoded) <= _FILENAME_MAX_BYTES:
+        return name
+    # Сохраняем расширение, обрезаем base. Если расширения нет — режем имя
+    # как есть, обрезая на границе UTF-8 (errors='ignore' дропает хвостовые
+    # обрубки многобайтных символов).
+    if "." in name:
+        base, ext = name.rsplit(".", 1)
+        ext_bytes = len(("." + ext).encode("utf-8"))
+        base_budget = _FILENAME_MAX_BYTES - ext_bytes
+        if base_budget > 10:
+            trunc = base.encode("utf-8")[:base_budget].decode("utf-8", errors="ignore")
+            return f"{trunc}.{ext}"
+    return encoded[:_FILENAME_MAX_BYTES].decode("utf-8", errors="ignore") or fallback
 
 
 def _filename_from_url(url: str) -> str:
