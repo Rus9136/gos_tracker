@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -17,10 +18,12 @@ def get_db() -> Iterator[Session]:
         s.close()
 
 
-def format_amount(value: float | int | None) -> str:
+def format_amount(value: Decimal | float | int | None) -> str:
     if value is None:
         return "—"
     try:
+        # Decimal поддерживает `:,.0f` нативно — этот же код работает на
+        # float/int/Decimal без преобразований.
         return f"{value:,.0f}".replace(",", " ")
     except (TypeError, ValueError):
         return str(value)
@@ -32,7 +35,7 @@ def format_dt(value) -> str:
     return value.strftime("%d.%m.%Y %H:%M")
 
 
-def format_compact(value: float | int | None) -> str:
+def format_compact(value: Decimal | float | int | None) -> str:
     if value is None:
         return "—"
     try:

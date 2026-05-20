@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .. import __version__
@@ -24,14 +24,6 @@ from ..classify.llm import (
     dev_category_label,
     vendor_lock_label,
 )
-from ..jobs.ingest import (
-    create_ingest_run,
-    execute_ingest_run,
-    find_active_run,
-)
-from ..jobs.run_preset import _save_announcement, _save_documents
-from ..scraper.announce import fetch_announcement
-from ..scraper.http import ThrottledSession
 from ..db.models import (
     Announcement,
     Contract,
@@ -43,6 +35,14 @@ from ..db.models import (
     Preset,
     ScrapeRun,
 )
+from ..jobs.ingest import (
+    create_ingest_run,
+    find_active_run,
+)
+from ..jobs.run_preset import _save_announcement, _save_documents
+from ..observability import setup_sentry
+from ..scraper.announce import fetch_announcement
+from ..scraper.http import ThrottledSession
 from ..scraper.katos import BY_CODE, REGIONS, region_name
 from ..scraper.statuses import (
     ACTUAL_STATUSES,
@@ -103,6 +103,10 @@ def _auth_dep():
         return lambda: "anon"
     return require_auth
 
+
+# Sentry — до создания FastAPI, чтобы интеграция перехватила middleware.
+# No-op без SENTRY_DSN.
+setup_sentry("web")
 
 app = FastAPI(title="Goszakup Tracker", version=__version__)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -315,7 +319,7 @@ def dashboard(request: Request, db: Session = Depends(get_db), _=Depends(_auth_d
     }
     # «Требуют внимания» — лоты с новым статусом за последние 24 часа,
     # отсортированные по сумме. Без feature starred/watched.
-    since = datetime.utcnow() - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     attention_lots = db.scalars(
         select(Lot)
         .where(Lot.is_actual.is_(True))
@@ -691,9 +695,9 @@ def organizations_list(
             Organization.name,
             func.count(Lot.id).label("lots_cnt"),
             func.coalesce(func.sum(Lot.plan_amount), 0).label("total"),
-            func.sum(
-                func.coalesce(func.iif(Lot.is_actual, 1, 0), 0)
-            ).label("actual_cnt"),
+            # `case` — стандартный SQL и работает в SQLite и Postgres.
+            # Раньше тут был `func.iif`, но он SQLite-only — на Postgres падало.
+            func.sum(case((Lot.is_actual, 1), else_=0)).label("actual_cnt"),
         )
         .join(Lot, Lot.customer_id == Organization.id, isouter=True)
         .group_by(Organization.id)
@@ -763,9 +767,9 @@ def organization_detail(
         .order_by(desc(Lot.first_seen))
         .options(selectinload(Lot.customer))
     ).all()
-    actual = [l for l in lots if l.is_actual]
-    past = [l for l in lots if not l.is_actual]
-    total_plan = sum((l.plan_amount or 0) for l in lots)
+    actual = [lt for lt in lots if lt.is_actual]
+    past = [lt for lt in lots if not lt.is_actual]
+    total_plan = sum((lt.plan_amount or 0) for lt in lots)
     return templates.TemplateResponse(
         request,
         "organization.html",
@@ -859,7 +863,7 @@ def run_detail(
     # Лоты, у которых first_seen или last_synced попадают в окно работы run'а.
     # Грубое приближение «лоты этого прогона»: last_synced между started_at и
     # finished_at (или now() если ещё идёт).
-    upper = run.finished_at or datetime.utcnow()
+    upper = run.finished_at or datetime.now(UTC)
     lots = db.scalars(
         select(Lot)
         .where(Lot.last_synced >= run.started_at)
@@ -903,7 +907,7 @@ def ingest_form(
     customer_bin: str = "",
     error: str = "",
 ):
-    current_year = datetime.utcnow().year
+    current_year = datetime.now(UTC).year
     active = find_active_run(db)
     return templates.TemplateResponse(
         request,
@@ -926,7 +930,6 @@ def ingest_form(
 
 @app.post("/ingest/run")
 def ingest_start(
-    background: BackgroundTasks,
     customer_bin: str = Form(...),
     year_from: int = Form(...),
     year_to: int = Form(...),
@@ -972,18 +975,17 @@ def ingest_start(
             status_code=303,
         )
 
-    # FastAPI BackgroundTasks выполнит после возврата ответа в том же процессе.
-    # Корректно работает только с одним воркером uvicorn — single-user
-    # инструмент, на проде тоже один воркер (см. goszakup-web.service).
-    background.add_task(
-        execute_ingest_run,
+    # Phase 3: отправляем в очередь Dramatiq, а не запускаем в BackgroundTasks.
+    # Это пережил бы рестарт uvicorn — worker подберёт сообщение позже.
+    from ..queue.actors import ingest_actor
+    ingest_actor.send(
         run_id,
-        customer_bin=customer_bin,
-        year_from=year_from,
-        year_to=year_to,
-        trade_type=trade_type,
-        status_codes=status,
-        amount_from=amount_from,
-        amount_to=amount_to_int,
+        customer_bin,
+        year_from,
+        year_to,
+        trade_type,
+        list(status),
+        amount_from,
+        amount_to_int,
     )
     return RedirectResponse(f"/runs/{run_id}", status_code=303)

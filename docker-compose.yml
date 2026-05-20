@@ -1,0 +1,100 @@
+# Локальная разработка / staging. Phase 3: postgres + redis + web + worker.
+# На проде сейчас Postgres + systemd-сервисы напрямую (см. CLAUDE.md
+# «Продакшн»), без docker. Этот compose — для dev и для smoke-теста очереди.
+#
+# Запуск:
+#   cp env.example .env  # заполнить CEREBRAS_API_KEY как минимум
+#   docker compose up -d
+#   docker compose exec web alembic upgrade head
+#   docker compose exec web python -m goszakup.cli seed-presets
+#
+# UI:    http://localhost:8766
+# daily: docker compose exec web python -m goszakup.cli daily   # enqueue в worker
+#        docker compose exec web python -m goszakup.cli daily --sync  # без очереди
+
+x-app-env: &app_env
+  GZ_DATABASE_URL: postgresql+psycopg://goszakup:${POSTGRES_PASSWORD:-goszakup_dev}@postgres:5432/goszakup
+  GZ_REDIS_URL: redis://redis:6379/0
+  CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+  GZ_LLM_MODEL: ${GZ_LLM_MODEL:-gpt-oss-120b}
+  GZ_USER: ${GZ_USER:-admin}
+  GZ_PASSWORD: ${GZ_PASSWORD:-admin}
+  GZ_NO_AUTH: ${GZ_NO_AUTH:-}
+  GZ_DATA_DIR: /app/data
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: goszakup
+      POSTGRES_USER: goszakup
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-goszakup_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goszakup -d goszakup"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # 5433 на хосте: на этой машине системный postgres держит 5432.
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF off — для нашей workload (очередь задач + rate-limit) персистентность
+    # лишняя: при рестарте worker'ы перевнесут задачи, rate-limit и так с TTL.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # БЕЗ host-порта: на этой машине системный redis уже держит 6379. Compose
+    # внутри сети `gos_tracker_default` ходит по имени `redis` — этого хватает.
+    # На чистой машине можно раскомментировать.
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *app_env
+    volumes:
+      - docs:/app/data/docs
+      - logs:/app/data/logs
+    # 8766 на хосте: 8765 занят прод-systemd-сервисом.
+    ports:
+      - "127.0.0.1:8766:8765"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *app_env
+    volumes:
+      - docs:/app/data/docs
+      - logs:/app/data/logs
+    # `-p 2 -t 4` = 2 процесса × 4 потока. Для I/O-bound (HTTP к goszakup)
+    # потоки норм, GIL не мешает. На проде crank up в зависимости от LLM
+    # и сети, но глобальный rate-limit (Crawl-delay=5s) всё равно не даст
+    # эффективно использовать больше 1 worker'а на goszakup-фазе.
+    command: ["dramatiq", "goszakup.queue.actors", "-p", "2", "-t", "4"]
+
+volumes:
+  pgdata:
+  docs:
+  logs:

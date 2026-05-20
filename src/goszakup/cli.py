@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import typer
 from sqlalchemy import func, select
@@ -24,8 +23,11 @@ from .db.models import Announcement, Document, Lot, LotAnalysis, Organization, P
 from .jobs.daily import run_all_active
 from .jobs.run_preset import run_preset
 from .jobs.seed import seed_regional_presets
+from .observability import setup_sentry
 from .scraper.search import SearchParams
 from .scraper.statuses import ACTUAL_STATUSES
+
+setup_sentry("cli")
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -89,7 +91,7 @@ def run_preset_cmd(
 def run_once(
     kato: str = typer.Option(..., help="код КАТО"),
     amount_from: int = typer.Option(500_000),
-    amount_to: Optional[int] = typer.Option(None),
+    amount_to: int | None = typer.Option(None),
     status: list[int] = typer.Option(None, "--status", help="код статуса (можно повторять)"),
     actual_only: bool = typer.Option(False, "--actual"),
     it_only: list[str] = typer.Option(
@@ -114,15 +116,29 @@ def run_once(
 
 
 @app.command()
-def daily() -> None:
-    """Обойти все активные preset'ы (то, что вызывается ежедневным таймером)."""
+def daily(
+    sync: bool = typer.Option(
+        False, "--sync", help="Прогнать всё в этом процессе, без очереди."
+    ),
+) -> None:
+    """Запустить ежедневный обход всех активных preset'ов.
+
+    По умолчанию отправляет `daily_actor` в очередь — workers подберут.
+    `--sync` — старый поведение (всё в одном процессе через `run_all_active`),
+    полезно для CI/смоук-прогонов без поднятого Redis.
+    """
     _setup_logging(verbose=False)
-    run_all_active()
+    if sync:
+        run_all_active()
+        return
+    from .queue.actors import daily_actor
+    msg = daily_actor.send()
+    typer.echo(f"enqueued daily_actor (message_id={msg.message_id})")
 
 
 @app.command()
 def reanalyze(
-    lot_id: Optional[int] = typer.Option(None, "--lot-id", help="один лот по id"),
+    lot_id: int | None = typer.Option(None, "--lot-id", help="один лот по id"),
     limit: int = typer.Option(50, "--limit", help="максимум лотов за запуск"),
     force: bool = typer.Option(
         False, "--force", help="игнорировать sha256+version (перегнать заведомо)"

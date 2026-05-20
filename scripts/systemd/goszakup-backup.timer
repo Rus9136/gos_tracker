@@ -1,0 +1,12 @@
+[Unit]
+Description=Goszakup Tracker — таймер для backup
+
+[Timer]
+# Через 30 минут после старта goszakup-daily (тот в 06:00 + RandomizedDelaySec=300).
+# Запускаемся в 07:00 — daily гарантированно завершился.
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

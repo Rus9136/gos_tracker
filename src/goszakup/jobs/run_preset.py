@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,16 +25,16 @@ from ..db.models import (
 from ..scraper.announce import AnnouncementDetail, fetch_announcement
 from ..scraper.documents import download_document
 from ..scraper.http import ThrottledSession
-from ..scraper.modal_files import ModalFile, fetch_modal_files, is_tz_like_name
+from ..scraper.modal_files import fetch_modal_files, is_tz_like_name
 from ..scraper.search import ListingHit, SearchParams, iter_listing
-from ..scraper.statuses import is_actual, status_name
+from ..scraper.statuses import is_actual
 
 log = logging.getLogger(__name__)
 
 
 def _get_or_create_org(
     session: Session, *, bin_: str | None, name: str
-) -> Optional[Organization]:
+) -> Organization | None:
     name = (name or "").strip()
     bin_ = (bin_ or "").strip() or None
     if not name and not bin_:
@@ -86,6 +85,20 @@ def _save_announcement(
     return anno
 
 
+def _ensure_announcement_stub(session: Session, anno_id: int, url: str) -> None:
+    """На Postgres FK строгий: вставить Lot с announcement_id, для которого
+    нет записи Announcement — нельзя. На SQLite это раньше проходило, потому
+    что FK там не enforced по умолчанию. Создаём stub с минимумом полей;
+    `_save_announcement` в фазе деталей дозаполнит остальное (UPDATE по id).
+    """
+    if not anno_id:
+        return
+    existing = session.get(Announcement, anno_id)
+    if existing is None:
+        session.add(Announcement(id=anno_id, url=url))
+        session.flush()
+
+
 def _upsert_lot_from_listing(
     session: Session,
     hit: ListingHit,
@@ -97,6 +110,8 @@ def _upsert_lot_from_listing(
     lot = session.get(Lot, hit.lot_id)
     is_new = lot is None
     if lot is None:
+        # FK на announcements строгий в Postgres — обеспечиваем родителя ДО insert'а лота.
+        _ensure_announcement_stub(session, hit.announcement_id, hit.announcement_url)
         lot = Lot(id=hit.lot_id, url=hit.announcement_url)
         session.add(lot)
         on_new.append(hit)
@@ -243,7 +258,7 @@ def _save_one_document(
         doc.sha256 = res.sha256
         doc.size = res.size
         doc.content_type = res.content_type
-        doc.downloaded_at = datetime.utcnow()
+        doc.downloaded_at = datetime.now(UTC)
     else:
         doc.download_error = res.error
     session.flush()
@@ -311,7 +326,7 @@ class RunStats:
     llm_analyzed: int = 0
     errors: int = 0
 
-    def add(self, other: "RunStats") -> None:
+    def add(self, other: RunStats) -> None:
         self.listing_count += other.listing_count
         self.new_lots += other.new_lots
         self.updated_lots += other.updated_lots
@@ -382,7 +397,7 @@ def execute_search(
             lots = session.scalars(
                 select(Lot).where(Lot.announcement_id == anno.id)
             ).all()
-            lots_by_number = {l.number: l for l in lots if l.number}
+            lots_by_number = {lt.number: lt for lt in lots if lt.number}
             for lot in lots:
                 _apply_details(session, lot, detail)
             _save_contracts(session, lots_by_number, detail)
@@ -449,7 +464,7 @@ def run_preset(
         )
 
         run = session.get(ScrapeRun, run_id)
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(UTC)
         run.listing_count = stats.listing_count
         run.details_fetched = stats.details_fetched
         run.new_lots = stats.new_lots

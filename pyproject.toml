@@ -18,10 +18,25 @@ dependencies = [
     "pdfplumber>=0.11",
     "python-docx>=1.1",
     "cerebras-cloud-sdk>=1.0",
+    "alembic>=1.13",
+    "sentry-sdk[fastapi]>=2.0",
+    # psycopg3 — драйвер Postgres. Бинарный wheel, чтобы не тащить libpq-dev.
+    # Не нужен в SQLite-окружениях, но дешёвый и упрощает Dockerfile.
+    "psycopg[binary]>=3.2",
+    # Очередь задач (Phase 3). Dramatiq поверх Redis: retry/dead-letter
+    # из коробки, named queues, sync workers (наш scraper тоже sync).
+    "dramatiq[redis]>=1.17",
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    # fakeredis для unit-тестов rate-limit без живого Redis.
+    "fakeredis>=2.20",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -29,3 +44,32 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Jinja-шаблоны и статика обязаны попасть в wheel — без них uvicorn падает
+# при mount("/static") и при первом TemplateResponse. По умолчанию
+# setuptools.find_packages этого не делает.
+"goszakup.web" = ["templates/**/*", "static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data", ".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+# E/F — pycodestyle/pyflakes, I — сортировка импортов, UP — модернизация
+# под py3.11+, B — баги/anti-patterns. Не включаем D/ANN/COM — для
+# project-style комментариев это лишняя боль.
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # длинные строки в шаблонных промптах (classify/llm.py)
+    "B008",  # FastAPI: Depends() в дефолтах аргументов — это правильный паттерн
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["B"]
+"scripts/**/*.py" = ["B"]

@@ -21,14 +21,44 @@
 - Установка: `.venv/bin/pip install -e .`
 - Запуск CLI: `.venv/bin/python -m goszakup.cli ...`
 - Запуск UI: `GZ_NO_AUTH=1 .venv/bin/python -m uvicorn goszakup.web.app:app --port 8765`
-- БД: `data/goszakup.sqlite` (SQLite, без миграций — `Base.metadata.create_all`).
-  Файл в WAL-режиме: рядом появляются `goszakup.sqlite-shm` и `goszakup.sqlite-wal`
-  — это норма, в git не пушить (включено в `.gitignore`).
+- БД: **Postgres** (на проде системный PG-15, локально — docker compose PG-16,
+  CI — PG-16). На dev-машине без `GZ_DATABASE_URL` остаётся **SQLite**
+  `data/goszakup.sqlite` (WAL-режим, WAL/SHM-файлы — норма, в git не пушить).
+  Выбор диалекта — через `GZ_DATABASE_URL`. `db/engine.py` сам определяет
+  диалект и применяет нужные настройки (`timeout`/WAL для SQLite, `pool_pre_ping`
+  для Postgres).
+- **Docker (Phase 1)**: `docker compose up -d` поднимает postgres + uvicorn.
+  Web слушает на `127.0.0.1:8766` (8765 на этой машине занят systemd-сервисом
+  goszakup-web). Образ multi-stage, ~400 МБ. Шаблоны/статика попадают в wheel
+  через `[tool.setuptools.package-data]` — без этого uvicorn падает на
+  `mount("/static")`. Внутри контейнера обязателен `GZ_DATA_DIR=/app/data`
+  (иначе config попытается писать в site-packages).
+- **Migration data**: `scripts/migrate_sqlite_to_pg.py` — копирует данные
+  SQLite → Postgres с stub-Announcement для orphan FK-ссылок. ON CONFLICT
+  DO NOTHING делает идемпотентным. `_bump_sequences()` поднимает PG-sequences
+  до max(id) — иначе следующий INSERT без id наступит на занятые номера.
+- Миграции: **Alembic** (`migrations/`, env берёт URL из `config.DB_URL`).
+  Workflow при правке `db/models.py`:
+  1) `.venv/bin/alembic revision --autogenerate -m "что меняем"`,
+  2) глазами проверить сгенерированный файл в `migrations/versions/`,
+  3) `.venv/bin/alembic upgrade head` локально, прогнать pytest,
+  4) коммит. На проде — `alembic upgrade head` перед `systemctl restart`.
+  `init_db()`/`create_all()` остались как safety net (идемпотентно) — но
+  единственная истинная схема теперь в миграциях.
 - ENV: подгружается из `./env` через `python-dotenv` (вызов в `config.py`,
   `override=False` — реальный shell-env приоритетнее). Обязательная переменная
   для LLM/чата — `CEREBRAS_API_KEY`. Опционально: `GZ_LLM_MODEL` (дефолт
   `gpt-oss-120b`), `GZ_NO_AUTH=1` (выключает Basic Auth, только для
-  dev-машины — на проде НЕ ставить), `GZ_USER`/`GZ_PASSWORD` (если auth включён).
+  dev-машины — на проде НЕ ставить), `GZ_USER`/`GZ_PASSWORD` (если auth включён),
+  **`GZ_REDIS_URL`** (Phase 3, дефолт `redis://localhost:6379/0`).
+- **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
+  стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
+  4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
+  — ежедневный entry-point. `ingest_actor` — ad-hoc по БИН. Очереди именованы:
+  `goszakup_daily`, `goszakup_listing`, `goszakup_detail`, `goszakup_llm`.
+  Cross-process rate-limit на goszakup — `RedisThrottledSession` (SET NX EX
+  с TTL=5s, global mutex). `ScrapeRun.finished_at` закрывается, когда
+  Redis-counter `goszakup:run:<id>:pending` достигает нуля.
 
 ## Продакшн: gost.salemsoft.kz
 
@@ -41,18 +71,36 @@
 - **URL**: <https://gost.salemsoft.kz> (HTTPS, Basic Auth).
 - **Каталог**: `/home/rus/projects/gos_tracker`, venv в `.venv` (python3.12 —
   единственный на сервере, 3.11/3.13 нет, проекту хватает: `requires-python = ">=3.11"`).
+- **БД**: Postgres 15 (`goszakup_prod` в системном кластере на
+  `127.0.0.1:5432`, рядом с `salem_docs_prod`/`businesscamp`). Cutover
+  с SQLite — 2026-05-20, downtime ~95с. SQLite-файлы `data/goszakup.sqlite*`
+  оставлены на диске как фолбэк; для отката закомментировать `GZ_DATABASE_URL`
+  в `.env` и `sudo systemctl restart goszakup-web.service`.
 - **`.env`**: лежит в корне, `chmod 600`. Содержит `CEREBRAS_API_KEY`,
-  `GZ_USER`, `GZ_PASSWORD`. **`GZ_NO_AUTH` НЕ выставлен** — Basic Auth
-  обязателен. Не пушить.
+  `GZ_USER`, `GZ_PASSWORD`, **`GZ_DATABASE_URL`** (postgresql+psycopg://...).
+  `GZ_NO_AUTH` **НЕ** выставлен — Basic Auth обязателен. Не пушить.
 - **Сервисы systemd** (юзер `rus`, не `goszakup`/`www-data`):
   - `goszakup-web.service` — uvicorn на `127.0.0.1:8765`,
     `ProtectSystem=strict`, `ReadWritePaths=/home/rus/projects/gos_tracker/data`.
     EnvironmentFile НЕ используется — `.env` подхватывается через
     `python-dotenv` в `config.py`.
   - `goszakup-daily.timer` + `goszakup-daily.service` —
-    `OnCalendar=*-*-* 06:00:00`, `RandomizedDelaySec=300`, oneshot с
-    lock-файлом `data/.daily.lock` (защита от параллельного writer'а;
-    см. правило #5/#10).
+    `OnCalendar=*-*-* 06:00:00`, `RandomizedDelaySec=300`, oneshot. Запускает
+    `cli daily` — после Phase 3 это **enqueue** `daily_actor.send()` в Dramatiq
+    (за ~миллисекунды), затем выходит. Реальную работу делает worker. Lock-файл
+    `data/.daily.lock` больше не нужен, но в .service всё ещё есть
+    `ExecStartPre`/`ExecStopPost` — это лишний, но безвредный артефакт.
+    Чтобы вернуться на старый синхронный режим — `cli daily --sync`.
+  - **`goszakup-worker.service`** (Phase 3, задеплоен 2026-05-20) —
+    `dramatiq goszakup.queue.actors -p 2 -t 4`. Подключается к выделенному
+    Redis-контейнеру `goszakup-redis` на `127.0.0.1:6380`. `ProtectHome=true`
+    НЕ ставить — venv в `/home/rus/...` иначе exec даст 203.
+  - **`goszakup-redis` Docker-контейнер** (отдельный от хостового
+    `shared-redis` на 6379, мы к нему не подключаемся — у него auth и его
+    используют другие проекты). Запущен через `docker run -d --name
+    goszakup-redis --restart unless-stopped -p 127.0.0.1:6380:6379
+    redis:7-alpine redis-server --save "" --appendonly no`. AOF off —
+    очередь и rate-limit персистентность не требуют.
 - **nginx**: `/etc/nginx/sites-available/gost.salemsoft.kz.conf` (симлинк в
   `sites-enabled/`). Паттерн как у соседних `*.salemsoft.kz`: HTTP→HTTPS
   redirect + webroot для ACME (`/var/www/certbot`), HTTPS-блок с
@@ -70,14 +118,16 @@ cd /home/rus/projects/gos_tracker
 git pull --ff-only
 ./.venv/bin/pip install -e .                  # только если pyproject.toml менялся
 sudo systemctl restart goszakup-web.service
+sudo systemctl restart goszakup-worker.service  # Phase 3, если уже задеплоен
 # goszakup-daily.timer перезагружать не нужно — следующий oneshot
 # подхватит свежий код сам.
 ```
 
-Миграций нет: `Base.metadata.create_all()` + точечный `_ensure_columns()`
-прогоняются на старте `goszakup-web` / `daily`. Если в релизе бампнули
-`ANALYZER_VERSION` — следующий `daily` сам перегонит лоты со старой
-версией анализа (правило #8).
+При схема-изменениях на проде — сначала `alembic upgrade head`, потом
+`systemctl restart goszakup-web`. `create_all()` в `init_db()` оставлен
+как safety net, но он не делает ALTER — реальные миграции идут через
+Alembic. Если в релизе бампнули `ANALYZER_VERSION` — следующий `daily`
+сам перегонит лоты со старой версией анализа (правило #8).
 
 ### Полезные команды на сервере
 
@@ -87,6 +137,15 @@ sudo journalctl -u goszakup-daily --since today     # последний про�
 sudo systemctl start goszakup-daily.service         # ручной запуск вне 06:00
 systemctl list-timers goszakup-daily.timer          # когда сработает в след. раз
 sudo tail -f /var/log/nginx/gost.salemsoft_error.log
+
+# PG-консоль на проде (пароль в .env, GZ_DATABASE_URL)
+PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\1|') \
+  psql -h 127.0.0.1 -p 5432 -U goszakup -d goszakup_prod
+
+# Откат на SQLite (если в PG что-то сломалось):
+# 1. закомментировать GZ_DATABASE_URL= в .env
+# 2. sudo systemctl restart goszakup-web.service
+# Данные в SQLite не трогали с момента cutover — там стейт «как было».
 ```
 
 `data/logs/launchd-*.log` — артефакты mac-окружения, на сервере не пишутся
@@ -160,16 +219,25 @@ sudo tail -f /var/log/nginx/gost.salemsoft_error.log
    на каждый рендер. Поиск по `dev_category`/`vendor_lock_risk` — SQL по
    `lot_analyses`, без LLM.
 
-10. **SQLite в WAL-режиме + `connect_args={"timeout": 30}`** (см. `db/engine.py`).
-    Включается через event listener `_sqlite_pragmas` на каждом connect:
-    `PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL`. Без этого uvicorn
-    (читатель) и `daily`/`reanalyze`/`fetch_documents` (писатели) валятся
-    с `database is locked`, как только их транзакции пересекаются. WAL
-    позволяет читать во время записи; параллельные писатели всё равно
-    сериализуются, поэтому правило про «не запускать `daily` параллельно
-    с `run-preset`» по-прежнему действует.
+10. **На проде Postgres, на dev-fallback SQLite в WAL** (см. `db/engine.py`,
+    `make_url(DB_URL).get_backend_name()` ветвление). Для SQLite:
+    `connect_args={"timeout": 30}` + event listener `_sqlite_pragmas`
+    (`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL`) — иначе uvicorn
+    (читатель) и `daily`/`reanalyze` (писатели) валятся с `database is locked`.
+    Для Postgres — стандартный pool с `pool_pre_ping=True` (отлавливает
+    оборванные соединения после рестарта PG). Правило «не запускать `daily`
+    параллельно с `run-preset`» — теперь больше про rate-limit на goszakup,
+    а не про блокировки БД (PG разруливает параллельных писателей).
 
-11. **`_call_llm` ретраит Cerebras 429 «queue_exceeded»** с бэкоффом 5/15/30с
+11. **FK на `announcements.id` в Postgres строгий** — в SQLite по умолчанию
+    не enforced, поэтому раньше можно было создать Lot со ссылкой на
+    несуществующее Announcement (stub-лот). На PG это IntegrityError.
+    `jobs/run_preset._ensure_announcement_stub` создаёт stub-Announcement
+    (только id + url) до insert'а Lot, `_save_announcement` потом дополняет
+    реальными полями. Без этой страховки prod-daily валится на любом новом
+    лоте при пустой `announcements`.
+
+12. **`_call_llm` ретраит Cerebras 429 «queue_exceeded»** с бэкоффом 5/15/30с
     (3 ретрая, см. `_RETRY_DELAYS`). Это не «новая фича», а лечение
     burst-throttling: free-tier Cerebras душит при >30 req/мин. В массовых
     скриптах (`scripts/reanalyze_actual_it.py`) дополнительно ставится
@@ -220,11 +288,15 @@ sudo tail -f /var/log/nginx/gost.salemsoft_error.log
 - `db/models.py` — 9 таблиц. `Organization` — общая для customer/organizer/supplier.
   `LotAnalysis` — 1:1 к `Lot` через FK + UniqueConstraint.
 - `db/engine.py` — `init_db()` делает `create_all` + узкий `_ensure_columns()`
-  для редких ALTER TABLE на существующих БД (сейчас только `scrape_runs.llm_analyzed`,
-  `scrape_runs.note`). Engine создан с `connect_args={"timeout": 30}`; event
-  listener `_sqlite_pragmas` на каждом connect выставляет `PRAGMA journal_mode=WAL`
-  и `PRAGMA synchronous=NORMAL`. WAL включается на уровне файла БД и
-  сохраняется между запусками.
+  для редких ALTER TABLE на legacy-БД. Это safety net; **канонические
+  миграции** живут в `migrations/versions/` (Alembic). Engine создан с
+  `connect_args={"timeout": 30}`; event listener `_sqlite_pragmas` на каждом
+  connect выставляет `PRAGMA journal_mode=WAL` и `PRAGMA synchronous=NORMAL`.
+  WAL включается на уровне файла БД и сохраняется между запусками.
+- `migrations/env.py` — Alembic-env берёт URL из `goszakup.config.DB_URL`
+  (а не из `alembic.ini`), включён `render_as_batch=True` для SQLite-ALTER'ов.
+  `GZ_DATABASE_URL` env-переменная перекрывает дефолт (используется тестами
+  и в Phase 2 для Postgres).
 - `config.py` — глобальные константы + `load_dotenv(ROOT / ".env", override=False)`
   при импорте модуля. Все точки входа (CLI, web, jobs) транзитивно зависят
   от `config`, поэтому `.env` гарантированно загружен до первого

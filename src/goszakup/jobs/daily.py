@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from ..db.engine import SessionLocal, init_db
 from ..db.models import Preset
+from ..observability import setup_sentry
 from .run_preset import run_preset
 
 log = logging.getLogger(__name__)
@@ -47,4 +48,5 @@ def run_all_active() -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_sentry("daily")
     run_all_active()

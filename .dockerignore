@@ -1,0 +1,37 @@
+# Что НЕ копируем в образ. Не сильно меньше — но больше всего экономит на
+# data/ и .venv/.
+.git/
+.github/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Локальные данные — никогда внутрь образа.
+data/
+*.sqlite
+*.sqlite-*
+
+# Тесты и dev-only материалы.
+tests/
+.pytest_cache/
+.ruff_cache/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Документация (есть в репе для людей, но в образ не нужна).
+ROADMAP.md
+DEPLOY.md
+design_handoff_ui_redesign/
+scripts/systemd/
+
+# .env с реальными секретами — компоуз пробрасывает env-переменными.
+.env
+.env.*
+!env.example

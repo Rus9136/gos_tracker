@@ -16,7 +16,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import unescape
-from typing import Optional
 
 from bs4 import BeautifulSoup, Tag
 
@@ -291,7 +290,7 @@ def _parse_contracts(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
                 continue
             # Строка с данными
             if column_headers and cells[0].name == "td":
-                row = dict(zip(column_headers, txts))
+                row = dict(zip(column_headers, txts, strict=False))
                 detail.contracts.append(
                     ContractRow(
                         lot_number=current_lot,

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,7 +64,7 @@ def _build_note(
 
 def find_active_run(session: Session) -> ScrapeRun | None:
     """Возвращает незавершённый прогон, если он есть и не зависший."""
-    threshold = datetime.utcnow() - _STALE_RUN_AFTER
+    threshold = datetime.now(UTC) - _STALE_RUN_AFTER
     return session.scalar(
         select(ScrapeRun)
         .where(ScrapeRun.finished_at.is_(None))
@@ -162,7 +162,7 @@ def execute_ingest_run(
         finally:
             run = session.get(ScrapeRun, run_id)
             if run is not None:
-                run.finished_at = datetime.utcnow()
+                run.finished_at = datetime.now(UTC)
                 run.listing_count = total.listing_count
                 run.details_fetched = total.details_fetched
                 run.new_lots = total.new_lots

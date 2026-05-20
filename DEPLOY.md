@@ -4,6 +4,12 @@
 что есть root-доступ и доменное имя/IP сервера. Все пути ниже —
 `/opt/goszakup`, пользователь — `goszakup`. Замените при необходимости.
 
+> **Фактическая раскладка прода — в `CLAUDE.md`** (раздел «Продакшн:
+> gost.salemsoft.kz»): `/home/rus/projects/gos_tracker`, юзер `rus`,
+> системный Postgres-15 рядом с другими `*.salemsoft.kz` проектами.
+> Cutover с SQLite → Postgres выполнен 2026-05-20. Этот документ —
+> общий рецепт для чистого сервера.
+
 ---
 
 ## 0. Предварительно
@@ -329,14 +335,26 @@ src.backup(dst); dst.close(); src.close()
 ```bash
 sudo -u goszakup git -C /opt/goszakup/app pull --ff-only
 sudo -u goszakup /opt/goszakup/app/.venv/bin/pip install -e /opt/goszakup/app
+# Применить миграции схемы (см. ниже про первый запуск на существующей БД)
+sudo -u goszakup /opt/goszakup/app/.venv/bin/alembic upgrade head
 sudo systemctl restart goszakup-web.service
 # daily.timer переподхватится сам со следующего запуска
 ```
 
-Миграций нет (`Base.metadata.create_all` + точечный `_ensure_columns()`),
-схема обновляется автоматически на старте `init`/`web`/`daily`. Если меняли
-`ANALYZER_VERSION` — следующий `daily` сам перегонит лоты с устаревшим
-анализом (идемпотентность по `(analyzer_version, tz_sha256)`).
+Миграции теперь живут в `migrations/versions/` (Alembic). При **первом**
+накате на сервер с уже существующей БД нужно один раз пометить её как
+соответствующую baseline-ревизии (иначе `alembic upgrade head` упадёт,
+пытаясь создать уже существующие таблицы):
+
+```bash
+sudo -u goszakup /opt/goszakup/app/.venv/bin/alembic stamp head
+sudo -u goszakup /opt/goszakup/app/.venv/bin/alembic current  # должно показать ревизию
+```
+
+После этого все следующие релизы — обычный `alembic upgrade head`.
+`init_db()` / `create_all()` оставлены как safety net и не мешают.
+Если меняли `ANALYZER_VERSION` — следующий `daily` сам перегонит лоты с
+устаревшим анализом (идемпотентность по `(analyzer_version, tz_sha256)`).
 
 ---
 

@@ -24,6 +24,7 @@ data/goszakup.sqlite-*
 data/docs/
 data/logs/
 data/org_runs/
+data/backups/
 data/*.lock
 
 # Логи и одноразовые CSV-выгрузки в корне

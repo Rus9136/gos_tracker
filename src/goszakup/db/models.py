@@ -1,9 +1,22 @@
-"""SQLAlchemy 2.0 модели."""
+"""SQLAlchemy 2.0 модели.
+
+Типы выбраны под оба диалекта:
+- Деньги — `Numeric(18, 2)` (Decimal в Python), а не Float. Float = IEEE-754
+  double, теоретически точен до ~15 цифр, но «учётно неправильный» для денег
+  и в Postgres использует `double precision`, а не `numeric`. Decimal даёт
+  бит-в-бит сохранение того, что отдал goszakup.
+- JSON-поля — `JSON().with_variant(JSONB, "postgresql")`. На SQLite остаётся
+  text-JSON; на Postgres становится `jsonb` (поддерживает GIN-индексы и
+  частичные обновления).
+- Временные метки — `DateTime(timezone=True)` (TIMESTAMPTZ на Postgres,
+  ISO+offset на SQLite). `_now()` возвращает aware datetime в UTC, чтобы
+  не было mixed-tz сравнений в Python.
+"""
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -13,10 +26,12 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -25,7 +40,26 @@ class Base(DeclarativeBase):
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    """Aware UTC datetime — стыкуется с `DateTime(timezone=True)`."""
+    return datetime.now(UTC)
+
+
+# Деньги в тенге. Тендеры на goszakup бывают и в копейках (тиынах), поэтому
+# 2 знака после запятой — не пустая трата места, а сохранение исходного
+# значения. `precision=18` спокойно хватает на тендеры до ~10 трлн ₸.
+MONEY_TYPE = Numeric(precision=18, scale=2)
+
+# JSON, который на Postgres превращается в jsonb. JSON()-вариант (для SQLite)
+# хранит сериализованный текст. JSONB-вариант — нативно с поддержкой GIN,
+# `?`/`->`/`->>` операторов, частичных обновлений. Для нас критично, когда
+# на 10М+ лотов понадобится индекс по `lot_analyses.tech_stack` или
+# `announcements.raw`.
+JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
+
+# `DateTime(timezone=True)` — TIMESTAMPTZ. Постгрес хранит как UTC, отдаёт
+# в session-tz. Для нас сессия — UTC (см. docker-compose; внутри контейнера
+# таймзоной никто не управляет — psycopg по умолчанию UTC).
+TS_TYPE = DateTime(timezone=True)
 
 
 class Organization(Base):
@@ -34,18 +68,18 @@ class Organization(Base):
     __tablename__ = "organizations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    bin: Mapped[Optional[str]] = mapped_column(String(20), unique=True, index=True)
+    bin: Mapped[str | None] = mapped_column(String(20), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(500), index=True)
-    address: Mapped[Optional[str]] = mapped_column(Text)
-    phone: Mapped[Optional[str]] = mapped_column(String(100))
-    email: Mapped[Optional[str]] = mapped_column(String(200))
-    first_seen: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    address: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(String(100))
+    email: Mapped[str | None] = mapped_column(String(200))
+    first_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    last_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 
-    organized_announcements: Mapped[list["Announcement"]] = relationship(
+    organized_announcements: Mapped[list[Announcement]] = relationship(
         back_populates="organizer", foreign_keys="Announcement.organizer_id"
     )
-    customer_lots: Mapped[list["Lot"]] = relationship(
+    customer_lots: Mapped[list[Lot]] = relationship(
         back_populates="customer", foreign_keys="Lot.customer_id"
     )
 
@@ -56,31 +90,31 @@ class Announcement(Base):
     __tablename__ = "announcements"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # anno_id с сайта
-    number: Mapped[Optional[str]] = mapped_column(String(50), index=True)
+    number: Mapped[str | None] = mapped_column(String(50), index=True)
     url: Mapped[str] = mapped_column(String(300))
-    method: Mapped[Optional[str]] = mapped_column(String(200))
-    purchase_type: Mapped[Optional[str]] = mapped_column(String(100))
-    subject_type: Mapped[Optional[str]] = mapped_column(String(50))
-    organizer_id: Mapped[Optional[int]] = mapped_column(
+    method: Mapped[str | None] = mapped_column(String(200))
+    purchase_type: Mapped[str | None] = mapped_column(String(100))
+    subject_type: Mapped[str | None] = mapped_column(String(50))
+    organizer_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), index=True
     )
-    organizer_address: Mapped[Optional[str]] = mapped_column(Text)
-    lots_count: Mapped[Optional[int]] = mapped_column(Integer)
-    total_amount: Mapped[Optional[float]] = mapped_column(Float)
-    attributes: Mapped[Optional[str]] = mapped_column(Text)  # «Признаки»
-    publish_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    contact_name: Mapped[Optional[str]] = mapped_column(String(300))
-    contact_role: Mapped[Optional[str]] = mapped_column(String(200))
-    contact_email: Mapped[Optional[str]] = mapped_column(String(200))
-    raw: Mapped[Optional[dict]] = mapped_column(JSON)
-    first_seen: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    last_synced: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    organizer_address: Mapped[str | None] = mapped_column(Text)
+    lots_count: Mapped[int | None] = mapped_column(Integer)
+    total_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    attributes: Mapped[str | None] = mapped_column(Text)  # «Признаки»
+    publish_date: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    contact_name: Mapped[str | None] = mapped_column(String(300))
+    contact_role: Mapped[str | None] = mapped_column(String(200))
+    contact_email: Mapped[str | None] = mapped_column(String(200))
+    raw: Mapped[dict | None] = mapped_column(JSON_TYPE)
+    first_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    last_synced: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 
-    organizer: Mapped[Optional[Organization]] = relationship(
+    organizer: Mapped[Organization | None] = relationship(
         back_populates="organized_announcements", foreign_keys=[organizer_id]
     )
-    lots: Mapped[list["Lot"]] = relationship(back_populates="announcement")
-    documents: Mapped[list["Document"]] = relationship(back_populates="announcement")
+    lots: Mapped[list[Lot]] = relationship(back_populates="announcement")
+    documents: Mapped[list[Document]] = relationship(back_populates="announcement")
 
 
 class Lot(Base):
@@ -89,47 +123,48 @@ class Lot(Base):
     __tablename__ = "lots"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # lot_id с сайта
-    number: Mapped[Optional[str]] = mapped_column(String(50), index=True)
-    announcement_id: Mapped[Optional[int]] = mapped_column(
+    number: Mapped[str | None] = mapped_column(String(50), index=True)
+    announcement_id: Mapped[int | None] = mapped_column(
         ForeignKey("announcements.id"), index=True
     )
-    customer_id: Mapped[Optional[int]] = mapped_column(
+    customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), index=True
     )
-    enstru: Mapped[Optional[str]] = mapped_column(String(500), index=True)
-    name: Mapped[Optional[str]] = mapped_column(Text)
-    extra: Mapped[Optional[str]] = mapped_column(Text)  # доп. характеристика
-    price_per_unit: Mapped[Optional[float]] = mapped_column(Float)
-    quantity: Mapped[Optional[float]] = mapped_column(Float)
-    unit: Mapped[Optional[str]] = mapped_column(String(100))
-    plan_amount: Mapped[Optional[float]] = mapped_column(Float, index=True)
-    amount_y1: Mapped[Optional[float]] = mapped_column(Float)
-    amount_y2: Mapped[Optional[float]] = mapped_column(Float)
-    amount_y3: Mapped[Optional[float]] = mapped_column(Float)
-    status_code: Mapped[Optional[int]] = mapped_column(Integer, index=True)
-    status_name: Mapped[Optional[str]] = mapped_column(String(200), index=True)
+    enstru: Mapped[str | None] = mapped_column(String(500), index=True)
+    name: Mapped[str | None] = mapped_column(Text)
+    extra: Mapped[str | None] = mapped_column(Text)  # доп. характеристика
+    price_per_unit: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    # Кол-во — не деньги, может быть дробным (литры, тонны, штуки.5). Float OK.
+    quantity: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(100))
+    plan_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE, index=True)
+    amount_y1: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    amount_y2: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    amount_y3: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    status_code: Mapped[int | None] = mapped_column(Integer, index=True)
+    status_name: Mapped[str | None] = mapped_column(String(200), index=True)
     is_actual: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     # Ручная пометка «интересный лот» из UI (звёздочка на карточке/в списке).
     # Не связана с автоматикой пайплайна — выставляется только пользователем.
     is_starred: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False, index=True
     )
-    it_category: Mapped[Optional[str]] = mapped_column(String(50), index=True)
-    kato: Mapped[Optional[str]] = mapped_column(String(20), index=True)
-    method: Mapped[Optional[str]] = mapped_column(String(200))
+    it_category: Mapped[str | None] = mapped_column(String(50), index=True)
+    kato: Mapped[str | None] = mapped_column(String(20), index=True)
+    method: Mapped[str | None] = mapped_column(String(200))
     url: Mapped[str] = mapped_column(String(300))
-    first_seen: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
-    last_synced: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    first_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, index=True)
+    last_synced: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 
-    announcement: Mapped[Optional[Announcement]] = relationship(back_populates="lots")
-    customer: Mapped[Optional[Organization]] = relationship(
+    announcement: Mapped[Announcement | None] = relationship(back_populates="lots")
+    customer: Mapped[Organization | None] = relationship(
         back_populates="customer_lots", foreign_keys=[customer_id]
     )
-    status_history: Mapped[list["LotStatusHistory"]] = relationship(
+    status_history: Mapped[list[LotStatusHistory]] = relationship(
         back_populates="lot", cascade="all, delete-orphan"
     )
-    contracts: Mapped[list["Contract"]] = relationship(back_populates="lot")
-    analysis: Mapped[Optional["LotAnalysis"]] = relationship(
+    contracts: Mapped[list[Contract]] = relationship(back_populates="lot")
+    analysis: Mapped[LotAnalysis | None] = relationship(
         back_populates="lot",
         uselist=False,
         cascade="all, delete-orphan",
@@ -141,9 +176,9 @@ class LotStatusHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lot_id: Mapped[int] = mapped_column(ForeignKey("lots.id"), index=True)
-    status_code: Mapped[Optional[int]] = mapped_column(Integer)
-    status_name: Mapped[Optional[str]] = mapped_column(String(200))
-    observed_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    status_name: Mapped[str | None] = mapped_column(String(200))
+    observed_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, index=True)
 
     lot: Mapped[Lot] = relationship(back_populates="status_history")
 
@@ -157,14 +192,14 @@ class Document(Base):
         ForeignKey("announcements.id"), index=True
     )
     name: Mapped[str] = mapped_column(String(500))
-    attribute: Mapped[Optional[str]] = mapped_column(String(200))  # «Признак»
+    attribute: Mapped[str | None] = mapped_column(String(200))  # «Признак»
     url: Mapped[str] = mapped_column(String(800))
-    local_path: Mapped[Optional[str]] = mapped_column(String(800))
-    sha256: Mapped[Optional[str]] = mapped_column(String(64))
-    size: Mapped[Optional[int]] = mapped_column(Integer)
-    content_type: Mapped[Optional[str]] = mapped_column(String(200))
-    downloaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    download_error: Mapped[Optional[str]] = mapped_column(Text)
+    local_path: Mapped[str | None] = mapped_column(String(800))
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    size: Mapped[int | None] = mapped_column(Integer)
+    content_type: Mapped[str | None] = mapped_column(String(200))
+    downloaded_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    download_error: Mapped[str | None] = mapped_column(Text)
 
     announcement: Mapped[Announcement] = relationship(back_populates="documents")
 
@@ -176,19 +211,19 @@ class Contract(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lot_id: Mapped[int] = mapped_column(ForeignKey("lots.id"), index=True)
-    contract_number: Mapped[Optional[str]] = mapped_column(String(100), index=True)
-    status: Mapped[Optional[str]] = mapped_column(String(100))
-    plan_amount: Mapped[Optional[float]] = mapped_column(Float)
-    contract_amount: Mapped[Optional[float]] = mapped_column(Float)
-    fact_amount: Mapped[Optional[float]] = mapped_column(Float)
-    supplier_id: Mapped[Optional[int]] = mapped_column(
+    contract_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    status: Mapped[str | None] = mapped_column(String(100))
+    plan_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    contract_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    fact_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    supplier_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), index=True
     )
-    supplier_status: Mapped[Optional[str]] = mapped_column(String(100))
-    last_synced: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    supplier_status: Mapped[str | None] = mapped_column(String(100))
+    last_synced: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 
     lot: Mapped[Lot] = relationship(back_populates="contracts")
-    supplier: Mapped[Optional[Organization]] = relationship(foreign_keys=[supplier_id])
+    supplier: Mapped[Organization | None] = relationship(foreign_keys=[supplier_id])
 
 
 class Preset(Base):
@@ -198,23 +233,23 @@ class Preset(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200), unique=True)
-    kato: Mapped[Optional[str]] = mapped_column(String(20))
-    amount_from: Mapped[Optional[int]] = mapped_column(Integer)
-    amount_to: Mapped[Optional[int]] = mapped_column(Integer)
-    status_codes: Mapped[Optional[list[int]]] = mapped_column(JSON)
-    it_categories: Mapped[Optional[list[str]]] = mapped_column(JSON)
+    kato: Mapped[str | None] = mapped_column(String(20))
+    amount_from: Mapped[int | None] = mapped_column(Integer)
+    amount_to: Mapped[int | None] = mapped_column(Integer)
+    status_codes: Mapped[list[int] | None] = mapped_column(JSON_TYPE)
+    it_categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 
 
 class ScrapeRun(Base):
     __tablename__ = "scrape_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    preset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("presets.id"), index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    preset_id: Mapped[int | None] = mapped_column(ForeignKey("presets.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
     listing_count: Mapped[int] = mapped_column(Integer, default=0)
     details_fetched: Mapped[int] = mapped_column(Integer, default=0)
     new_lots: Mapped[int] = mapped_column(Integer, default=0)
@@ -222,11 +257,11 @@ class ScrapeRun(Base):
     new_documents: Mapped[int] = mapped_column(Integer, default=0)
     llm_analyzed: Mapped[int] = mapped_column(Integer, default=0)
     errors: Mapped[int] = mapped_column(Integer, default=0)
-    log_excerpt: Mapped[Optional[str]] = mapped_column(Text)
+    log_excerpt: Mapped[str | None] = mapped_column(Text)
     # Произвольная подпись для ad-hoc прогонов (preset_id=NULL): отображается
     # на /runs вместо имени preset'а. Например, «БИН 990440004229 · 2020–2026
     # · услуги · статус 360».
-    note: Mapped[Optional[str]] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
 
 
 class LotAnalysis(Base):
@@ -241,21 +276,21 @@ class LotAnalysis(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lot_id: Mapped[int] = mapped_column(ForeignKey("lots.id"), index=True)
-    dev_category: Mapped[Optional[str]] = mapped_column(String(40), index=True)
-    tech_stack: Mapped[Optional[list[str]]] = mapped_column(JSON)
-    tz_summary: Mapped[Optional[str]] = mapped_column(Text)
-    solo_feasible: Mapped[Optional[bool]] = mapped_column(Boolean)
-    vendor_lock_risk: Mapped[Optional[str]] = mapped_column(String(10), index=True)
-    analysis_confidence: Mapped[Optional[str]] = mapped_column(String(10), index=True)
-    analyzed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    dev_category: Mapped[str | None] = mapped_column(String(40), index=True)
+    tech_stack: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
+    tz_summary: Mapped[str | None] = mapped_column(Text)
+    solo_feasible: Mapped[bool | None] = mapped_column(Boolean)
+    vendor_lock_risk: Mapped[str | None] = mapped_column(String(10), index=True)
+    analysis_confidence: Mapped[str | None] = mapped_column(String(10), index=True)
+    analyzed_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
     analyzer_version: Mapped[str] = mapped_column(String(40))
-    tz_sha256: Mapped[Optional[str]] = mapped_column(String(64))
-    source_document_id: Mapped[Optional[int]] = mapped_column(
+    tz_sha256: Mapped[str | None] = mapped_column(String(64))
+    source_document_id: Mapped[int | None] = mapped_column(
         ForeignKey("documents.id"), index=True
     )
-    error: Mapped[Optional[str]] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
 
     lot: Mapped[Lot] = relationship(back_populates="analysis")
-    source_document: Mapped[Optional[Document]] = relationship(
+    source_document: Mapped[Document | None] = relationship(
         foreign_keys=[source_document_id]
     )

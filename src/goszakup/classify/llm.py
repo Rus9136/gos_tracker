@@ -14,13 +14,13 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Iterable, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db.models import Announcement, Document, Lot, LotAnalysis
@@ -515,7 +515,7 @@ def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
     prev.solo_feasible = r.solo_feasible
     prev.vendor_lock_risk = r.vendor_lock_risk
     prev.analysis_confidence = r.analysis_confidence
-    prev.analyzed_at = datetime.utcnow()
+    prev.analyzed_at = datetime.now(UTC)
     prev.analyzer_version = ANALYZER_VERSION
     prev.tz_sha256 = tz_sha
     prev.source_document_id = tz_doc.id if tz_doc else None
@@ -594,7 +594,7 @@ def chat_about_lot(lot: Lot, history: list[dict]) -> str:
     try:
         from cerebras.cloud.sdk import Cerebras
     except ImportError as e:
-        raise RuntimeError(f"cerebras-cloud-sdk не установлен: {e}")
+        raise RuntimeError(f"cerebras-cloud-sdk не установлен: {e}") from e
 
     model = os.environ.get("GZ_LLM_MODEL", DEFAULT_MODEL)
     client = Cerebras(api_key=api_key)

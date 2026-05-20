@@ -1,0 +1,38 @@
+[Unit]
+Description=Goszakup Tracker — Dramatiq worker (listing/detail/llm actors)
+After=network-online.target postgresql.service docker.service
+Wants=network-online.target
+# Redis раздан через выделенный docker-контейнер `goszakup-redis` на :6380
+# (см. CLAUDE.md / DEPLOY.md). На хосте 6379 уже занят `shared-redis`
+# другими проектами, к нему мы не подключаемся.
+Requires=docker.service
+
+[Service]
+Type=simple
+User=rus
+Group=rus
+WorkingDirectory=/home/rus/projects/gos_tracker
+# .env подхватывается dramatiq-процессом через python-dotenv в config.py.
+# GZ_DATABASE_URL / GZ_REDIS_URL / CEREBRAS_API_KEY должны быть там.
+ExecStart=/home/rus/projects/gos_tracker/.venv/bin/dramatiq \
+    goszakup.queue.actors \
+    --processes 2 --threads 4 \
+    --queues goszakup_daily goszakup_listing goszakup_detail goszakup_llm
+
+# Dramatiq корректно реагирует на SIGTERM — сначала завершает текущие
+# сообщения, потом завершается. 60с обычно хватает.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+# Защита по системе как у goszakup-web. ProtectHome=true НЕ ставим —
+# venv лежит в /home/rus/projects/gos_tracker/.venv, иначе 203/EXEC.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/rus/projects/gos_tracker/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

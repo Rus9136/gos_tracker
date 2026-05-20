@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data"
-DOCS_DIR = DATA_DIR / "docs"
-DB_PATH = DATA_DIR / "goszakup.sqlite"
-DB_URL = f"sqlite:///{DB_PATH}"
 
 # `config` импортируется всеми точками входа (CLI, web, jobs), поэтому
 # подгрузка .env здесь гарантирует доступность ключей до первого
 # обращения к os.environ. override=False — реальный shell-env приоритетнее.
 load_dotenv(ROOT / ".env", override=False)
+
+# В Docker-образе пакет ставится в site-packages, `ROOT` указывает на
+# `/usr/local/lib/python3.12` — туда писать нельзя. Поэтому DATA_DIR можно
+# переопределить через env. На дев-машине дефолт = `<repo>/data`.
+DATA_DIR = Path(os.environ.get("GZ_DATA_DIR") or (ROOT / "data"))
+DOCS_DIR = DATA_DIR / "docs"
+DB_PATH = DATA_DIR / "goszakup.sqlite"
+
+# GZ_DATABASE_URL переопределяет дефолт. Используется тестами (tmp-файл),
+# Alembic autogenerate (пустая БД) и будущим переездом на Postgres.
+DB_URL = os.environ.get("GZ_DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 # Минимальная сумма лота, ниже которой не отслеживаем (зафиксировано продуктовым решением).
 MIN_AMOUNT = 500_000

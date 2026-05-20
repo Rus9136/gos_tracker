@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html import unescape
-from typing import Iterable, Iterator
 
 from bs4 import BeautifulSoup
 

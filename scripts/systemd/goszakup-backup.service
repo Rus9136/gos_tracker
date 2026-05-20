@@ -1,0 +1,16 @@
+[Unit]
+Description=Goszakup Tracker — резервная копия SQLite
+After=goszakup-daily.service
+
+[Service]
+Type=oneshot
+User=rus
+Group=rus
+WorkingDirectory=/home/rus/projects/gos_tracker
+EnvironmentFile=-/home/rus/projects/gos_tracker/.env
+ExecStart=/home/rus/projects/gos_tracker/.venv/bin/python -m scripts.backup_sqlite
+
+# В реальности backup пишет в data/backups/. ProtectSystem=strict не ставим,
+# чтобы не возиться с ReadWritePaths — пользователь rus всё равно ограничен.
+NoNewPrivileges=true
+TimeoutStartSec=30m

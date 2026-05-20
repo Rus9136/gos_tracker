@@ -1,32 +1,49 @@
-"""Точка входа SQLAlchemy: engine, SessionLocal, init_db."""
+"""Точка входа SQLAlchemy: engine, SessionLocal, init_db.
+
+Поддерживаются два диалекта:
+- SQLite (legacy, dev и пока ещё прод) — нужны WAL pragmas и `timeout=30`.
+- Postgres (Phase 1+, docker-compose, будущий прод) — стандартный pool.
+
+Разделение по `engine.dialect.name`, а не по строке URL — это надёжнее.
+"""
 
 from __future__ import annotations
 
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import DB_URL
 from .models import Base
 
-# `timeout=30` — SQLite по умолчанию ждёт блокировку 5с и роняется с
-# `database is locked`. Поднимаем до 30с, чтобы uvicorn + CLI/скрипты могли
-# работать одновременно (web-запросы короткие, скрипты пишут пачками).
-engine = create_engine(
-    DB_URL, echo=False, future=True, connect_args={"timeout": 30}
-)
+_is_sqlite = make_url(DB_URL).get_backend_name() == "sqlite"
+
+if _is_sqlite:
+    # `timeout=30` — SQLite по умолчанию ждёт блокировку 5с и роняется с
+    # `database is locked`. Поднимаем до 30с, чтобы uvicorn + CLI/скрипты
+    # могли работать одновременно (web-запросы короткие, скрипты пишут пачками).
+    engine = create_engine(
+        DB_URL, echo=False, future=True, connect_args={"timeout": 30}
+    )
+
+    # WAL-режим: одновременные read'ы не блокируют write'ы (и наоборот).
+    # Без него `daily`/`reanalyze` валят uvicorn-сессии с `database is locked`,
+    # как только uvicorn держит хоть один read во время чужого INSERT'а.
+    # journal_mode хранится в самом файле БД, поэтому достаточно выставить
+    # при первом подключении любого процесса.
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")  # WAL + NORMAL = безопасно и быстро
+        cur.close()
+else:
+    # Postgres / другие: дефолтный pool, без специфичных pragmas.
+    # pool_pre_ping=True — отлавливает «оборванные» соединения после
+    # рестарта БД, особенно актуально в docker-compose окружении.
+    engine = create_engine(DB_URL, echo=False, future=True, pool_pre_ping=True)
 
 
-# WAL-режим: одновременные read'ы не блокируют write'ы (и наоборот).
-# Без него `daily`/`reanalyze` валят uvicorn-сессии с `database is locked`,
-# как только uvicorn держит хоть один read во время чужого INSERT'а.
-# journal_mode хранится в самом файле БД, поэтому достаточно выставить
-# при первом подключении любого процесса.
-@event.listens_for(engine, "connect")
-def _sqlite_pragmas(dbapi_conn, _):
-    cur = dbapi_conn.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA synchronous=NORMAL")  # WAL + NORMAL = безопасно и быстро
-    cur.close()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

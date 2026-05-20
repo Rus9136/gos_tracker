@@ -40,19 +40,46 @@ single-user-инструмент.
 
 ## Установка
 
+### Вариант A — Docker (рекомендован для dev)
+
+```bash
+cp env.example .env  # как минимум CEREBRAS_API_KEY
+docker compose up -d
+docker compose exec web alembic upgrade head
+docker compose exec web python -m goszakup.cli seed-presets
+# UI: http://localhost:8766 (порт 8766, потому что 8765 обычно занят
+# боевым systemd-сервисом)
+```
+
+Поднимает Postgres 16 + uvicorn в контейнере. Прогнать daily вручную:
+`docker compose run --rm web python -m goszakup.cli daily`.
+
+### Вариант B — venv + SQLite (legacy, текущий прод)
+
 ```bash
 cd <путь-к-репозиторию>
 python3 -m venv .venv
 .venv/bin/pip install -e .
-
-# Создать таблицы и 20 дефолтных preset'ов
-.venv/bin/python -m goszakup.cli init
+.venv/bin/alembic upgrade head
 .venv/bin/python -m goszakup.cli seed-presets
 ```
 
 Боевой деплой под Linux+nginx+systemd описан в [DEPLOY.md](DEPLOY.md);
-фактическая раскладка продакшна — в [CLAUDE.md](CLAUDE.md), раздел
+фактическая раскладка продакшна (пока на SQLite, миграция на Postgres
+запланирована Phase 2) — в [CLAUDE.md](CLAUDE.md), раздел
 «Продакшн: gost.salemsoft.kz».
+
+### Миграция данных из SQLite в Postgres
+
+После того как Postgres-сторона поднята и накатана `alembic upgrade head`:
+
+```bash
+GZ_DEST_DATABASE_URL='postgresql+psycopg://goszakup:goszakup_dev@localhost:5433/goszakup' \
+    .venv/bin/python -m scripts.migrate_sqlite_to_pg
+```
+
+Скрипт идёт по таблицам в порядке FK, идемпотентен (ON CONFLICT DO NOTHING),
+создаёт stub-Announcement для orphan-ссылок (типичный кейс stub-лотов).
 
 ## Использование
 
