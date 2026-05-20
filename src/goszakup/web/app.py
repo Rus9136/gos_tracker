@@ -94,7 +94,7 @@ def _nav_active(request: Request) -> str:
 
 templates.env.globals["nav_active"] = _nav_active
 
-# Уберём авторизацию, если она не настроена в окружении (для удобства локально).
+# GZ_NO_AUTH=1 отключает Basic Auth — только для dev-машины, на проде не ставится.
 _AUTH_DISABLED = os.environ.get("GZ_NO_AUTH") == "1"
 
 
@@ -973,8 +973,8 @@ def ingest_start(
         )
 
     # FastAPI BackgroundTasks выполнит после возврата ответа в том же процессе.
-    # Корректно работает только с одним воркером uvicorn — для локального
-    # инструмента это норма.
+    # Корректно работает только с одним воркером uvicorn — single-user
+    # инструмент, на проде тоже один воркер (см. goszakup-web.service).
     background.add_task(
         execute_ingest_run,
         run_id,

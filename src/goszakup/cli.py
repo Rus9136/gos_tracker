@@ -115,7 +115,7 @@ def run_once(
 
 @app.command()
 def daily() -> None:
-    """Обойти все активные preset'ы (то, что вызывается из launchd)."""
+    """Обойти все активные preset'ы (то, что вызывается ежедневным таймером)."""
     _setup_logging(verbose=False)
     run_all_active()
 

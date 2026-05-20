@@ -1,8 +1,10 @@
 # Goszakup Tracker
 
-Локальный трекер тендеров с [goszakup.gov.kz](https://goszakup.gov.kz): ежедневный
+Трекер тендеров с [goszakup.gov.kz](https://goszakup.gov.kz): ежедневный
 скрейпинг по preset'ам, история статусов, загрузка документов, веб-интерфейс
-с фильтрами и отчёты по заказчикам.
+с фильтрами и отчёты по заказчикам. Развёрнут на
+<https://gost.salemsoft.kz> (production); работает и под macOS как
+single-user-инструмент.
 
 ## Возможности
 
@@ -26,25 +28,31 @@
 - Веб-интерфейс: дашборд, актуальные / прошедшие тендеры с фильтрами (включая
   тип разработки и риск заточки), карточка лота со скачиванием документов и
   блоком LLM-анализа, отчёт по заказчикам/организаторам, журнал прогонов.
-- launchd-агент для ежедневного запуска в 06:00.
+- Ежедневный запуск по расписанию в 06:00: systemd-timer на сервере
+  ([DEPLOY.md](DEPLOY.md), [CLAUDE.md](CLAUDE.md) → раздел «Продакшн»);
+  launchd-вариант для macOS оставлен в `scripts/` как опция.
 
 ## Требования
 
-- macOS / Linux
-- Python 3.11+
+- Linux (production) или macOS (single-user)
+- Python 3.11+ (на проде используется 3.12)
 - ~300 МБ места под БД и документы (растёт с количеством отслеживаемых лотов)
 
 ## Установка
 
 ```bash
-cd /Users/rus/Projects/goszakup
-python3.13 -m venv .venv
+cd <путь-к-репозиторию>
+python3 -m venv .venv
 .venv/bin/pip install -e .
 
 # Создать таблицы и 20 дефолтных preset'ов
 .venv/bin/python -m goszakup.cli init
 .venv/bin/python -m goszakup.cli seed-presets
 ```
+
+Боевой деплой под Linux+nginx+systemd описан в [DEPLOY.md](DEPLOY.md);
+фактическая раскладка продакшна — в [CLAUDE.md](CLAUDE.md), раздел
+«Продакшн: gost.salemsoft.kz».
 
 ## Использование
 
@@ -62,7 +70,7 @@ python3.13 -m venv .venv
 # Прогнать один preset (по id из `presets`)
 .venv/bin/python -m goszakup.cli run-preset 20      # Шымкент
 
-# Прогнать все активные preset'ы (то, что вызывается из launchd)
+# Прогнать все активные preset'ы (то, что вызывается ежедневным таймером)
 .venv/bin/python -m goszakup.cli daily
 
 # Разовый прогон без сохранения preset'а
@@ -82,10 +90,10 @@ python3.13 -m venv .venv
 ### Веб-интерфейс
 
 ```bash
-# Без авторизации (для локальной работы)
+# Без авторизации (только для дев-машины — на проде НЕ выставлять)
 GZ_NO_AUTH=1 .venv/bin/python -m uvicorn goszakup.web.app:app --port 8765
 
-# С HTTP Basic auth
+# С HTTP Basic auth (как на проде)
 GZ_USER=admin GZ_PASSWORD=секрет \
     .venv/bin/python -m uvicorn goszakup.web.app:app --port 8765
 ```
@@ -106,19 +114,21 @@ GZ_USER=admin GZ_PASSWORD=секрет \
 | `/runs` | Журнал прогонов парсера |
 | `/document/{id}/download` | Отдаёт локально сохранённый файл |
 
-### Ежедневный запуск через launchd
+### Ежедневный запуск по расписанию
 
-```bash
-bash scripts/install_launchd.sh
-# проверить:
-launchctl list | grep goszakup
-# вручную запустить вне расписания:
-launchctl start com.user.goszakup.daily
-# снять с авто:
-launchctl unload ~/Library/LaunchAgents/com.user.goszakup.daily.plist
-```
+- **Linux (production)** — systemd-timer `goszakup-daily.timer`, см.
+  [DEPLOY.md](DEPLOY.md) § 8 и [CLAUDE.md](CLAUDE.md) → «Продакшн». Логи —
+  через `journalctl -u goszakup-daily`.
+- **macOS (опционально)** — launchd-агент в `scripts/`:
 
-Логи: `data/logs/daily-YYYYmmdd-HHMMSS.log`.
+  ```bash
+  bash scripts/install_launchd.sh
+  launchctl list | grep goszakup
+  launchctl start com.user.goszakup.daily          # вручную вне расписания
+  launchctl unload ~/Library/LaunchAgents/com.user.goszakup.daily.plist
+  ```
+
+  Логи macOS-варианта: `data/logs/daily-YYYYmmdd-HHMMSS.log`.
 
 ## Структура
 
@@ -153,7 +163,7 @@ goszakup/
 ├── data/
 │   ├── goszakup.sqlite      # БД
 │   ├── docs/{anno_id}/...   # скачанные документы
-│   └── logs/                # логи launchd-прогонов
+│   └── logs/                # логи прогонов (только для macOS/launchd; на проде вывод идёт в journal)
 ├── scripts/
 │   ├── run_daily.sh
 │   ├── com.user.goszakup.daily.plist

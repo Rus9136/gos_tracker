@@ -4,10 +4,12 @@
 
 ## Что это за проект
 
-Локальный трекер тендеров с goszakup.gov.kz. Скрейпит ежедневно по preset'ам
+Трекер тендеров с goszakup.gov.kz. Скрейпит ежедневно по preset'ам
 (один на каждый из 20 регионов РК), хранит в SQLite, отдаёт FastAPI UI с
-фильтрами и отчётами. Запускается локально (cron/launchd на mac), не предполагает
-multi-user.
+фильтрами и отчётами. Single-user-инструмент (без multi-tenant). Развёрнут на
+<https://gost.salemsoft.kz> (Linux + systemd + nginx, см. ниже раздел
+«Продакшн»). Может запускаться и под macOS как dev-окружение — launchd-агент
+для этого случая лежит в `scripts/`.
 
 См. README.md для обзора возможностей и команд.
 
@@ -25,8 +27,70 @@ multi-user.
 - ENV: подгружается из `./env` через `python-dotenv` (вызов в `config.py`,
   `override=False` — реальный shell-env приоритетнее). Обязательная переменная
   для LLM/чата — `CEREBRAS_API_KEY`. Опционально: `GZ_LLM_MODEL` (дефолт
-  `gpt-oss-120b`), `GZ_NO_AUTH=1` (выключает Basic Auth для локалки),
-  `GZ_USER`/`GZ_PASSWORD` (если auth включён).
+  `gpt-oss-120b`), `GZ_NO_AUTH=1` (выключает Basic Auth, только для
+  dev-машины — на проде НЕ ставить), `GZ_USER`/`GZ_PASSWORD` (если auth включён).
+
+## Продакшн: gost.salemsoft.kz
+
+Развёрнут на VPS (Ubuntu 24.04, nginx 1.24, certbot 2.9). Не путать с
+`DEPLOY.md` — там общий рецепт для чистого Ubuntu (`/opt/goszakup`, юзер
+`goszakup`). На реальном сервере конвенция другая (как у соседних
+`docs.salemsoft.kz`, `pro.salemsoft.kz`, …): все проекты живут под
+`/home/rus/projects/` от юзера `rus`.
+
+- **URL**: <https://gost.salemsoft.kz> (HTTPS, Basic Auth).
+- **Каталог**: `/home/rus/projects/gos_tracker`, venv в `.venv` (python3.12 —
+  единственный на сервере, 3.11/3.13 нет, проекту хватает: `requires-python = ">=3.11"`).
+- **`.env`**: лежит в корне, `chmod 600`. Содержит `CEREBRAS_API_KEY`,
+  `GZ_USER`, `GZ_PASSWORD`. **`GZ_NO_AUTH` НЕ выставлен** — Basic Auth
+  обязателен. Не пушить.
+- **Сервисы systemd** (юзер `rus`, не `goszakup`/`www-data`):
+  - `goszakup-web.service` — uvicorn на `127.0.0.1:8765`,
+    `ProtectSystem=strict`, `ReadWritePaths=/home/rus/projects/gos_tracker/data`.
+    EnvironmentFile НЕ используется — `.env` подхватывается через
+    `python-dotenv` в `config.py`.
+  - `goszakup-daily.timer` + `goszakup-daily.service` —
+    `OnCalendar=*-*-* 06:00:00`, `RandomizedDelaySec=300`, oneshot с
+    lock-файлом `data/.daily.lock` (защита от параллельного writer'а;
+    см. правило #5/#10).
+- **nginx**: `/etc/nginx/sites-available/gost.salemsoft.kz.conf` (симлинк в
+  `sites-enabled/`). Паттерн как у соседних `*.salemsoft.kz`: HTTP→HTTPS
+  redirect + webroot для ACME (`/var/www/certbot`), HTTPS-блок с
+  `proxy_pass http://127.0.0.1:8765`, security-заголовки (HSTS, XFO и т.д.),
+  `proxy_read_timeout 600s` — это критично, потому что ручные «Загрузить
+  документы» / «Переанализировать» на /lot/{id} идут десятки секунд.
+- **SSL**: Let's Encrypt через webroot. Авто-продление выполняет общий
+  `certbot.timer` сервера (он уже стоял до этого деплоя для других доменов);
+  отдельный таймер заводить не надо.
+
+### Обновление кода на продакшне
+
+```bash
+cd /home/rus/projects/gos_tracker
+git pull --ff-only
+./.venv/bin/pip install -e .                  # только если pyproject.toml менялся
+sudo systemctl restart goszakup-web.service
+# goszakup-daily.timer перезагружать не нужно — следующий oneshot
+# подхватит свежий код сам.
+```
+
+Миграций нет: `Base.metadata.create_all()` + точечный `_ensure_columns()`
+прогоняются на старте `goszakup-web` / `daily`. Если в релизе бампнули
+`ANALYZER_VERSION` — следующий `daily` сам перегонит лоты со старой
+версией анализа (правило #8).
+
+### Полезные команды на сервере
+
+```bash
+sudo journalctl -u goszakup-web -f                  # лог UI
+sudo journalctl -u goszakup-daily --since today     # последний прогон
+sudo systemctl start goszakup-daily.service         # ручной запуск вне 06:00
+systemctl list-timers goszakup-daily.timer          # когда сработает в след. раз
+sudo tail -f /var/log/nginx/gost.salemsoft_error.log
+```
+
+`data/logs/launchd-*.log` — артефакты mac-окружения, на сервере не пишутся
+(вывод идёт в journal).
 
 ## Архитектурные правила, которые легко нарушить
 
@@ -195,8 +259,9 @@ rm -f data/goszakup.sqlite data/docs/* && \
 
 # Узнать код КАТО — посмотри scraper/katos.py
 
-# Логи launchd
-ls -lt data/logs/ | head
+# Логи прогонов
+# На проде: sudo journalctl -u goszakup-daily --since today
+# На macOS (launchd): ls -lt data/logs/ | head
 ```
 
 ## Что НЕ делать
