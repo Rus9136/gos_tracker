@@ -168,6 +168,7 @@ class Lot(Base):
         back_populates="lot",
         uselist=False,
         cascade="all, delete-orphan",
+        foreign_keys="LotAnalysis.lot_id",
     )
 
 
@@ -200,6 +201,11 @@ class Document(Base):
     content_type: Mapped[str | None] = mapped_column(String(200))
     downloaded_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
     download_error: Mapped[str | None] = mapped_column(Text)
+    # SimHash по извлечённому тексту ТЗ (не по байтам — разные кодировки PDF
+    # одинакового текста дают разный sha256, но одинаковый text_simhash).
+    # Используется для дедупликации шаблонных тендеров. Хранится как BIGINT
+    # (signed); см. classify/simhash.to_signed64.
+    text_simhash: Mapped[int | None] = mapped_column(BigInteger, index=True)
 
     announcement: Mapped[Announcement] = relationship(back_populates="documents")
 
@@ -288,9 +294,16 @@ class LotAnalysis(Base):
     source_document_id: Mapped[int | None] = mapped_column(
         ForeignKey("documents.id"), index=True
     )
+    # Если анализ получен дедупликацией по simhash — ссылка на лот-источник,
+    # с которого скопированы dev_category/tech_stack/tz_summary/risk. LLM в
+    # этом случае не вызывался. NULL = анализ сделан LLM (или правилами).
+    reused_from_lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lots.id"), index=True
+    )
     error: Mapped[str | None] = mapped_column(Text)
 
-    lot: Mapped[Lot] = relationship(back_populates="analysis")
+    lot: Mapped[Lot] = relationship(back_populates="analysis", foreign_keys=[lot_id])
     source_document: Mapped[Document | None] = relationship(
         foreign_keys=[source_document_id]
     )
+    reused_from: Mapped[Lot | None] = relationship(foreign_keys=[reused_from_lot_id])

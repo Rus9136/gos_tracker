@@ -13,8 +13,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from ..config import DOCS_DIR
+from ..config import DOCS_DIR, GZ_PROXY_URL
 from .http import ThrottledSession
+
+# v3bl блокирует наш FR-IP (геоблок). Файлы качаем через SOCKS5-туннель в KZ.
+# Применяем прокси только к v3bl-хосту — основной домен goszakup.gov.kz
+# работает напрямую и не нагружает туннель.
+_PROXY_HOST = "v3bl.goszakup.gov.kz"
+
+
+def _proxies_for(url: str) -> dict[str, str] | None:
+    if not GZ_PROXY_URL or _PROXY_HOST not in url:
+        return None
+    return {"http": GZ_PROXY_URL, "https": GZ_PROXY_URL}
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +84,13 @@ def download_document(
         )
 
     try:
-        resp = sess.get(url, stream=True, timeout=60, allow_redirects=True)
+        resp = sess.get(
+            url,
+            stream=True,
+            timeout=60,
+            allow_redirects=True,
+            proxies=_proxies_for(url),
+        )
         resp.raise_for_status()
     except Exception as e:
         log.warning("download failed %s: %s", url, e)

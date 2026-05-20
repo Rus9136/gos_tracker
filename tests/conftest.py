@@ -22,3 +22,45 @@ def pytest_configure(config):  # noqa: ARG001
     # Если кто-то нечаянно прогонит интеграционный тест локально с боевой
     # БД — лучше упасть на старте. Явные тесты сами перетирают переменную.
     os.environ.setdefault("GZ_TEST_MODE", "1")
+
+
+import pytest
+
+
+@pytest.fixture()
+def db_session():
+    """Чистая SQLite-сессия с применённой схемой. Между тестами очищает
+    таблицы, чтобы не зависеть от порядка выполнения.
+
+    Использовать вместо ручного importlib.reload(engine_mod) — он ломает
+    глобальный state engine и валит соседние тесты.
+    """
+    from sqlalchemy import text as _text
+
+    from goszakup.db.engine import SessionLocal, init_db
+
+    init_db()
+    s = SessionLocal()
+    # Лоты могут ссылаться на анализ через cascade, поэтому порядок важен:
+    # сначала зависимые таблицы.
+    for tbl in (
+        "lot_analyses",
+        "contracts",
+        "lot_status_history",
+        "documents",
+        "lots",
+        "announcements",
+        "organizations",
+        "scrape_runs",
+        "presets",
+    ):
+        try:
+            s.execute(_text(f'DELETE FROM "{tbl}"'))
+        except Exception:
+            s.rollback()
+    s.commit()
+    try:
+        yield s
+    finally:
+        s.rollback()
+        s.close()

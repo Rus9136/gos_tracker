@@ -23,8 +23,19 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
+from sqlalchemy import select
+
 from ..db.models import Announcement, Document, Lot, LotAnalysis
 from ..scraper.modal_files import is_tz_like_name
+from .extractive_summary import extract_summary
+from .rules import CONFIDENCE_THRESHOLD, RULES_VERSION, classify_lot
+from .simhash import (
+    HAMMING_THRESHOLD,
+    from_signed64,
+    hamming,
+    simhash as compute_simhash,
+    to_signed64,
+)
 
 log = logging.getLogger(__name__)
 
@@ -491,12 +502,86 @@ def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
     if (
         not force
         and prev is not None
-        and prev.analyzer_version == ANALYZER_VERSION
+        and prev.analyzer_version in (ANALYZER_VERSION, RULES_VERSION)
         and prev.tz_sha256 == tz_sha
     ):
-        return False  # уже актуально
+        return False  # уже актуально (LLM или правила на этой версии)
+
+    # Если уже есть LLM-запись (любой LLM-версии), правила её не вытесняют —
+    # идём сразу в _call_llm. Это защищает от «отката качества» при апгрейде
+    # пайплайна, когда правила могли бы случайно записать поверх LLM-анализа.
+    prev_is_llm = prev is not None and (prev.analyzer_version or "").startswith("llm-")
 
     tz_text = extract_text(tz_doc.local_path) if tz_doc and tz_doc.local_path else None
+
+    # Считаем simhash от извлечённого текста и кэшируем в documents — это
+    # одноразовая операция (≤30мс), пригодится и при повторных проходах.
+    tz_simhash_unsigned: int | None = None
+    if tz_doc is not None and tz_text is not None:
+        if tz_doc.text_simhash is None:
+            tz_simhash_unsigned = compute_simhash(tz_text)
+            tz_doc.text_simhash = to_signed64(tz_simhash_unsigned)
+            session.flush()
+        else:
+            tz_simhash_unsigned = from_signed64(tz_doc.text_simhash)
+
+    # Дедупликация: если уже есть проанализированный лот с тем же
+    # `analyzer_version` и Хэмминговым расстоянием ≤ 3 — копируем результат
+    # без LLM. force=True обходит и эту дедупликацию (ручной reanalyze в UI).
+    if not force and tz_simhash_unsigned is not None:
+        twin = _find_simhash_twin(session, tz_simhash_unsigned, exclude_lot_id=lot.id)
+        if twin is not None:
+            source, distance = twin
+            _copy_analysis(
+                session,
+                lot,
+                source=source,
+                tz_sha=tz_sha,
+                tz_doc_id=tz_doc.id if tz_doc else None,
+                prev=prev,
+            )
+            log.info(
+                "lot %s: reused analysis from lot %s (hamming=%d)",
+                lot.id, source.lot_id, distance,
+            )
+            return True
+
+    # Rule-based классификатор — если правила уверены (confidence ≥ THRESHOLD),
+    # пишем результат без LLM. tz_summary остаётся NULL (его заполнит этап 4
+    # extractive-summary, либо ручной LLM-reanalyze из UI).
+    if not force and not prev_is_llm:
+        rule_res = classify_lot(
+            lot_name=lot.name,
+            lot_extra=lot.extra,
+            it_category=lot.it_category,
+            plan_amount=lot.plan_amount,
+            announcement_attributes=announcement.attributes if announcement else None,
+            tz_text=tz_text,
+        )
+        if rule_res.confidence >= CONFIDENCE_THRESHOLD:
+            if prev is None:
+                prev = LotAnalysis(lot_id=lot.id, analyzer_version=RULES_VERSION)
+                session.add(prev)
+            prev.dev_category = rule_res.dev_category
+            prev.tech_stack = list(rule_res.tech_stack)
+            prev.tz_summary = extract_summary(
+                tz_text=tz_text, lot_name=lot.name, lot_extra=lot.extra
+            )
+            prev.solo_feasible = rule_res.solo_feasible
+            prev.vendor_lock_risk = rule_res.vendor_lock_risk
+            prev.analysis_confidence = rule_res.analysis_confidence
+            prev.analyzed_at = datetime.now(UTC)
+            prev.analyzer_version = RULES_VERSION
+            prev.tz_sha256 = tz_sha
+            prev.source_document_id = tz_doc.id if tz_doc else None
+            prev.reused_from_lot_id = None
+            prev.error = None
+            session.flush()
+            log.info(
+                "lot %s: rule-based classify (category=%s, conf=%.2f)",
+                lot.id, rule_res.dev_category, rule_res.confidence,
+            )
+            return True
 
     outcome = _call_llm(lot, announcement, tz_text)
     if outcome.result is None:
@@ -519,9 +604,69 @@ def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
     prev.analyzer_version = ANALYZER_VERSION
     prev.tz_sha256 = tz_sha
     prev.source_document_id = tz_doc.id if tz_doc else None
+    prev.reused_from_lot_id = None  # этот анализ — свежий LLM-вызов
     prev.error = None
     session.flush()
     return True
+
+
+def _find_simhash_twin(
+    session: Session, target_unsigned: int, *, exclude_lot_id: int
+) -> tuple[LotAnalysis, int] | None:
+    """Ищет ближайший LotAnalysis с Хэмминговым расстоянием ≤ THRESHOLD.
+
+    Линейный скан по индексу анализов: 70К записей × XOR-popcount ≈ десятки мс.
+    LSH-banding не нужен при текущем объёме. Если когда-нибудь упрёмся —
+    добавим MinHash banding или GIN по битам.
+    """
+    candidates = session.execute(
+        select(LotAnalysis, Document.text_simhash)
+        .join(Document, LotAnalysis.source_document_id == Document.id)
+        .where(
+            LotAnalysis.analyzer_version == ANALYZER_VERSION,
+            LotAnalysis.lot_id != exclude_lot_id,
+            LotAnalysis.reused_from_lot_id.is_(None),  # копируем только из «первоисточников»
+            Document.text_simhash.is_not(None),
+        )
+    ).all()
+    best: LotAnalysis | None = None
+    best_dist = HAMMING_THRESHOLD + 1
+    for analysis, sh_signed in candidates:
+        d = hamming(target_unsigned, from_signed64(sh_signed))
+        if d < best_dist:
+            best, best_dist = analysis, d
+            if d == 0:
+                break  # точный клон — лучше не найдём
+    if best is None:
+        return None
+    return best, best_dist
+
+
+def _copy_analysis(
+    session: Session,
+    lot: Lot,
+    *,
+    source: LotAnalysis,
+    tz_sha: str | None,
+    tz_doc_id: int | None,
+    prev: LotAnalysis | None,
+) -> None:
+    if prev is None:
+        prev = LotAnalysis(lot_id=lot.id, analyzer_version=ANALYZER_VERSION)
+        session.add(prev)
+    prev.dev_category = source.dev_category
+    prev.tech_stack = list(source.tech_stack or [])
+    prev.tz_summary = source.tz_summary
+    prev.solo_feasible = source.solo_feasible
+    prev.vendor_lock_risk = source.vendor_lock_risk
+    prev.analysis_confidence = source.analysis_confidence
+    prev.analyzed_at = datetime.now(UTC)
+    prev.analyzer_version = ANALYZER_VERSION
+    prev.tz_sha256 = tz_sha
+    prev.source_document_id = tz_doc_id
+    prev.reused_from_lot_id = source.lot_id
+    prev.error = None
+    session.flush()
 
 
 # === Чат по ТЗ ===

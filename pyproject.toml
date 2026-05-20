@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Goszakup.kz lot tracker — daily scrape, SQLite store, web UI"
 requires-python = ">=3.11"
 dependencies = [
-    "requests>=2.31",
+    "requests[socks]>=2.31",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "sqlalchemy>=2.0",

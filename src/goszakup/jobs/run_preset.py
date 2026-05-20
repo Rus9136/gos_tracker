@@ -240,16 +240,21 @@ def _save_one_document(
             Document.url == url,
         )
     )
+    if existing is not None and existing.local_path:
+        return False  # уже скачан — повторно не дёргаем
     if existing is not None:
-        return False
-    doc = Document(
-        announcement_id=announcement.id,
-        name=name,
-        attribute=attribute,
-        url=url,
-    )
-    session.add(doc)
-    session.flush()
+        # Запись была, но файл не скачался (download_error). Пробуем ещё раз —
+        # это закрывает долги после смены инфраструктуры (новый прокси/IP).
+        doc = existing
+    else:
+        doc = Document(
+            announcement_id=announcement.id,
+            name=name,
+            attribute=attribute,
+            url=url,
+        )
+        session.add(doc)
+        session.flush()
     res = download_document(
         announcement.id, url, session=http, suggested_name=suggested_name
     )
@@ -259,10 +264,11 @@ def _save_one_document(
         doc.size = res.size
         doc.content_type = res.content_type
         doc.downloaded_at = datetime.now(UTC)
+        doc.download_error = None
     else:
         doc.download_error = res.error
     session.flush()
-    return True
+    return res.ok
 
 
 def _save_contracts(

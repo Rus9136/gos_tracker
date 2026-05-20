@@ -297,7 +297,8 @@
         </div>
       </div>
       <div class="card-foot mono" style="font-size:11px">
-        {{ a.analyzer_version }} • проанализирован {{ a.analyzed_at|dt }}
+        {% if a.reused_from_lot_id %}переиспользован от лота <a href="/lot/{{ a.reused_from_lot_id }}">#{{ a.reused_from_lot_id }}</a> (simhash){% elif a.analyzer_version and a.analyzer_version.startswith('rules-') %}rule-based{% else %}{{ a.analyzer_version }}{% endif %}
+        • проанализирован {{ a.analyzed_at|dt }}
         {% if a.source_document_id %} • по документу #{{ a.source_document_id }}{% endif %}
       </div>
       {% else %}
