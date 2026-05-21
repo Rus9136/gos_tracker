@@ -211,15 +211,32 @@ def detail_actor(
     run_id: int,
     with_docs: bool = True,
     with_llm: bool = True,
+    only_it_lots: bool = True,
 ) -> None:
     """Fetch деталей одного объявления, save в БД, enqueue LLM для IT-лотов.
 
     Флаги `with_docs` / `with_llm` управляют тяжёлыми побочками — нужны
     для ad-hoc сканирования (`scan_actor`), где обычно хочется получить
     organizer/контакты, но не качать пачки PDF и не дёргать Cerebras.
-    Default-ы оставлены True — `listing_actor` (пресет-прогоны) не меняется.
+
+    `only_it_lots=True` (default для daily-прогонов): пропускаем announcement'ы,
+    у которых в БД нет ни одного лота с it_category. Это даёт ~10× ускорения
+    фазы 2 для общереспубликанских прогонов, где IT ≈ 9% от всех лотов.
+    `scan_actor`/`ingest_actor` передают False — там фильтрация не нужна.
     """
     r = _redis_client()
+
+    if only_it_lots:
+        with SessionLocal() as session:
+            has_it = session.execute(
+                select(Lot.id)
+                .where(Lot.announcement_id == anno_id, Lot.it_category.is_not(None))
+                .limit(1)
+            ).first() is not None
+        if not has_it:
+            _decrement_pending_and_maybe_close(r, run_id)
+            return
+
     http = make_http_session(r)
 
     it_lot_ids: list[int] = []
@@ -348,10 +365,9 @@ def ingest_actor(
 
     _set_pending(r, run_id, len(targets))
     for anno_id in targets:
-        # Используем "лёгкий" вариант detail_actor без LLM и без docs — для
-        # ingest он избыточен. Раздельный actor имеет смысл, но для v1
-        # хватит флага: detail_actor сам понимает, что делать.
-        detail_actor.send(anno_id, run_id)
+        # ingest по БИН — пользователь явно хочет все лоты этого заказчика,
+        # включая не-IT. only_it_lots=False обходит IT-skip-guard в detail_actor.
+        detail_actor.send(anno_id, run_id, only_it_lots=False)
 
 
 # === Ad-hoc сканирование (UI: /scan) — kato/amount/status/IT-категории ===
@@ -441,7 +457,10 @@ def scan_actor(
 
     _set_pending(r, run_id, len(targets))
     for anno_id in targets:
-        detail_actor.send(anno_id, run_id, with_docs, with_llm)
+        # scan по UI: пользователь сам выбрал IT-категории в форме — если
+        # хочет non-IT, он указал it_categories=[] и листинг уже это
+        # пропустил. На уровне detail не фильтруем — не сужаем ad-hoc-запрос.
+        detail_actor.send(anno_id, run_id, with_docs, with_llm, only_it_lots=False)
 
 
 def _walk_listing(
