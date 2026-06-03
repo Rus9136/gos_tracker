@@ -14,12 +14,12 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import unescape
 
 from bs4 import BeautifulSoup, Tag
 
-from ..config import ANNOUNCE_URL
+from ..config import ANNOUNCE_URL, SUBPRICEOFFER_URL
 from .http import ThrottledSession
 
 log = logging.getLogger(__name__)
@@ -43,11 +43,51 @@ def _parse_amount(s: str) -> float | None:
 
 def _parse_date(s: str) -> datetime | None:
     s = _clean(s)
-    for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+    # ISO (`2026-06-03 15:55:00`) — формат полей-инпутов на табе general;
+    # dd.mm.yyyy — формат старых табличных представлений.
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y",
+    ):
         try:
             return datetime.strptime(s, fmt)
         except ValueError:
             continue
+    return None
+
+
+# С 2024-03-01 весь Казахстан в едином поясе UTC+5 (Asia/Almaty). Время на
+# goszakup — местное, поэтому дедлайн приёма заявок локализуем как +05:00 и
+# приводим к UTC: иначе сравнение `application_end < now()` (UTC) промахнётся
+# на 5 часов и лот провисит «актуальным» лишние полдня.
+_ALMATY_TZ = timezone(timedelta(hours=5))
+
+
+def _parse_deadline(s: str) -> datetime | None:
+    d = _parse_date(s)
+    if d is None:
+        return None
+    return d.replace(tzinfo=_ALMATY_TZ).astimezone(timezone.utc)
+
+
+def _find_deadline(kv: dict[str, str]) -> datetime | None:
+    """Ищет в kv-таблице «Общих сведений» строку окончания приёма заявок.
+
+    Точное название поля у goszakup плавает по способу закупки («Дата и время
+    окончания приёма заявок», «Срок окончания приёма заявок», для аукциона —
+    «…приёма ценовых предложений»), поэтому матчим по подстроке, а не по
+    фиксированному ключу.
+    """
+    for key, value in kv.items():
+        low = key.lower().replace("ё", "е")
+        if "окончан" in low and ("заяв" in low or "ценов" in low):
+            d = _parse_deadline(value)
+            if d:
+                return d
     return None
 
 
@@ -105,6 +145,7 @@ class AnnouncementDetail:
     total_amount: float | None = None
     attributes: str = ""
     publish_date: datetime | None = None
+    application_end: datetime | None = None  # окончание приёма заявок, UTC
     contact_name: str = ""
     contact_role: str = ""
     contact_email: str = ""
@@ -136,7 +177,36 @@ def _kv_table_rows(table: Tag) -> dict[str, str]:
     return result
 
 
+def _form_pairs(soup: BeautifulSoup) -> dict[str, str]:
+    """Карточка-шапка объявления — это форма `<label>…</label> <input value=…>`,
+    а не таблица. Значения (даты публикации/начала/окончания приёма) лежат в
+    атрибуте `value` input'а, поэтому `get_text()` их не видит. Возвращает
+    dict label→value по каждому label, у которого в том же form-group есть input.
+    """
+    result: dict[str, str] = {}
+    for lab in soup.find_all("label"):
+        label = _clean(lab.get_text(" "))
+        if not label:
+            continue
+        grp = lab.parent
+        inp = grp.find("input") if grp else None
+        if inp is not None and inp.get("value") is not None:
+            result.setdefault(label.rstrip(":"), _clean(inp.get("value")))
+    return result
+
+
 def _parse_general(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
+    # Срок окончания/начала приёма и дата публикации — в форме-шапке (input value).
+    form = _form_pairs(soup)
+    if form:
+        detail.application_end = _find_deadline(form)
+        for date_key in ("Дата публикации объявления", "Дата публикации"):
+            if date_key in form:
+                d = _parse_date(form[date_key])
+                if d:
+                    detail.publish_date = d
+                    break
+
     tables = soup.select("table")
     # Первая kv-таблица — общие сведения. Вторая — представители.
     for t in tables[:4]:
@@ -155,12 +225,15 @@ def _parse_general(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
             detail.lots_count = int(lc) if lc.isdigit() else None
             detail.total_amount = _parse_amount(kv.get("Сумма закупки", ""))
             detail.attributes = kv.get("Признаки", "")
-            for date_key in ("Дата публикации", "Дата начала приема заявок"):
-                if date_key in kv:
-                    d = _parse_date(kv[date_key])
-                    if d:
-                        detail.publish_date = d
-                        break
+            if detail.publish_date is None:
+                for date_key in ("Дата публикации", "Дата начала приема заявок"):
+                    if date_key in kv:
+                        d = _parse_date(kv[date_key])
+                        if d:
+                            detail.publish_date = d
+                            break
+            # не затираем значение, уже взятое из формы-шапки
+            detail.application_end = detail.application_end or _find_deadline(kv)
         elif "ФИО представителя" in kv:
             detail.contact_name = kv.get("ФИО представителя", "")
             detail.contact_role = kv.get("Должность", "")
@@ -349,3 +422,26 @@ def fetch_announcement(
     _parse_contracts(BeautifulSoup(r.text, "lxml"), detail)
 
     return detail
+
+
+def fetch_lot_enstru_code(
+    trd_buy_id: int | str, lot_id: int, *, session: ThrottledSession | None = None
+) -> str | None:
+    """Цифровой «Код ТРУ» лота (напр. 192021.530.000001).
+
+    Ни в листинге, ни в табах объявления его нет — он живёт только на карточке
+    ценового предложения лота (`subpriceoffer`), строкой `<th>Код ТРУ</th><td>…`.
+    Это отдельный +1 запрос на лот, поэтому вызывать точечно (см. правило про IT).
+    `trd_buy_id` совпадает с `announcement_id`.
+    """
+    sess = session or ThrottledSession()
+    r = sess.get(f"{SUBPRICEOFFER_URL}/{trd_buy_id}/{lot_id}")
+    if r.status_code != 200:
+        return None
+    soup = BeautifulSoup(r.text, "lxml")
+    th = soup.find("th", string=re.compile(r"Код\s+ТРУ"))
+    if th is None:
+        return None
+    td = th.find_next("td")
+    code = _clean(td.get_text()) if td else ""
+    return code or None

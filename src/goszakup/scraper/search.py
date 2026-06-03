@@ -57,6 +57,11 @@ class SearchParams:
     # Вид предмета закупок (filter[trade_type]): g=Товар, s=Услуга, r=Работа.
     # Пустая строка — не ограничивать.
     trade_type: str = ""
+    # Код ЕНС ТРУ (filter[enstru] на форме). Серверная фильтрация выдачи:
+    # принимает полный код (192021.530.000001) и префикс (192021). Пусто —
+    # не ограничивать. Это «фильтр парсинга по ЕНС ТРУ» — сужает листинг до
+    # запроса деталей, без скачивания карточек.
+    enstru: str = ""
     per_page: int = PER_PAGE
 
     def to_query(self, page: int) -> dict:
@@ -77,6 +82,8 @@ class SearchParams:
             q["filter[customer]"] = self.customer_bin
         if self.trade_type:
             q["filter[trade_type]"] = self.trade_type
+        if self.enstru:
+            q["filter[enstru]"] = self.enstru
         return q
 
 

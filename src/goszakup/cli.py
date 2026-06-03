@@ -145,6 +145,31 @@ def daily(
 
 
 @app.command()
+def expire(
+    sync: bool = typer.Option(
+        False, "--sync", help="Прогнать в этом процессе, без очереди."
+    ),
+) -> None:
+    """Снять с «актуальных» лоты с истёкшим сроком приёма заявок.
+
+    По умолчанию отправляет `expire_actor` в очередь (так гоняет ежечасный
+    systemd-таймер). `--sync` — выполнить сразу в этом процессе (для ручного
+    прогона / CI без Redis). К goszakup не ходит — только UPDATE по БД.
+    """
+    _setup_logging(verbose=False)
+    if sync:
+        from .jobs.expire import expire_actual_lots
+        init_db()
+        with SessionLocal() as s:
+            n = expire_actual_lots(s)
+        typer.echo(f"снято с актуальных: {n}")
+        return
+    from .queue.actors import expire_actor
+    msg = expire_actor.send()
+    typer.echo(f"enqueued expire_actor (message_id={msg.message_id})")
+
+
+@app.command()
 def reanalyze(
     lot_id: int | None = typer.Option(None, "--lot-id", help="один лот по id"),
     limit: int = typer.Option(50, "--limit", help="максимум лотов за запуск"),

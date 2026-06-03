@@ -36,6 +36,7 @@ from ..db.models import (
     ScrapeRun,
 )
 from ..jobs.ingest import (
+    close_stale_runs,
     create_ingest_run,
     find_active_run,
 )
@@ -827,6 +828,7 @@ def runs_list(
     db: Session = Depends(get_db),
     _=Depends(_auth_dep()),
 ):
+    close_stale_runs(db)  # чтобы в списке зависшие прогоны были с финишем
     rows = db.execute(
         select(ScrapeRun, Preset.name)
         .join(Preset, Preset.id == ScrapeRun.preset_id, isouter=True)

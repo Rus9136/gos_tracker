@@ -47,6 +47,9 @@ HTTP_HEADERS = {"User-Agent": USER_AGENT, "Accept-Language": "ru,en;q=0.8"}
 BASE_URL = "https://goszakup.gov.kz"
 SEARCH_URL = f"{BASE_URL}/ru/search/lots"
 ANNOUNCE_URL = f"{BASE_URL}/ru/announce/index"
+# Карточка ценового предложения лота: единственная страница с цифровым «Код ТРУ».
+# Путь /{trd_buy_id}/{lot_id}; trd_buy_id == announcement_id (совпадают на goszakup).
+SUBPRICEOFFER_URL = f"{BASE_URL}/ru/subpriceoffer/index"
 
 
 def announcement_url(anno_id: int | str) -> str:

@@ -103,6 +103,11 @@ class Announcement(Base):
     total_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
     attributes: Mapped[str | None] = mapped_column(Text)  # «Признаки»
     publish_date: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    # Дата и время окончания приёма заявок (UTC). По нему крон снимает лоты
+    # с «актуальных» (is_actual=False), когда срок прошёл, даже если goszakup
+    # ещё не сменил статус. См. jobs/expire.py. index — для дешёвого
+    # bulk-UPDATE по `application_end < now()`.
+    application_end: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
     contact_name: Mapped[str | None] = mapped_column(String(300))
     contact_role: Mapped[str | None] = mapped_column(String(200))
     contact_email: Mapped[str | None] = mapped_column(String(200))
@@ -131,6 +136,10 @@ class Lot(Base):
         ForeignKey("organizations.id"), index=True
     )
     enstru: Mapped[str | None] = mapped_column(String(500), index=True)
+    # Цифровой код ЕНС ТРУ (напр. 192021.530.000001). В отличие от `enstru`
+    # (наименование из листинга), есть только на карточке лота — тянется в
+    # фазе 2 для IT-лотов. Индекс — под будущую фильтрацию выборок по коду.
+    enstru_code: Mapped[str | None] = mapped_column(String(40), index=True)
     name: Mapped[str | None] = mapped_column(Text)
     extra: Mapped[str | None] = mapped_column(Text)  # доп. характеристика
     price_per_unit: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
@@ -256,6 +265,13 @@ class ScrapeRun(Base):
     preset_id: Mapped[int | None] = mapped_column(ForeignKey("presets.id"), index=True)
     started_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    # Heartbeat: момент последнего прогресса по прогону. Бьётся на каждом шаге
+    # пайплайна (listing-проход, detail, инкременты счётчиков). По нему reaper
+    # (jobs.ingest.close_stale_runs) закрывает зависшие прогоны — finished_at
+    # завязан на эфемерный Redis-счётчик и теряется при рестарте redis/воркера.
+    last_progress_at: Mapped[datetime | None] = mapped_column(
+        TS_TYPE, default=_now, index=True
+    )
     listing_count: Mapped[int] = mapped_column(Integer, default=0)
     details_fetched: Mapped[int] = mapped_column(Integer, default=0)
     new_lots: Mapped[int] = mapped_column(Integer, default=0)

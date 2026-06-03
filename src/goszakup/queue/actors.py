@@ -36,8 +36,11 @@ from ..classify.llm import analyze_and_save
 from ..config import MIN_AMOUNT
 from ..db.engine import SessionLocal
 from ..db.models import Lot, Preset, ScrapeRun
+from ..jobs.expire import expire_actual_lots
+from ..jobs.ingest import close_stale_runs
 from ..jobs.run_preset import (
     _apply_details,
+    _apply_enstru_code,
     _save_announcement,
     _save_contracts,
     _save_documents,
@@ -81,10 +84,23 @@ def _decrement_pending_and_maybe_close(r, run_id: int) -> None:
     r.delete(key)
 
 
+def _touch_run(session, run_id: int) -> None:
+    """Heartbeat: помечает, что по run'у только что был прогресс. На этом
+    основан reaper зависших прогонов (jobs.ingest.close_stale_runs) — он
+    не зависит от непёрсистентного Redis-счётчика."""
+    session.execute(
+        update(ScrapeRun)
+        .where(ScrapeRun.id == run_id)
+        .values(last_progress_at=datetime.now(UTC))
+    )
+    session.commit()
+
+
 def _increment_run(session, run_id: int, **deltas) -> None:
     if not deltas:
         return
     cols = {k: ScrapeRun.__table__.c[k] + v for k, v in deltas.items()}
+    cols["last_progress_at"] = datetime.now(UTC)  # инкремент счётчика = прогресс
     session.execute(update(ScrapeRun).where(ScrapeRun.id == run_id).values(**cols))
     session.commit()
 
@@ -92,6 +108,7 @@ def _increment_run(session, run_id: int, **deltas) -> None:
 def _update_run(session, run_id: int, **fields) -> None:
     if not fields:
         return
+    fields["last_progress_at"] = datetime.now(UTC)
     session.execute(update(ScrapeRun).where(ScrapeRun.id == run_id).values(**fields))
     session.commit()
 
@@ -121,6 +138,28 @@ def daily_actor() -> None:
     log.info("daily_actor: enqueue listing_actor x %d", len(ids))
     for pid in ids:
         listing_actor.send(pid)
+    # Перед обходом гасим уже истёкшие — дёшево (локальный UPDATE по БД),
+    # отдельно от ежечасного expire_actor, чтобы daily всегда оставлял
+    # консистентную выдачу даже если таймер expire почему-то не сработал.
+    expire_actor.send()
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
+def expire_actor() -> None:
+    """Снять с «актуальных» лоты, у которых истёк срок приёма заявок.
+
+    Гоняется ежечасно systemd-таймером (goszakup-expire.timer). К goszakup не
+    ходит — только UPDATE по БД, поэтому быстрый и без rate-limit."""
+    with SessionLocal() as session:
+        n = expire_actual_lots(session)
+    log.info("expire_actor: снято %d лотов", n)
+    # Заодно фоном гасим зависшие прогоны (finished_at завязан на эфемерный
+    # Redis-счётчик — рестарт redis/воркера теряет его). Делаем в той же
+    # ежечасной задаче, чтобы UI не показывал «идёт прогон #N» бесконечно.
+    with SessionLocal() as session:
+        closed = close_stale_runs(session)
+    if closed:
+        log.info("expire_actor: закрыто %d зависших прогонов", closed)
 
 
 @dramatiq.actor(
@@ -159,16 +198,19 @@ def listing_actor(preset_id: int) -> None:
         try:
             for hit in iter_listing(params, session=http):
                 listing_count += 1
-                if it_categories:
-                    cat = classify(hit.enstru, hit.lot_name)
-                    if cat not in it_categories:
-                        continue
+                # Проект только про IT: не-IT лоты не храним и не парсим вообще.
+                cat = classify(hit.enstru, hit.lot_name)
+                if cat is None:
+                    continue
+                if it_categories and cat not in it_categories:
+                    continue
                 _upsert_lot_from_listing(
                     session, hit, kato=params.kato,
                     on_new=new_hits, on_status_change=status_changes,
                 )
                 if listing_count % 100 == 0:
                     session.commit()
+                    _touch_run(session, run_id)  # heartbeat на долгом проходе
             session.commit()
         except Exception:
             log.exception("listing_actor failed for preset %d", preset_id)
@@ -226,6 +268,11 @@ def detail_actor(
     """
     r = _redis_client()
 
+    # Heartbeat в начале каждой попытки: даже если details уезжают в ретрай
+    # с backoff'ом (до 10 мин), reaper не сочтёт run зависшим — он живой.
+    with SessionLocal() as session:
+        _touch_run(session, run_id)
+
     if only_it_lots:
         with SessionLocal() as session:
             has_it = session.execute(
@@ -249,6 +296,7 @@ def detail_actor(
             ).all()
             for lot in lots:
                 _apply_details(session, lot, detail)
+                _apply_enstru_code(session, lot, http)
             lots_by_number = {lt.number: lt for lt in lots if lt.number}
             _save_contracts(session, lots_by_number, detail)
             new_docs = 0
@@ -428,6 +476,7 @@ def scan_actor(
                 )
                 if listing_count % 100 == 0:
                     session.commit()
+                    _touch_run(session, run_id)  # heartbeat на долгом проходе
             session.commit()
         except Exception:
             log.exception("scan_actor listing failed for run %d", run_id)
@@ -480,6 +529,7 @@ def _walk_listing(
             )
             if listing_count % 100 == 0:
                 session.commit()
+                _touch_run(session, run_id)  # heartbeat на долгом проходе
         session.commit()
     except Exception:
         session.rollback()

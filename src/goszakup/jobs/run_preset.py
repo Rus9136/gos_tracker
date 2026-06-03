@@ -22,7 +22,11 @@ from ..db.models import (
     Preset,
     ScrapeRun,
 )
-from ..scraper.announce import AnnouncementDetail, fetch_announcement
+from ..scraper.announce import (
+    AnnouncementDetail,
+    fetch_announcement,
+    fetch_lot_enstru_code,
+)
 from ..scraper.documents import download_document
 from ..scraper.http import ThrottledSession
 from ..scraper.modal_files import fetch_modal_files, is_tz_like_name
@@ -78,6 +82,8 @@ def _save_announcement(
     anno.attributes = detail.attributes or anno.attributes
     if detail.publish_date:
         anno.publish_date = detail.publish_date
+    if detail.application_end:
+        anno.application_end = detail.application_end
     anno.contact_name = detail.contact_name or anno.contact_name
     anno.contact_role = detail.contact_role or anno.contact_role
     anno.contact_email = detail.contact_email or anno.contact_email
@@ -176,6 +182,22 @@ def _apply_details(session: Session, lot: Lot, detail: AnnouncementDetail) -> No
     lot.amount_y2 = matched.amount_y2 or lot.amount_y2
     lot.amount_y3 = matched.amount_y3 or lot.amount_y3
     session.flush()
+
+
+def _apply_enstru_code(session: Session, lot: Lot, http: ThrottledSession) -> None:
+    """Цифровой «Код ТРУ» доступен только на карточке лота — +1 запрос/лот.
+    Тянем поэтому лишь для IT-лотов (как и LLM-шаг) и только если ещё нет.
+    Сбой не должен ронять прогон объявления — деградируем тихо (правило #7)."""
+    if not lot.it_category or lot.enstru_code:
+        return
+    try:
+        code = fetch_lot_enstru_code(lot.announcement_id, lot.id, session=http)
+    except Exception as e:
+        log.warning("enstru_code fetch failed for lot=%s: %s", lot.id, e)
+        return
+    if code:
+        lot.enstru_code = code
+        session.flush()
 
 
 def _save_documents(
@@ -368,10 +390,12 @@ def execute_search(
     try:
         for hit in iter_listing(params, session=http, max_pages=max_pages):
             stats.listing_count += 1
-            if it_categories:
-                cat = classify(hit.enstru, hit.lot_name)
-                if cat not in it_categories:
-                    continue
+            # Проект только про IT: не-IT лоты не храним и не парсим вообще.
+            cat = classify(hit.enstru, hit.lot_name)
+            if cat is None:
+                continue
+            if it_categories and cat not in it_categories:
+                continue
             _upsert_lot_from_listing(
                 session,
                 hit,
@@ -410,6 +434,7 @@ def execute_search(
             lots_by_number = {lt.number: lt for lt in lots if lt.number}
             for lot in lots:
                 _apply_details(session, lot, detail)
+                _apply_enstru_code(session, lot, http)
             _save_contracts(session, lots_by_number, detail)
 
             if download_docs:

@@ -60,6 +60,10 @@
   через флаги `with_docs`, `with_llm` (передаются дальше в `detail_actor`).
   Очереди именованы:
   `goszakup_daily`, `goszakup_listing`, `goszakup_detail`, `goszakup_llm`.
+  **`expire_actor`** — ежечасный (systemd `goszakup-expire.timer`) сброс
+  `is_actual=False` у лотов с истёкшим сроком приёма заявок
+  (`Announcement.application_end < now()`). К goszakup НЕ ходит — только
+  локальный UPDATE по БД (см. `jobs/expire.py`). Очередь `goszakup_daily`.
   Cross-process rate-limit на goszakup — `RedisThrottledSession` (SET NX EX
   с TTL=5s, global mutex). `ScrapeRun.finished_at` закрывается, когда
   Redis-counter `goszakup:run:<id>:pending` достигает нуля.
@@ -95,6 +99,11 @@
     `data/.daily.lock` больше не нужен, но в .service всё ещё есть
     `ExecStartPre`/`ExecStopPost` — это лишний, но безвредный артефакт.
     Чтобы вернуться на старый синхронный режим — `cli daily --sync`.
+  - **`goszakup-expire.timer` + `goszakup-expire.service`** —
+    `OnCalendar=*-*-* *:05:00` (ежечасно), oneshot. Делает `cli expire` →
+    enqueue `expire_actor` → worker гасит `is_actual` у лотов с истёкшим
+    сроком приёма заявок. Шаблоны юнитов — в `scripts/systemd/`. К goszakup
+    не ходит, lock/rate-limit не нужны. См. правило #12.
   - **`goszakup-worker.service`** (Phase 3, задеплоен 2026-05-20) —
     `dramatiq goszakup.queue.actors -p 2 -t 4`. Подключается к выделенному
     Redis-контейнеру `goszakup-redis` на `127.0.0.1:6380`. `ProtectHome=true`
@@ -241,12 +250,45 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     реальными полями. Без этой страховки prod-daily валится на любом новом
     лоте при пустой `announcements`.
 
-12. **`_call_llm` ретраит Cerebras 429 «queue_exceeded»** с бэкоффом 5/15/30с
+12. **«Актуальность» лота = `Lot.is_actual` (флаг), единый источник правды.**
+    Флаг выставляется из `status_code` (`ACTUAL_STATUSES`) в
+    `_upsert_lot_from_listing` И дополнительно гасится по факту истечения срока
+    приёма заявок: goszakup не всегда меняет статус сразу после дедлайна.
+    Дедлайн (`Announcement.application_end`, хранится в UTC) парсится в
+    `_parse_general` (`_find_deadline` — матч по подстроке «окончан…заяв/ценов»,
+    т.к. точное название поля плавает по способу закупки;
+    `_parse_deadline` локализует время как Алматы UTC+5 → UTC). Снятие —
+    `jobs/expire.expire_actual_lots` (bulk UPDATE), запускается ежечасно
+    `expire_actor`/`goszakup-expire.timer` и в начале `daily_actor`. Лот из БД
+    НЕ удаляется, только флаг. НЕ добавлять read-time фильтр по дедлайну в
+    `web/app._lots_query` — иначе истёкший лот с флагом=true не попадёт ни в
+    `/actual`, ни в `/past` (рассинхрон); полагаемся на флаг, лаг ≤1ч.
+    Поле новое: у лотов до этой фичи `application_end` пустой и крон их не
+    тронет — разовый бэкофилл `scripts/backfill_deadlines.py`.
+
+13. **`_call_llm` ретраит Cerebras 429 «queue_exceeded»** с бэкоффом 5/15/30с
     (3 ретрая, см. `_RETRY_DELAYS`). Это не «новая фича», а лечение
     burst-throttling: free-tier Cerebras душит при >30 req/мин. В массовых
     скриптах (`scripts/reanalyze_actual_it.py`) дополнительно ставится
     1.5с pacing между лотами — он держит темп под лимитом, чтобы ретрай
     вообще редко срабатывал.
+
+14. **Закрытие `ScrapeRun.finished_at` подстраховано БД-heartbeat'ом.**
+    Штатно run закрывает Redis-pending-счётчик (`goszakup:run:<id>:pending`,
+    DECR в `detail_actor`). Но `goszakup-redis` непёрсистентный (`--save ""
+    --appendonly no`) — рестарт контейнера/воркера (например, при деплое)
+    теряет счётчик и очередь detail-тасок, декрементить больше некому, и
+    `finished_at` навсегда остаётся NULL. Тогда UI («идёт прогон #N» на
+    `/scan`, `/ingest`) висит вечно. Поэтому каждый шаг пайплайна бьёт
+    `ScrapeRun.last_progress_at` (`queue/actors._touch_run` + инкременты
+    счётчиков; на долгом listing-проходе — каждые 100 строк), а
+    `jobs/ingest.close_stale_runs` закрывает прогоны без прогресса дольше
+    `_STALE_RUN_AFTER` (**15 мин бездействия**, НЕ возраста — «весь РК»-скан
+    идёт часами и жив). Reaper зовётся лениво из `find_active_run` (UI),
+    из `/runs` и фоном из `expire_actor` (ежечасно). Живой прогон бьёт
+    heartbeat каждые секунды — 15 мин тишины надёжно означают «мёртв».
+    НЕ возвращать staleness обратно «по `started_at`» — иначе либо
+    зомби-прогон блокирует UI до 2ч, либо живой долгий скан реапнется.
 
 ## Где что лежит
 
@@ -298,6 +340,10 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   на `execute_search`/`run_preset` (и CLI `run-once --listing-only`)
   останавливается после фазы 1 — нужен для ad-hoc стабования по большим
   выборкам, когда details ходить дорого/нежелательно.
+- `jobs/expire.py` — `expire_actual_lots(session)`: bulk-UPDATE `is_actual=False`
+  для актуальных лотов с истёкшим `Announcement.application_end`. Источник
+  правила #12. Бэкофилл для старых лотов — `scripts/backfill_deadlines.py`
+  (тянет только таб `general`, по одному запросу на объявление).
 - `jobs/scan.py` — `create_scan_run(...)` для UI `/scan`. Собирает
   человекочитаемый `note` (регион, диапазон сумм, статусы, IT-категории,
   режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.

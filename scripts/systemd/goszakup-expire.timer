@@ -1,0 +1,12 @@
+[Unit]
+Description=Goszakup Tracker — ежечасный таймер expire (снятие просроченных лотов)
+
+[Timer]
+# Каждый час в :05 (со сдвигом 0–120с), чтобы не совпадать ровно с daily в 06:00.
+OnCalendar=*-*-* *:05:00
+Persistent=true
+RandomizedDelaySec=120
+Unit=goszakup-expire.service
+
+[Install]
+WantedBy=timers.target

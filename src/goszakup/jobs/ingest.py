@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db.engine import SessionLocal, init_db
@@ -26,9 +26,13 @@ from .run_preset import RunStats, execute_search
 
 log = logging.getLogger(__name__)
 
-# Если незавершённый прогон висит дольше этого срока — считаем зависшим и не
-# блокируем новые запуски. Без этого случайный краш uvicorn заблокирует UI.
-_STALE_RUN_AFTER = timedelta(hours=2)
+# Если по незавершённому прогону НЕТ прогресса (heartbeat last_progress_at)
+# дольше этого срока — считаем зависшим. Живой прогон бьёт heartbeat каждые
+# несколько секунд (см. queue/actors._touch_run), так что 15 минут тишины
+# надёжно означают «воркер/redis умер, finished_at уже никто не проставит».
+# Порог именно по бездействию, а не по возрасту старта: «весь РК»-скан идёт
+# часами и при этом жив.
+_STALE_RUN_AFTER = timedelta(minutes=15)
 
 
 def _format_trade_type(trade_type: str) -> str:
@@ -62,13 +66,44 @@ def _build_note(
     return " · ".join(parts)
 
 
+def _progress_ts():
+    # last_progress_at у прогонов до этой фичи пустой — фоллбэк на started_at.
+    return func.coalesce(ScrapeRun.last_progress_at, ScrapeRun.started_at)
+
+
+def close_stale_runs(session: Session) -> int:
+    """Проставляет finished_at прогонам, по которым давно нет прогресса.
+
+    Штатно прогон закрывает Redis-pending-счётчик (queue/actors), но
+    goszakup-redis непёрсистентный (--save "" --appendonly no): рестарт
+    контейнера теряет и счётчик, и очередь detail-тасок — декрементить
+    больше некому, finished_at навсегда остаётся NULL, а UI бесконечно
+    показывает «идёт прогон #N». Подстраховываемся по БД-heartbeat'у:
+    finished_at = момент последней активности (last_progress_at)."""
+    threshold = datetime.now(UTC) - _STALE_RUN_AFTER
+    stale = session.scalars(
+        select(ScrapeRun)
+        .where(ScrapeRun.finished_at.is_(None))
+        .where(_progress_ts() < threshold)
+    ).all()
+    for run in stale:
+        run.finished_at = run.last_progress_at or run.started_at
+    if stale:
+        session.commit()
+    return len(stale)
+
+
 def find_active_run(session: Session) -> ScrapeRun | None:
-    """Возвращает незавершённый прогон, если он есть и не зависший."""
+    """Возвращает реально идущий прогон (с недавним прогрессом), если есть.
+
+    Сначала закрывает зависшие — чтобы и здесь, и на /runs, и на /scan
+    показывались только живые прогоны."""
+    close_stale_runs(session)
     threshold = datetime.now(UTC) - _STALE_RUN_AFTER
     return session.scalar(
         select(ScrapeRun)
         .where(ScrapeRun.finished_at.is_(None))
-        .where(ScrapeRun.started_at >= threshold)
+        .where(_progress_ts() >= threshold)
         .order_by(ScrapeRun.started_at.desc())
     )
 

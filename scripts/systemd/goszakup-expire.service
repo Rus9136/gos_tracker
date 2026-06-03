@@ -1,0 +1,14 @@
+[Unit]
+Description=Goszakup Tracker — снять просроченные лоты с «актуальных»
+
+[Service]
+Type=oneshot
+User=rus
+Group=rus
+WorkingDirectory=/home/rus/projects/gos_tracker
+# enqueue expire_actor в Dramatiq (миллисекунды), реальный UPDATE делает worker.
+# К goszakup не ходит, поэтому rate-limit и lock-файлы не нужны.
+ExecStart=/home/rus/projects/gos_tracker/.venv/bin/python -m goszakup.cli expire
+
+NoNewPrivileges=true
+TimeoutStartSec=10m
