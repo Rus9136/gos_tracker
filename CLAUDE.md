@@ -116,6 +116,11 @@
     `dramatiq goszakup.queue.actors -p 2 -t 4`. Подключается к выделенному
     Redis-контейнеру `goszakup-redis` на `127.0.0.1:6380`. `ProtectHome=true`
     НЕ ставить — venv в `/home/rus/...` иначе exec даст 203.
+    ВАЖНО: unit перечисляет очереди ЯВНО через `--queues` — при добавлении
+    нового actor'а с новой очередью её надо дописать и в unit (live +
+    шаблон `scripts/systemd/`), иначе задачи молча копятся в Redis.
+    Текущий список: daily, listing, detail, llm, matching (все с префиксом
+    `goszakup_`).
   - **`goszakup-redis` Docker-контейнер** (отдельный от хостового
     `shared-redis` на 6379, мы к нему не подключаемся — у него auth и его
     используют другие проекты). Запущен через `docker run -d --name

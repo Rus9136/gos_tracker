@@ -17,7 +17,7 @@ WorkingDirectory=/home/rus/projects/gos_tracker
 ExecStart=/home/rus/projects/gos_tracker/.venv/bin/dramatiq \
     goszakup.queue.actors \
     --processes 2 --threads 4 \
-    --queues goszakup_daily goszakup_listing goszakup_detail goszakup_llm
+    --queues goszakup_daily goszakup_listing goszakup_detail goszakup_llm goszakup_matching
 
 # Dramatiq корректно реагирует на SIGTERM — сначала завершает текущие
 # сообщения, потом завершается. 60с обычно хватает.
