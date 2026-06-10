@@ -1,0 +1,63 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Подходящие лоты — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Подходящие</span></div>
+    <h1 class="page-title">Подходящие лоты <span class="dim">({{ rows|length }})</span></h1>
+    <div class="page-sub">Лоты, отобранные LLM под ваши запросы. Сортировка по релевантности.</div>
+  </div>
+</div>
+
+{% if queries %}
+<div class="pills" style="margin-bottom:14px">
+  <a href="/matched" class="pill {{ 'active' if active_query_id is none else '' }}">Все запросы</a>
+  {% for q in queries %}
+  <a href="/matched?query_id={{ q.id }}"
+     class="pill {{ 'active' if active_query_id == q.id else '' }}">{{ q.name }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:64px">Балл</th>
+        <th>Лот</th>
+        <th style="width:200px">Заказчик</th>
+        <th class="num" style="width:130px">Сумма ₸</th>
+        <th>Почему подходит</th>
+        <th style="width:150px">Запрос</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m, lot, q in rows %}
+      <tr>
+        <td>
+          <span class="badge {{ 'ok' if m.score >= 75 else 'muted' }}">{{ m.score }}</span>
+        </td>
+        <td>
+          <a href="/lot/{{ lot.id }}" class="strong">{{ lot.name or '—' }}</a>
+          <div class="dim mono" style="font-size:12px">{{ lot.enstru or '' }}</div>
+        </td>
+        <td class="dim" style="font-size:13px">{{ lot.customer.name if lot.customer else '—' }}</td>
+        <td class="num mono">{{ lot.plan_amount|n }}</td>
+        <td class="dim" style="font-size:13px;max-width:360px">{{ m.reason or '—' }}</td>
+        <td class="dim" style="font-size:12px">{{ q.name }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="dim" style="text-align:center;padding:24px">
+        Подходящих лотов пока нет. Создайте запрос на вкладке
+        <a href="/queries">«Мои запросы»</a> — матчинг идёт в фоне.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% endblock %}

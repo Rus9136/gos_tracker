@@ -445,12 +445,25 @@ def execute_search(
                 # LLM-классификация только для лотов, прошедших IT-фильтр.
                 # Никаких goszakup-запросов отсюда — используем уже скачанные
                 # документы. Любая ошибка LLM не должна валить прогон.
+                analyzed: list[Lot] = []
                 for lot in lots:
                     if not lot.it_category:
                         continue
                     if analyze_and_save(session, lot):
                         stats.llm_analyzed += 1
+                        analyzed.append(lot)
                 session.commit()
+                # Fan-out матчинга — после commit, чтобы воркер увидел свежий
+                # анализ. Sync-режим может жить без Redis — прогон не валим.
+                for lot in analyzed:
+                    try:
+                        from ..queue.matching import enqueue_matches_for_lot
+
+                        enqueue_matches_for_lot(session, lot)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning(
+                            "matching fan-out для лота %s не поставлен: %s", lot.id, e
+                        )
         except Exception as e:
             stats.errors += 1
             log.exception("anno %s details failed: %s", anno_id, e)

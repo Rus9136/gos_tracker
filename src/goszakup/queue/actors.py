@@ -49,6 +49,10 @@ from ..jobs.run_preset import (
 from ..scraper.announce import fetch_announcement
 from ..scraper.search import SearchParams, iter_listing
 from .broker import REDIS_URL, broker  # noqa: F401 — импорт broker до actor'ов обязателен
+
+# Импорт регистрирует match_actor в брокере (воркер грузит этот модуль) и
+# даёт fan-out хелпер для analyze_actor.
+from .matching import enqueue_matches_for_lot  # noqa: E402
 from .rate_limit import make_http_session
 
 log = logging.getLogger(__name__)
@@ -348,6 +352,10 @@ def analyze_actor(lot_id: int, run_id: int) -> None:
         if ok:
             session.commit()
             _increment_run(session, run_id, llm_analyzed=1)
+            # Fan-out: свежеразобранный лот матчим против активных запросов
+            # пользователей (pre-filter по scope внутри). Лоты без нового
+            # анализа сюда не идут — их подберёт backfill при создании запроса.
+            enqueue_matches_for_lot(session, lot)
 
 
 # === Ad-hoc ingest по БИН — аналогичный 3-стейдж pipeline ===

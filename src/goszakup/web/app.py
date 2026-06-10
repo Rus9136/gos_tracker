@@ -38,6 +38,8 @@ from ..db.models import (
     Preset,
     ScrapeRun,
     User,
+    UserLotMatch,
+    UserQuery,
 )
 from ..jobs.ingest import (
     close_stale_runs,
@@ -54,6 +56,7 @@ from ..jobs.scan import (
     mode_flags,
 )
 from ..observability import setup_sentry
+from ..scope import lot_in_scope, scope_conditions
 from ..scraper.announce import fetch_announcement
 from ..scraper.http import ThrottledSession
 from ..scraper.katos import BY_CODE, REGIONS, region_name
@@ -103,6 +106,10 @@ def _nav_active(request: Request) -> str:
         return "actual"
     if path.startswith("/organization"):
         return "customers"
+    if path.startswith("/matched"):
+        return "matched"
+    if path.startswith("/queries"):
+        return "queries"
     if path.startswith("/presets"):
         return "presets"
     if path.startswith("/runs"):
@@ -155,34 +162,10 @@ DEV_CATEGORIES = list(DEV_CATEGORY_LABELS.keys())
 VENDOR_LOCK_RISKS = list(VENDOR_LOCK_LABELS.keys())
 PAGE_SIZE = 50
 
-def _scope_conditions(user: User | None) -> list:
-    """Read-time scope пользователя: ограничивает выборку лотов его регионами,
-    IT-категориями и мин. суммой. Админ (и dev-аноним) видит всё — пустой
-    список условий. Пустой regions/it_categories = «без ограничения»."""
-    if user is None or user.is_admin:
-        return []
-    conds = []
-    if user.regions:
-        conds.append(Lot.kato.in_(user.regions))
-    if user.it_categories:
-        conds.append(Lot.it_category.in_(user.it_categories))
-    if user.min_amount:
-        conds.append(Lot.plan_amount >= user.min_amount)
-    return conds
-
-
-def _lot_in_scope(lot: Lot, user: User | None) -> bool:
-    """Тот же scope, что и `_scope_conditions`, но в Python — для проверки
-    доступа к конкретному лоту (drill-down по прямой ссылке)."""
-    if user is None or user.is_admin:
-        return True
-    if user.regions and lot.kato not in user.regions:
-        return False
-    if user.it_categories and lot.it_category not in user.it_categories:
-        return False
-    if user.min_amount and (lot.plan_amount is None or lot.plan_amount < user.min_amount):
-        return False
-    return True
+# Scope-логика вынесена в goszakup.scope (её переиспользует matcher-fan-out).
+# Локальные алиасы сохранены, чтобы не трогать многочисленные call-sites.
+_scope_conditions = scope_conditions
+_lot_in_scope = lot_in_scope
 
 
 # Кеш счётчиков сайдбара — три count() на каждый запрос дороговато впустую,
@@ -766,6 +749,18 @@ def lot_analyze(
     ok = analyze_and_save(db, lot, force=True)
     if ok:
         db.commit()
+        # Анализ изменился → матчи против старого tz_summary устарели.
+        # Идемпотентность матчера сама увидит свежий analyzed_at и пересчитает.
+        try:
+            from ..queue.matching import enqueue_matches_for_lot
+
+            enqueue_matches_for_lot(db, lot)
+        except Exception as e:  # noqa: BLE001 — брокер недоступен ≠ ошибка анализа
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "fan-out матчинга для лота %s не поставлен: %s", lot_id, e
+            )
     return RedirectResponse(
         f"/lot/{lot_id}?analyzed={'ok' if ok else 'fail'}",
         status_code=303,
@@ -918,6 +913,167 @@ def preset_toggle(
     p.active = not p.active
     db.commit()
     return RedirectResponse("/presets", status_code=303)
+
+
+# === Семантические запросы пользователя (UserQuery) и матчи ===
+
+
+def _trigger_backfill(query_id: int) -> None:
+    """Запустить backfill по запросу. Не валим UI, если брокер/Redis недоступен —
+    forward-матчинг новых лотов всё равно сработает, а backfill можно вызвать
+    позже командой `python -m goszakup match-backfill`."""
+    try:
+        from ..jobs.match import backfill_query
+
+        backfill_query(query_id)
+    except Exception as e:  # noqa: BLE001 — UI важнее, чем мгновенный backfill
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "backfill для query %s не запущен (брокер недоступен?): %s", query_id, e
+        )
+
+
+@app.get("/queries", response_class=HTMLResponse)
+def queries_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    queries = db.scalars(
+        select(UserQuery)
+        .where(UserQuery.user_id == user.id)
+        .order_by(UserQuery.id)
+    ).all()
+    # Счётчик матчей по каждому запросу — для наглядности.
+    counts = {
+        q.id: db.scalar(
+            select(func.count(UserLotMatch.id)).where(
+                UserLotMatch.user_query_id == q.id,
+                UserLotMatch.matched.is_(True),
+            )
+        ) or 0
+        for q in queries
+    }
+    return templates.TemplateResponse(
+        request,
+        "queries.html",
+        {**_base_ctx(request, db, user), "queries": queries, "match_counts": counts},
+    )
+
+
+@app.post("/queries")
+def query_create(
+    name: str = Form(...),
+    text: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    name = name.strip() or "Без названия"
+    text = text.strip()
+    if not text:
+        return RedirectResponse("/queries", status_code=303)
+    q = UserQuery(user_id=user.id, name=name, text=text)
+    db.add(q)
+    db.commit()
+    _trigger_backfill(q.id)
+    return RedirectResponse("/queries", status_code=303)
+
+
+def _owned_query(db: Session, query_id: int, user: User) -> UserQuery:
+    q = db.get(UserQuery, query_id)
+    if q is None or q.user_id != user.id:
+        raise HTTPException(404)
+    return q
+
+
+@app.post("/queries/{query_id}/edit")
+def query_edit(
+    query_id: int,
+    name: str = Form(...),
+    text: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    q = _owned_query(db, query_id, user)
+    new_text = text.strip()
+    q.name = name.strip() or q.name
+    # Правка текста инвалидирует кеш матчей — поднимаем version и пере-backfill'им.
+    if new_text and new_text != q.text:
+        q.text = new_text
+        q.version += 1
+        db.commit()
+        _trigger_backfill(q.id)
+    else:
+        db.commit()
+    return RedirectResponse("/queries", status_code=303)
+
+
+@app.post("/queries/{query_id}/toggle")
+def query_toggle(
+    query_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    q = _owned_query(db, query_id, user)
+    q.active = not q.active
+    db.commit()
+    return RedirectResponse("/queries", status_code=303)
+
+
+@app.post("/queries/{query_id}/delete")
+def query_delete(
+    query_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    q = _owned_query(db, query_id, user)
+    db.delete(q)  # cascade удалит UserLotMatch
+    db.commit()
+    return RedirectResponse("/queries", status_code=303)
+
+
+@app.get("/matched", response_class=HTMLResponse)
+def matched_page(
+    request: Request,
+    query_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    """Подходящие лоты — чистый SQL по кешу UserLotMatch, без LLM."""
+    queries = db.scalars(
+        select(UserQuery).where(UserQuery.user_id == user.id).order_by(UserQuery.id)
+    ).all()
+    query_ids = [q.id for q in queries]
+
+    rows = []
+    if query_ids:
+        stmt = (
+            select(UserLotMatch, Lot, UserQuery)
+            .join(Lot, UserLotMatch.lot_id == Lot.id)
+            .join(UserQuery, UserLotMatch.user_query_id == UserQuery.id)
+            .options(selectinload(Lot.customer))
+            .where(
+                UserLotMatch.user_query_id.in_(query_ids),
+                UserLotMatch.matched.is_(True),
+            )
+            .order_by(desc(UserLotMatch.score), desc(UserLotMatch.matched_at))
+            .limit(PAGE_SIZE)
+        )
+        if query_id is not None:
+            stmt = stmt.where(UserLotMatch.user_query_id == query_id)
+        rows = db.execute(stmt).all()
+
+    return templates.TemplateResponse(
+        request,
+        "matched.html",
+        {
+            **_base_ctx(request, db, user),
+            "queries": queries,
+            "rows": rows,
+            "active_query_id": query_id,
+        },
+    )
 
 
 @app.get("/runs", response_class=HTMLResponse)
@@ -1350,6 +1506,10 @@ def users_delete(
         return RedirectResponse("/users?error=self_delete", status_code=303)
     target = db.get(User, user_id)
     if target is not None:
+        # Сначала запросы пользователя — иначе на Postgres удаление упадёт по
+        # FK user_queries.user_id; матчи каскадно удалит ORM (delete-orphan).
+        for q in db.scalars(select(UserQuery).where(UserQuery.user_id == user_id)):
+            db.delete(q)
         db.delete(target)
         db.commit()
     return RedirectResponse("/users?ok=deleted", status_code=303)

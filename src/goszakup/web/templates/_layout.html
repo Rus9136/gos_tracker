@@ -52,6 +52,16 @@
         <span class="nav-count">{{ _counts.customers }}</span>
       </a>
 
+      <div class="nav-group-label">Подбор</div>
+      <a href="/matched"      class="{{ 'active' if _active == 'matched' else '' }}">
+        <span class="nav-ic">{{ icon("sparkle", 15) }}</span>
+        <span class="nav-label">Подходящие</span>
+      </a>
+      <a href="/queries"      class="{{ 'active' if _active == 'queries' else '' }}">
+        <span class="nav-ic">{{ icon("search", 15) }}</span>
+        <span class="nav-label">Мои запросы</span>
+      </a>
+
       {% if user and user.is_admin %}
       <div class="nav-group-label">Система</div>
       <a href="/presets"      class="{{ 'active' if _active == 'presets' else '' }}">

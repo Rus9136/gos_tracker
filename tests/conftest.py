@@ -44,6 +44,8 @@ def db_session():
     # Лоты могут ссылаться на анализ через cascade, поэтому порядок важен:
     # сначала зависимые таблицы.
     for tbl in (
+        "user_lot_matches",
+        "user_queries",
         "lot_analyses",
         "contracts",
         "lot_status_history",

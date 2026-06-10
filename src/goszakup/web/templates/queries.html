@@ -1,0 +1,92 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Мои запросы — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Мои запросы</span></div>
+    <h1 class="page-title">Мои запросы <span class="dim">({{ queries|length }})</span></h1>
+    <div class="page-sub">
+      Опишите своими словами, какие лоты вам нужны — LLM подберёт подходящие
+      из тех, что уже в вашем scope. Результат — на вкладке «Подходящие».
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <form method="post" action="/queries" style="display:flex;flex-direction:column;gap:10px;padding:4px">
+    <input name="name" class="inp" placeholder="Название (напр. «Разработка 1С до 5 млн»)" required>
+    <textarea name="text" class="inp" rows="3" required
+      placeholder="Например: хочу лоты на разработку или доработку 1С, бюджет до 5 млн тенге, желательно по Алматы. Не интересны продление лицензий и поставка железа."></textarea>
+    <div>
+      <button type="submit" class="btn">{{ icon("plus", 14) }} Создать запрос</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:44px">#</th>
+        <th>Название / запрос</th>
+        <th style="width:90px">Версия</th>
+        <th class="num" style="width:110px">Матчей</th>
+        <th style="width:80px">Активен</th>
+        <th style="width:240px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for q in queries %}
+      <tr>
+        <td class="mono dim">{{ q.id }}</td>
+        <td>
+          <div class="strong">{{ q.name }}</div>
+          <div class="dim" style="font-size:12px;max-width:560px">{{ q.text }}</div>
+          <details style="margin-top:6px">
+            <summary class="dim" style="font-size:12px;cursor:pointer">редактировать</summary>
+            <form method="post" action="/queries/{{ q.id }}/edit"
+                  style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+              <input name="name" class="inp" value="{{ q.name }}" required>
+              <textarea name="text" class="inp" rows="3" required>{{ q.text }}</textarea>
+              <div><button type="submit" class="btn sm">Сохранить</button></div>
+            </form>
+          </details>
+        </td>
+        <td class="mono dim">v{{ q.version }}</td>
+        <td class="num mono">
+          {% if match_counts[q.id] %}
+            <a href="/matched?query_id={{ q.id }}" class="strong">{{ match_counts[q.id] }}</a>
+          {% else %}<span class="dim">0</span>{% endif %}
+        </td>
+        <td>
+          {% if q.active %}<span class="badge ok"><span class="dot"></span>да</span>
+          {% else %}<span class="badge muted">нет</span>{% endif %}
+        </td>
+        <td>
+          <form method="post" action="/queries/{{ q.id }}/toggle" style="display:inline">
+            <button type="submit" class="btn sm">{% if q.active %}выключить{% else %}включить{% endif %}</button>
+          </form>
+          <form method="post" action="/queries/{{ q.id }}/delete" style="display:inline"
+                onsubmit="return confirm('Удалить запрос и его матчи?')">
+            <button type="submit" class="btn sm danger">удалить</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="dim" style="text-align:center;padding:24px">
+        Пока нет запросов. Создайте первый выше.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot dim" style="font-size:12px">
+    Новые лоты матчатся автоматически при разборе. По уже накопленным —
+    backfill запускается при создании/правке запроса (нужен запущенный воркер).
+  </div>
+</div>
+
+{% endblock %}

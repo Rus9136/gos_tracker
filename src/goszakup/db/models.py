@@ -355,3 +355,69 @@ class LotAnalysis(Base):
         foreign_keys=[source_document_id]
     )
     reused_from: Mapped[Lot | None] = relationship(foreign_keys=[reused_from_lot_id])
+
+
+class UserQuery(Base):
+    """Семантическая настройка пользователя — «какие лоты хочу видеть».
+
+    NL-предпочтение поверх детерминированного User.scope (regions/it_categories/
+    min_amount). Scope грубо отсекает лоты SQL'ом, UserQuery даёт тонкий
+    смысловой матч через LLM (см. classify/matcher.py). Несколько именованных
+    запросов на пользователя — как Preset, но персональный и read-time.
+
+    `version` растёт при правке `text` — это инвалидирует кеш UserLotMatch
+    (матчи со старым query_version игнорируются и пересчитываются).
+    `compiled_filters` — опциональный структурный «компилят» запроса (фаза 2):
+    {dev_category, max_amount, kato...} для до-LLM отсева. Пока NULL.
+    """
+
+    __tablename__ = "user_queries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text)
+    compiled_filters: Mapped[dict | None] = mapped_column(JSON_TYPE)
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
+
+    user: Mapped[User] = relationship()
+    matches: Mapped[list[UserLotMatch]] = relationship(
+        back_populates="query", cascade="all, delete-orphan"
+    )
+
+
+class UserLotMatch(Base):
+    """Кеш результата матчинга (UserQuery × Lot). Зеркалит LotAnalysis.
+
+    Идемпотентность по (query_version, matcher_version): если оба совпадают с
+    текущими — пересчёт пропускается. Матч считается ОДИН раз на пару и потом
+    читается на UI чистым SQL — никаких LLM-вызовов на запросах интерфейса.
+    """
+
+    __tablename__ = "user_lot_matches"
+    __table_args__ = (
+        UniqueConstraint("user_query_id", "lot_id", name="uq_match_query_lot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_query_id: Mapped[int] = mapped_column(
+        ForeignKey("user_queries.id"), index=True
+    )
+    lot_id: Mapped[int] = mapped_column(ForeignKey("lots.id"), index=True)
+    matched: Mapped[bool] = mapped_column(Boolean, index=True)
+    # 0..100 — для сортировки «самое релевантное сверху» на /matched.
+    score: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    matched_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    matcher_version: Mapped[str] = mapped_column(String(40))
+    query_version: Mapped[int] = mapped_column(Integer)
+
+    query: Mapped[UserQuery] = relationship(back_populates="matches")
+    lot: Mapped[Lot] = relationship()

@@ -332,6 +332,25 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     срабатывает только при пустой `users`). Бутстрап из консоли —
     `cli create-user --admin`.
 
+17. **Семантический подбор лотов (`UserQuery`/`UserLotMatch`) — кеш, LLM на
+    UI не вызывается.** Пользователь пишет NL-запрос «какие лоты хочу»
+    (`/queries`); матч считается LLM-ом против `LotAnalysis.tz_summary`
+    (НЕ против PDF — дорого) и кешируется в `UserLotMatch`; `/matched` —
+    чистый SQL по кешу. Идемпотентность пары (query, lot) — по
+    `(query_version, matcher_version)` ПЛЮС свежесть анализа: переанализ лота
+    (`analyzed_at` новее `matched_at`) инвалидирует матч автоматически.
+    Правка текста запроса → `UserQuery.version += 1` → пересчёт upsert'ом.
+    Fan-out: новый анализ → `enqueue_matches_for_lot` (все три пути:
+    `analyze_actor`, sync `run_preset`, кнопка «Переанализировать») с
+    pre-filter по scope (`goszakup.scope.lot_in_scope`) ДО постановки в
+    очередь `goszakup_matching`; создание/правка запроса → backfill
+    (`jobs/match.py`, CLI `match-backfill`). На ошибке LLM запись НЕ
+    создаётся (пара переанализируется следующим прогоном). При правках
+    промпта/схемы матчера бампать `MATCHER_VERSION` в `classify/matcher.py`.
+    Dev-нюанс: GZ_NO_AUTH-админ имеет id=0 без строки в `users` — поэтому
+    fan-out использует outerjoin, а backfill терпит отсутствующего владельца
+    (пустой scope = видит всё).
+
 ## Где что лежит
 
 - `scraper/search.py` — listing-парсер, основа табличной выдачи. Не путать с
@@ -397,11 +416,25 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.
   Режимы (`MODE_LISTING` / `MODE_NO_HEAVY` / `MODE_FULL`) преобразуются в
   тройку флагов `(listing_only, with_docs, with_llm)` через `mode_flags`.
-- `db/models.py` — 10 таблиц. `Organization` — общая для customer/organizer/supplier.
+- `jobs/match.py` — `backfill_query(query_id, limit, sync)`: матч запроса по
+  актуальным лотам в scope владельца (создание/правка запроса, CLI
+  `match-backfill`). `--sync` — без Redis/воркера.
+- `classify/matcher.py` — LLM-matcher запроса против `tz_summary` (правило
+  #17). `MATCHER_VERSION`, `match_and_save()` — паттерн `classify/llm.py`
+  (strict tool, ретраи 429, ошибки не наружу).
+- `queue/matching.py` — `match_actor` (очередь `goszakup_matching`) +
+  `enqueue_matches_for_lot` (fan-out с pre-filter по scope) и
+  `enqueue_matches_for_query` (backfill).
+- `scope.py` — `scope_conditions(user)` / `lot_in_scope(lot, user)` — единый
+  источник правды для read-time scope (правило #15); используется и web,
+  и matcher-fan-out'ом.
+- `db/models.py` — 12 таблиц. `Organization` — общая для customer/organizer/supplier.
   `User` — учётка для входа (bcrypt-пароль, `is_admin`, scope-поля
   `regions`/`it_categories`/`min_amount`); данные с лотами не связаны FK
   (изоляция read-time, правило #15).
   `LotAnalysis` — 1:1 к `Lot` через FK + UniqueConstraint.
+  `UserQuery`/`UserLotMatch` — семантический подбор (правило #17); матчи
+  уникальны по `(user_query_id, lot_id)`, удаление запроса каскадит матчи.
 - `db/engine.py` — `init_db()` делает `create_all` + узкий `_ensure_columns()`
   для редких ALTER TABLE на legacy-БД. Это safety net; **канонические
   миграции** живут в `migrations/versions/` (Alembic). Engine создан с

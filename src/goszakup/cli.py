@@ -306,5 +306,46 @@ def set_password(
     typer.echo(f"пароль для {username!r} обновлён")
 
 
+@app.command("queries")
+def queries_list() -> None:
+    """Список семантических запросов пользователей (UserQuery)."""
+    from .db.models import User, UserQuery
+
+    init_db()
+    with SessionLocal() as s:
+        rows = s.execute(
+            select(UserQuery, User)
+            .join(User, UserQuery.user_id == User.id)
+            .order_by(UserQuery.id)
+        ).all()
+        if not rows:
+            typer.echo("нет запросов")
+            return
+        for q, u in rows:
+            active = "✓" if q.active else "✗"
+            preview = (q.text or "").replace("\n", " ")[:60]
+            typer.echo(
+                f"  #{q.id:>3} [{active}] v{q.version} {u.username:<16} "
+                f"{q.name!r}: {preview}"
+            )
+
+
+@app.command("match-backfill")
+def match_backfill(
+    query_id: int,
+    limit: int = typer.Option(2000, help="Максимум лотов за прогон"),
+    sync: bool = typer.Option(
+        False, "--sync", help="Считать матчи здесь, без очереди/воркера"
+    ),
+) -> None:
+    """Сопоставить запрос с актуальными лотами в scope (создание/правка запроса)."""
+    from .jobs.match import backfill_query
+
+    init_db()
+    n = backfill_query(query_id, limit=limit, sync=sync)
+    mode = "посчитано" if sync else "поставлено в очередь"
+    typer.echo(f"query #{query_id}: {n} лотов {mode}")
+
+
 if __name__ == "__main__":
     app()
