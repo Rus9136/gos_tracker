@@ -62,6 +62,38 @@ JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
 TS_TYPE = DateTime(timezone=True)
 
 
+class User(Base):
+    """Учётная запись для входа в UI.
+
+    Multi-tenant поверх общих данных: лоты в БД одни на всех (скрейпинг
+    глобальный), но у каждого пользователя свой read-time `scope` —
+    регионы (kato), IT-категории и минимальная сумма. `/actual`, `/past`,
+    `/starred`, дашборд и счётчики сайдбара показывают только лоты в его
+    scope; админ (`is_admin`) видит всё. Пустой `regions`/`it_categories`
+    (NULL или []) = «без ограничения по этому измерению».
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # bcrypt-хеш (60 символов). Не Basic Auth из env — пароли в БД.
+    password_hash: Mapped[str] = mapped_column(String(100))
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
+    # scope: список kato-кодов и IT-категорий; min_amount перекрывает
+    # глобальный MIN_AMOUNT для этого пользователя.
+    regions: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
+    it_categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
+    min_amount: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    last_login_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+
+
 class Organization(Base):
     """Заказчик / организатор / поставщик. Одно лицо может быть во всех ролях."""
 

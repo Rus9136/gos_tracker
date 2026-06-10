@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
+from starlette.middleware.sessions import SessionMiddleware
 
 from .. import __version__
 from ..classify.llm import (
@@ -24,6 +25,8 @@ from ..classify.llm import (
     dev_category_label,
     vendor_lock_label,
 )
+from ..config import SECRET_KEY
+from ..db.engine import SessionLocal
 from ..db.models import (
     Announcement,
     Contract,
@@ -34,6 +37,7 @@ from ..db.models import (
     Organization,
     Preset,
     ScrapeRun,
+    User,
 )
 from ..jobs.ingest import (
     close_stale_runs,
@@ -60,7 +64,14 @@ from ..scraper.statuses import (
     STATUS_NAMES,
     status_tone,
 )
-from .auth import require_auth
+from .auth import (
+    NotAuthenticated,
+    authenticate,
+    hash_password,
+    require_admin,
+    require_user,
+    seed_admin_from_env,
+)
 from .deps import format_amount, format_compact, format_dt, get_db
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -100,69 +111,132 @@ def _nav_active(request: Request) -> str:
         return "ingest"
     if path.startswith("/scan"):
         return "scan"
+    if path.startswith("/users"):
+        return "users"
     return ""
 
 
 templates.env.globals["nav_active"] = _nav_active
-
-# GZ_NO_AUTH=1 отключает Basic Auth — только для dev-машины, на проде не ставится.
-_AUTH_DISABLED = os.environ.get("GZ_NO_AUTH") == "1"
-
-
-def _auth_dep():
-    if _AUTH_DISABLED:
-        return lambda: "anon"
-    return require_auth
 
 
 # Sentry — до создания FastAPI, чтобы интеграция перехватила middleware.
 # No-op без SENTRY_DSN.
 setup_sentry("web")
 
-app = FastAPI(title="Goszakup Tracker", version=__version__)
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Плавная миграция прода: первый запуск с пустой users-таблицей и заданными
+    # GZ_USER/GZ_PASSWORD заведёт админа из них. См. auth.seed_admin_from_env.
+    db = SessionLocal()
+    try:
+        seed_admin_from_env(db)
+    finally:
+        db.close()
+    yield
+
+
+app = FastAPI(title="Goszakup Tracker", version=__version__, lifespan=_lifespan)
+# Подписанная cookie-сессия — хранит только uid вошедшего пользователя.
+# https_only можно ужесточить за nginx (TLS терминируется там), оставляем
+# мягким, чтобы работало и на dev по http.
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, session_cookie="gz_session")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.exception_handler(NotAuthenticated)
+def _redirect_to_login(request: Request, exc: NotAuthenticated):
+    nxt = urlencode({"next": exc.next_url}) if exc.next_url and exc.next_url != "/" else ""
+    return RedirectResponse(f"/login?{nxt}" if nxt else "/login", status_code=303)
+
 
 IT_CATEGORIES = ["Оборудование", "Услуги ИТ", "ПО и лицензии", "Связь и интернет"]
 DEV_CATEGORIES = list(DEV_CATEGORY_LABELS.keys())
 VENDOR_LOCK_RISKS = list(VENDOR_LOCK_LABELS.keys())
 PAGE_SIZE = 50
 
+def _scope_conditions(user: User | None) -> list:
+    """Read-time scope пользователя: ограничивает выборку лотов его регионами,
+    IT-категориями и мин. суммой. Админ (и dev-аноним) видит всё — пустой
+    список условий. Пустой regions/it_categories = «без ограничения»."""
+    if user is None or user.is_admin:
+        return []
+    conds = []
+    if user.regions:
+        conds.append(Lot.kato.in_(user.regions))
+    if user.it_categories:
+        conds.append(Lot.it_category.in_(user.it_categories))
+    if user.min_amount:
+        conds.append(Lot.plan_amount >= user.min_amount)
+    return conds
+
+
+def _lot_in_scope(lot: Lot, user: User | None) -> bool:
+    """Тот же scope, что и `_scope_conditions`, но в Python — для проверки
+    доступа к конкретному лоту (drill-down по прямой ссылке)."""
+    if user is None or user.is_admin:
+        return True
+    if user.regions and lot.kato not in user.regions:
+        return False
+    if user.it_categories and lot.it_category not in user.it_categories:
+        return False
+    if user.min_amount and (lot.plan_amount is None or lot.plan_amount < user.min_amount):
+        return False
+    return True
+
+
 # Кеш счётчиков сайдбара — три count() на каждый запрос дороговато впустую,
-# при этом цифры могут запаздывать на минуту без вреда для UX.
+# при этом цифры могут запаздывать на минуту без вреда для UX. Ключ кеша —
+# uid пользователя: scope у каждого свой, поэтому и счётчики разные.
 _NAV_TTL_SEC = 60.0
-_nav_cache: dict[str, object] = {"at": 0.0, "data": None}
+_nav_cache: dict[int, dict] = {}
 
 
-def _nav_counts(db: Session) -> dict[str, int]:
+def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
     import time
 
+    uid = user.id if user is not None else -1
     now = time.monotonic()
-    cached = _nav_cache["data"]
-    if cached is not None and (now - float(_nav_cache["at"])) < _NAV_TTL_SEC:
-        return cached  # type: ignore[return-value]
+    cached = _nav_cache.get(uid)
+    if cached is not None and (now - cached["at"]) < _NAV_TTL_SEC:
+        return cached["data"]
+    scope = _scope_conditions(user)
+
+    def _count(*extra):
+        stmt = select(func.count(Lot.id))
+        for c in (*scope, *extra):
+            stmt = stmt.where(c)
+        return db.scalar(stmt) or 0
+
     data = {
-        "actual": db.scalar(select(func.count(Lot.id)).where(Lot.is_actual.is_(True))) or 0,
-        "past": db.scalar(select(func.count(Lot.id)).where(Lot.is_actual.is_(False))) or 0,
-        "starred": db.scalar(select(func.count(Lot.id)).where(Lot.is_starred.is_(True))) or 0,
+        "actual": _count(Lot.is_actual.is_(True)),
+        "past": _count(Lot.is_actual.is_(False)),
+        "starred": _count(Lot.is_starred.is_(True)),
         "customers": db.scalar(select(func.count(Organization.id))) or 0,
         "presets": db.scalar(select(func.count(Preset.id))) or 0,
     }
-    _nav_cache["at"] = now
-    _nav_cache["data"] = data
+    _nav_cache[uid] = {"at": now, "data": data}
     return data
 
 
-def _base_ctx(request: Request, db: Session) -> dict:
-    """Общий контекст для всех шаблонов — версия и nav-счётчики."""
+def _bust_nav_cache() -> None:
+    _nav_cache.clear()
+
+
+def _base_ctx(request: Request, db: Session, user: User | None) -> dict:
+    """Общий контекст для всех шаблонов — версия, текущий пользователь и
+    nav-счётчики (в его scope)."""
     return {
         "version": __version__,
-        "nav_counts": _nav_counts(db),
+        "user": user,
+        "nav_counts": _nav_counts(db, user),
     }
 
 
 def _lots_query(
     db: Session,
     *,
+    user: User | None,
     actual: bool | None,
     q: str | None,
     kato: str | None,
@@ -177,6 +251,10 @@ def _lots_query(
     stmt = select(Lot).options(
         selectinload(Lot.customer), selectinload(Lot.analysis)
     )
+    # Persona scope — режет выборку под регионы/категории/сумму пользователя
+    # ещё до пользовательских фильтров формы. Для админа условий нет.
+    for cond in _scope_conditions(user):
+        stmt = stmt.where(cond)
     if actual is True:
         stmt = stmt.where(Lot.is_actual.is_(True))
     elif actual is False:
@@ -226,6 +304,7 @@ def _render_lots(
     request: Request,
     db: Session,
     *,
+    user: User | None,
     actual: bool | None,
     base_path: str,
     title: str,
@@ -243,6 +322,7 @@ def _render_lots(
 ) -> HTMLResponse:
     stmt = _lots_query(
         db,
+        user=user,
         actual=actual,
         q=q or None,
         kato=kato or None,
@@ -282,7 +362,7 @@ def _render_lots(
         request,
         "lots.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "title": title,
             "lots": lots,
             "total": total,
@@ -302,10 +382,21 @@ def _render_lots(
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, db: Session = Depends(get_db), _=Depends(_auth_dep())):
+def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    # scope пользователя — режем все лот-метрики дашборда под его регионы/
+    # категории/сумму. Прогоны и счётчики org/doc остаются глобальными.
+    scope = _scope_conditions(user)
+
+    def _scoped(stmt):
+        for c in scope:
+            stmt = stmt.where(c)
+        return stmt
+
     stats = {
-        "total_lots": db.scalar(select(func.count(Lot.id))) or 0,
-        "actual_lots": db.scalar(select(func.count(Lot.id)).where(Lot.is_actual.is_(True)))
+        "total_lots": db.scalar(_scoped(select(func.count(Lot.id)))) or 0,
+        "actual_lots": db.scalar(
+            _scoped(select(func.count(Lot.id)).where(Lot.is_actual.is_(True)))
+        )
         or 0,
         "orgs": db.scalar(select(func.count(Organization.id))) or 0,
         "docs": db.scalar(select(func.count(Document.id))) or 0,
@@ -332,32 +423,38 @@ def dashboard(request: Request, db: Session = Depends(get_db), _=Depends(_auth_d
     # отсортированные по сумме. Без feature starred/watched.
     since = datetime.now(UTC) - timedelta(hours=24)
     attention_lots = db.scalars(
-        select(Lot)
-        .where(Lot.is_actual.is_(True))
-        .where(Lot.last_synced >= since)
-        .order_by(desc(Lot.plan_amount))
-        .options(selectinload(Lot.customer), selectinload(Lot.analysis))
-        .limit(5)
+        _scoped(
+            select(Lot)
+            .where(Lot.is_actual.is_(True))
+            .where(Lot.last_synced >= since)
+            .order_by(desc(Lot.plan_amount))
+            .options(selectinload(Lot.customer), selectinload(Lot.analysis))
+            .limit(5)
+        )
     ).all()
     # Активные preset'ы для быстрого старта.
     quick_presets = db.scalars(
         select(Preset).where(Preset.active.is_(True)).order_by(Preset.id).limit(8)
     ).all()
     by_region_rows = db.execute(
-        select(Lot.kato, func.count(Lot.id), func.coalesce(func.sum(Lot.plan_amount), 0))
-        .where(Lot.is_actual.is_(True))
-        .group_by(Lot.kato)
-        .order_by(desc(func.count(Lot.id)))
+        _scoped(
+            select(Lot.kato, func.count(Lot.id), func.coalesce(func.sum(Lot.plan_amount), 0))
+            .where(Lot.is_actual.is_(True))
+            .group_by(Lot.kato)
+            .order_by(desc(func.count(Lot.id)))
+        )
     ).all()
     by_region = [
         {"region": region_name(k) or (k or "—"), "count": c, "total": t}
         for k, c, t in by_region_rows
     ]
     by_cat_rows = db.execute(
-        select(Lot.it_category, func.count(Lot.id), func.coalesce(func.sum(Lot.plan_amount), 0))
-        .where(Lot.is_actual.is_(True))
-        .group_by(Lot.it_category)
-        .order_by(desc(func.count(Lot.id)))
+        _scoped(
+            select(Lot.it_category, func.count(Lot.id), func.coalesce(func.sum(Lot.plan_amount), 0))
+            .where(Lot.is_actual.is_(True))
+            .group_by(Lot.it_category)
+            .order_by(desc(func.count(Lot.id)))
+        )
     ).all()
     by_category = [
         {"category": c, "count": n, "total": t} for c, n, t in by_cat_rows
@@ -385,7 +482,7 @@ def dashboard(request: Request, db: Session = Depends(get_db), _=Depends(_auth_d
         request,
         "index.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "stats": stats,
             "by_region": by_region,
             "by_category": by_category,
@@ -414,7 +511,7 @@ def _maybe_int(s: str) -> int | None:
 def actual_lots(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
     q: str = "",
     kato: str = "",
     it: str = "",
@@ -428,7 +525,7 @@ def actual_lots(
     status: str = "",
 ):
     return _render_lots(
-        request, db,
+        request, db, user=user,
         actual=True, base_path="/actual", title="Актуальные тендеры",
         q=q, kato=kato, it=it, dev=dev, risk=risk,
         amount_from=_maybe_int(amount_from), amount_to=_maybe_int(amount_to),
@@ -441,7 +538,7 @@ def actual_lots(
 def past_lots(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
     q: str = "",
     kato: str = "",
     it: str = "",
@@ -455,7 +552,7 @@ def past_lots(
     status: str = "",
 ):
     return _render_lots(
-        request, db,
+        request, db, user=user,
         actual=False, base_path="/past", title="Прошедшие тендеры",
         q=q, kato=kato, it=it, dev=dev, risk=risk,
         amount_from=_maybe_int(amount_from), amount_to=_maybe_int(amount_to),
@@ -468,7 +565,7 @@ def past_lots(
 def starred_lots(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
     q: str = "",
     kato: str = "",
     it: str = "",
@@ -487,7 +584,7 @@ def starred_lots(
     elif only == "past":
         actual_filter = False
     return _render_lots(
-        request, db,
+        request, db, user=user,
         actual=actual_filter, base_path="/starred", title="Избранные тендеры",
         q=q, kato=kato, it=it, dev=dev, risk=risk,
         amount_from=_maybe_int(amount_from), amount_to=_maybe_int(amount_to),
@@ -501,7 +598,7 @@ def lot_detail(
     lot_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
 ):
     lot = db.scalar(
         select(Lot)
@@ -513,7 +610,8 @@ def lot_detail(
             selectinload(Lot.announcement).selectinload(Announcement.documents),
         )
     )
-    if lot is None:
+    if lot is None or not _lot_in_scope(lot, user):
+        # Вне scope отдаём 404 (а не 403) — не раскрываем существование лота.
         raise HTTPException(404, "лот не найден")
     history = db.scalars(
         select(LotStatusHistory)
@@ -534,7 +632,7 @@ def lot_detail(
         request,
         "lot.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "lot": lot,
             "history": history,
             "documents": documents,
@@ -563,7 +661,7 @@ def lot_chat(
     lot_id: int,
     body: _ChatRequest,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
 ):
     lot = db.scalar(
         select(Lot)
@@ -591,7 +689,7 @@ def lot_chat(
 def lot_fetch_documents(
     lot_id: int,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     lot = db.scalar(
         select(Lot)
@@ -630,7 +728,7 @@ def lot_toggle_star(
     lot_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
     next: str = Form(""),
 ):
     lot = db.get(Lot, lot_id)
@@ -639,7 +737,7 @@ def lot_toggle_star(
     lot.is_starred = not lot.is_starred
     db.commit()
     # Сбрасываем кеш счётчиков sidebar — иначе «Избранное» залипает на минуту.
-    _nav_cache["at"] = 0.0
+    _bust_nav_cache()
     # Поддерживаем два варианта: fetch() из JS (ждёт JSON) и обычная HTML-форма.
     accept = request.headers.get("accept", "")
     if "application/json" in accept:
@@ -652,7 +750,7 @@ def lot_toggle_star(
 def lot_analyze(
     lot_id: int,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     lot = db.scalar(
         select(Lot)
@@ -678,7 +776,7 @@ def lot_analyze(
 def document_download(
     doc_id: int,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
 ):
     doc = db.get(Document, doc_id)
     if not doc or not doc.local_path or not Path(doc.local_path).exists():
@@ -694,7 +792,7 @@ def document_download(
 def organizations_list(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
     q: str = "",
     sort: str = "-total",
     page: int = 1,
@@ -750,7 +848,7 @@ def organizations_list(
         request,
         "organizations.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "rows": rows,
             "q": q,
             "sort": sort,
@@ -767,7 +865,7 @@ def organization_detail(
     org_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_user),
 ):
     org = db.get(Organization, org_id)
     if not org:
@@ -785,7 +883,7 @@ def organization_detail(
         request,
         "organization.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "org": org,
             "actual": actual,
             "past": past,
@@ -798,13 +896,13 @@ def organization_detail(
 def presets_list(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     presets = db.scalars(select(Preset).order_by(Preset.id)).all()
     return templates.TemplateResponse(
         request,
         "presets.html",
-        {**_base_ctx(request, db), "presets": presets, "region_lookup": BY_CODE},
+        {**_base_ctx(request, db, user), "presets": presets, "region_lookup": BY_CODE},
     )
 
 
@@ -812,7 +910,7 @@ def presets_list(
 def preset_toggle(
     preset_id: int,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     p = db.get(Preset, preset_id)
     if not p:
@@ -826,7 +924,7 @@ def preset_toggle(
 def runs_list(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     close_stale_runs(db)  # чтобы в списке зависшие прогоны были с финишем
     rows = db.execute(
@@ -853,7 +951,7 @@ def runs_list(
         for r, name in rows
     ]
     return templates.TemplateResponse(
-        request, "runs.html", {**_base_ctx(request, db), "runs": runs}
+        request, "runs.html", {**_base_ctx(request, db, user), "runs": runs}
     )
 
 
@@ -862,7 +960,7 @@ def run_detail(
     run_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     row = db.execute(
         select(ScrapeRun, Preset.name)
@@ -888,7 +986,7 @@ def run_detail(
         request,
         "run_detail.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "run": run,
             "preset_name": preset_name,
             "lots": lots,
@@ -915,7 +1013,7 @@ _TRADE_TYPES = [
 def ingest_form(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
     customer_bin: str = "",
     error: str = "",
 ):
@@ -925,7 +1023,7 @@ def ingest_form(
         request,
         "ingest.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "status_groups": _STATUS_GROUPS,
             "trade_types": _TRADE_TYPES,
             "defaults": {
@@ -949,7 +1047,7 @@ def ingest_start(
     status: list[int] = Form(default=[]),
     amount_from: int = Form(0),
     amount_to: str = Form(""),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     customer_bin = customer_bin.strip()
     if not customer_bin.isdigit() or len(customer_bin) != 12:
@@ -1017,7 +1115,7 @@ _SCAN_MODES = [
 def scan_form(
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
     error: str = "",
 ):
     active = find_active_run(db)
@@ -1025,7 +1123,7 @@ def scan_form(
         request,
         "scan.html",
         {
-            **_base_ctx(request, db),
+            **_base_ctx(request, db, user),
             "regions": REGIONS,
             "status_groups": _STATUS_GROUPS,
             "it_categories": IT_CATEGORIES,
@@ -1051,7 +1149,7 @@ def scan_start(
     status: list[int] = Form(default=[]),
     it: list[str] = Form(default=[]),
     mode: str = Form(MODE_FULL),
-    _=Depends(_auth_dep()),
+    user: User = Depends(require_admin),
 ):
     kato = (kato or "").strip()
     if kato and kato not in BY_CODE:
@@ -1096,3 +1194,162 @@ def scan_start(
         with_llm,
     )
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+
+# === Аутентификация и управление пользователями ===
+
+
+def _safe_next(next_url: str) -> str:
+    """Только локальные пути — иначе open-redirect через ?next=//evil.com."""
+    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+        return next_url
+    return "/"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request, db: Session = Depends(get_db), next: str = "", error: str = ""):
+    # Уже вошёл — незачем показывать форму.
+    from .auth import get_current_user
+
+    if get_current_user(request, db) is not None:
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"version": __version__, "next": next, "error": error},
+    )
+
+
+@app.post("/login")
+def login_submit(
+    request: Request,
+    db: Session = Depends(get_db),
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form(""),
+):
+    user = authenticate(db, username.strip(), password)
+    if user is None:
+        qs = urlencode({"error": "1", "next": next} if next else {"error": "1"})
+        return RedirectResponse(f"/login?{qs}", status_code=303)
+    user.last_login_at = datetime.now(UTC)
+    db.commit()
+    request.session["uid"] = user.id
+    return RedirectResponse(_safe_next(next), status_code=303)
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+def _parse_scope_form(
+    regions: list[str], it_categories: list[str], min_amount: str
+) -> dict:
+    return {
+        "regions": [r for r in regions if r in BY_CODE] or None,
+        "it_categories": [c for c in it_categories if c in IT_CATEGORIES] or None,
+        "min_amount": _maybe_int(min_amount),
+    }
+
+
+@app.get("/users", response_class=HTMLResponse)
+def users_list(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    error: str = "",
+    ok: str = "",
+):
+    users = db.scalars(select(User).order_by(User.id)).all()
+    return templates.TemplateResponse(
+        request,
+        "users.html",
+        {
+            **_base_ctx(request, db, user),
+            "users": users,
+            "regions": REGIONS,
+            "it_categories": IT_CATEGORIES,
+            "error": error,
+            "ok": ok,
+        },
+    )
+
+
+@app.post("/users")
+def users_create(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    username: str = Form(...),
+    password: str = Form(...),
+    is_admin: str = Form(""),
+    regions: list[str] = Form(default=[]),
+    it_categories: list[str] = Form(default=[]),
+    min_amount: str = Form(""),
+):
+    username = username.strip()
+    if not username or len(password) < 6:
+        return RedirectResponse("/users?error=invalid", status_code=303)
+    if db.scalar(select(User).where(User.username == username)) is not None:
+        return RedirectResponse("/users?error=exists", status_code=303)
+    scope = _parse_scope_form(regions, it_categories, min_amount)
+    db.add(
+        User(
+            username=username,
+            password_hash=hash_password(password),
+            is_admin=(is_admin == "1"),
+            is_active=True,
+            **scope,
+        )
+    )
+    db.commit()
+    _bust_nav_cache()
+    return RedirectResponse("/users?ok=created", status_code=303)
+
+
+@app.post("/users/{user_id}/edit")
+def users_edit(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    password: str = Form(""),
+    is_admin: str = Form(""),
+    is_active: str = Form(""),
+    regions: list[str] = Form(default=[]),
+    it_categories: list[str] = Form(default=[]),
+    min_amount: str = Form(""),
+):
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "пользователь не найден")
+    scope = _parse_scope_form(regions, it_categories, min_amount)
+    target.regions = scope["regions"]
+    target.it_categories = scope["it_categories"]
+    target.min_amount = scope["min_amount"]
+    # Себя нельзя разжаловать/деактивировать — иначе можно потерять доступ.
+    if target.id != user.id:
+        target.is_admin = is_admin == "1"
+        target.is_active = is_active == "1"
+    if password:
+        if len(password) < 6:
+            return RedirectResponse("/users?error=invalid", status_code=303)
+        target.password_hash = hash_password(password)
+    db.commit()
+    _bust_nav_cache()
+    return RedirectResponse("/users?ok=saved", status_code=303)
+
+
+@app.post("/users/{user_id}/delete")
+def users_delete(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    if user_id == user.id:
+        return RedirectResponse("/users?error=self_delete", status_code=303)
+    target = db.get(User, user_id)
+    if target is not None:
+        db.delete(target)
+        db.commit()
+    return RedirectResponse("/users?ok=deleted", status_code=303)

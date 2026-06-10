@@ -245,5 +245,66 @@ def stats() -> None:
         typer.echo(f"total plan ₸:   {total_amount:>16,.0f}")
 
 
+@app.command("create-user")
+def create_user(
+    username: str,
+    password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True),
+    admin: bool = typer.Option(False, "--admin", help="сделать администратором"),
+) -> None:
+    """Завести пользователя (бутстрап первого админа — с --admin)."""
+    from .db.models import User
+    from .web.auth import hash_password
+
+    init_db()
+    with SessionLocal() as s:
+        if s.scalar(select(User).where(User.username == username)):
+            typer.echo(f"пользователь {username!r} уже существует")
+            raise typer.Exit(1)
+        s.add(
+            User(
+                username=username,
+                password_hash=hash_password(password),
+                is_admin=admin,
+                is_active=True,
+            )
+        )
+        s.commit()
+    typer.echo(f"создан {'админ' if admin else 'пользователь'} {username!r}")
+
+
+@app.command("list-users")
+def list_users() -> None:
+    """Список пользователей."""
+    from .db.models import User
+
+    init_db()
+    with SessionLocal() as s:
+        for u in s.scalars(select(User).order_by(User.id)):
+            role = "admin" if u.is_admin else "user "
+            active = "✓" if u.is_active else "✗"
+            regions = ",".join(u.regions) if u.regions else "—"
+            typer.echo(f"  #{u.id:>3} [{active}] {role} {u.username:<24} регионы={regions}")
+
+
+@app.command("set-password")
+def set_password(
+    username: str,
+    password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True),
+) -> None:
+    """Сменить пароль пользователю."""
+    from .db.models import User
+    from .web.auth import hash_password
+
+    init_db()
+    with SessionLocal() as s:
+        u = s.scalar(select(User).where(User.username == username))
+        if u is None:
+            typer.echo(f"нет пользователя {username!r}")
+            raise typer.Exit(1)
+        u.password_hash = hash_password(password)
+        s.commit()
+    typer.echo(f"пароль для {username!r} обновлён")
+
+
 if __name__ == "__main__":
     app()

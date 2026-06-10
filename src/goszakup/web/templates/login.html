@@ -1,0 +1,48 @@
+{% from "_macros/icons.html" import icon %}
+<!doctype html>
+<html lang="ru" data-theme="dark" data-density="cozy">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход — Goszakup Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<div style="min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px">
+  <div style="width:100%; max-width:380px">
+    <div style="display:flex; align-items:center; gap:12px; justify-content:center; margin-bottom:22px">
+      <div class="brand-mark">GZ</div>
+      <div class="brand-name" style="font-weight:800; line-height:1.1">Goszakup<br>Tracker</div>
+    </div>
+
+    {% if error %}
+    <div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+      <div class="card-body" style="padding:12px 16px; color: var(--bad)">Неверный логин или пароль.</div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login" class="card">
+      <div class="card-body" style="display:grid; gap:14px">
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="field">
+          <label>Логин</label>
+          <input class="input" type="text" name="username" autocomplete="username" autofocus required>
+        </div>
+        <div class="field">
+          <label>Пароль</label>
+          <input class="input" type="password" name="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn primary" style="justify-content:center">
+          {{ icon("send", 13) }} Войти
+        </button>
+      </div>
+    </form>
+
+    <div class="dim" style="text-align:center; font-size:12px; margin-top:14px">v{{ version }}</div>
+  </div>
+</div>
+</body>
+</html>

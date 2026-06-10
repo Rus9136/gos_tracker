@@ -35,6 +35,11 @@ GZ_PROXY_URL = os.environ.get("GZ_PROXY_URL") or None
 # Минимальная сумма лота, ниже которой не отслеживаем (зафиксировано продуктовым решением).
 MIN_AMOUNT = 500_000
 
+# Секрет для подписи cookie-сессии (Starlette SessionMiddleware, форма входа
+# /login). На проде ОБЯЗАТЕЛЕН в .env — иначе при каждом рестарте генерится
+# новый и все сессии инвалидируются. Дефолт — только для dev/тестов.
+SECRET_KEY = os.environ.get("GZ_SECRET_KEY") or "dev-insecure-change-me"
+
 # Задержка между HTTP-запросами (Crawl-delay из robots.txt goszakup).
 CRAWL_DELAY = 5.0
 

@@ -1,0 +1,172 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Пользователи — Goszakup Tracker{% endblock %}
+{% block content %}
+
+{% macro scope_fields(u) %}
+  <div class="field" style="grid-column: 1 / -1">
+    <label>Регионы (пусто — все)</label>
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px">
+      {% for r in regions %}
+      <label class="flex items-start gap-2" style="font-size:12px; cursor:pointer">
+        <input type="checkbox" name="regions" value="{{ r.code }}"
+               {% if u and u.regions and r.code in u.regions %}checked{% endif %}>
+        <span>{{ r.name }} <span class="dim mono">{{ r.code }}</span></span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="field" style="grid-column: 1 / -1">
+    <label>IT-категории (пусто — все)</label>
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px">
+      {% for cat in it_categories %}
+      <label class="flex items-start gap-2" style="font-size:12px; cursor:pointer">
+        <input type="checkbox" name="it_categories" value="{{ cat }}"
+               {% if u and u.it_categories and cat in u.it_categories %}checked{% endif %}>
+        <span>{{ cat }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="field">
+    <label>Мин. сумма, ₸ (пусто — глобальная)</label>
+    <input class="input" type="number" name="min_amount" min="0"
+           value="{{ u.min_amount if u and u.min_amount is not none else '' }}"
+           placeholder="500 000">
+  </div>
+{% endmacro %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Пользователи</span></div>
+    <h1 class="page-title">Пользователи <span class="dim">({{ users|length }})</span></h1>
+    <div class="page-sub">
+      У каждого свой scope — регионы, IT-категории и мин. сумма. Лоты в БД
+      общие; пользователь видит только лоты в своём scope. Админ видит всё.
+    </div>
+  </div>
+</div>
+
+{% if error == "exists" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Пользователь с таким логином уже есть.</div>
+</div>
+{% elif error == "invalid" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Логин обязателен, пароль — не короче 6 символов.</div>
+</div>
+{% elif error == "self_delete" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Нельзя удалить самого себя.</div>
+</div>
+{% elif error %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">{{ error }}</div>
+</div>
+{% endif %}
+
+{% if ok %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--ok, var(--accent)) 30%, transparent)">
+  <div class="card-body" style="padding:12px 16px; color: var(--accent-hi)">Готово.</div>
+</div>
+{% endif %}
+
+<details class="card mb-3">
+  <summary class="card-body" style="cursor:pointer; padding:14px 16px; font-weight:600">
+    {{ icon("plus", 14) }} Создать пользователя
+  </summary>
+  <form method="post" action="/users">
+    <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; border-top:1px solid var(--line)">
+      <div class="field">
+        <label>Логин</label>
+        <input class="input" type="text" name="username" required>
+      </div>
+      <div class="field">
+        <label>Пароль (≥6)</label>
+        <input class="input" type="text" name="password" required minlength="6">
+      </div>
+      <div class="field" style="grid-column: 1 / -1">
+        <label class="flex items-center gap-2" style="cursor:pointer">
+          <input type="checkbox" name="is_admin" value="1"> Администратор (видит всё, управляет пользователями)
+        </label>
+      </div>
+      {{ scope_fields(None) }}
+      <div style="grid-column: 1 / -1">
+        <button type="submit" class="btn primary">{{ icon("check", 13) }} Создать</button>
+      </div>
+    </div>
+  </form>
+</details>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:48px">#</th>
+        <th>Логин</th>
+        <th style="width:90px">Роль</th>
+        <th style="width:80px">Активен</th>
+        <th>Scope</th>
+        <th style="width:150px">Вход</th>
+        <th style="width:90px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="mono dim">{{ u.id }}</td>
+        <td class="strong">{{ u.username }}{% if u.id == user.id %} <span class="dim">(вы)</span>{% endif %}</td>
+        <td>{% if u.is_admin %}<span class="badge">админ</span>{% else %}<span class="dim">юзер</span>{% endif %}</td>
+        <td>{% if u.is_active %}{{ icon("check", 14) }}{% else %}<span class="dim">{{ icon("x", 14) }}</span>{% endif %}</td>
+        <td style="font-size:12px">
+          {% if u.is_admin %}<span class="dim">— всё —</span>
+          {% else %}
+            <div>Регионы: {% if u.regions %}<span class="mono">{{ u.regions|length }}</span>{% else %}<span class="dim">все</span>{% endif %},
+            IT: {% if u.it_categories %}{{ u.it_categories|join(', ') }}{% else %}<span class="dim">все</span>{% endif %}{% if u.min_amount %}, от <span class="mono">{{ u.min_amount|n }}</span>{% endif %}</div>
+          {% endif %}
+        </td>
+        <td class="dim mono" style="font-size:12px">{{ u.last_login_at|dt if u.last_login_at else '—' }}</td>
+        <td>
+          <details>
+            <summary class="btn sm" style="cursor:pointer">Изменить</summary>
+            <div class="card" style="position:absolute; z-index:30; margin-top:6px; width:520px; box-shadow:0 12px 40px rgba(0,0,0,.4)">
+              <form method="post" action="/users/{{ u.id }}/edit">
+                <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr; gap:12px">
+                  <div class="field">
+                    <label>Новый пароль (пусто — не менять)</label>
+                    <input class="input" type="text" name="password" minlength="6">
+                  </div>
+                  <div class="field" style="display:flex; gap:16px; align-items:flex-end">
+                    <label class="flex items-center gap-2" style="cursor:pointer{% if u.id == user.id %}; opacity:.5{% endif %}">
+                      <input type="checkbox" name="is_admin" value="1" {% if u.is_admin %}checked{% endif %}
+                             {% if u.id == user.id %}disabled{% endif %}> админ
+                    </label>
+                    <label class="flex items-center gap-2" style="cursor:pointer{% if u.id == user.id %}; opacity:.5{% endif %}">
+                      <input type="checkbox" name="is_active" value="1" {% if u.is_active %}checked{% endif %}
+                             {% if u.id == user.id %}disabled{% endif %}> активен
+                    </label>
+                  </div>
+                  {{ scope_fields(u) }}
+                  <div style="grid-column: 1 / -1">
+                    <button type="submit" class="btn primary">{{ icon("check", 13) }} Сохранить</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </details>
+          {% if u.id != user.id %}
+          <form method="post" action="/users/{{ u.id }}/delete" style="display:inline"
+                onsubmit="return confirm('Удалить пользователя {{ u.username }}?')">
+            <button type="submit" class="btn sm" style="color:var(--bad)">{{ icon("x", 13) }}</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% endblock %}

@@ -52,6 +52,7 @@
         <span class="nav-count">{{ _counts.customers }}</span>
       </a>
 
+      {% if user and user.is_admin %}
       <div class="nav-group-label">Система</div>
       <a href="/presets"      class="{{ 'active' if _active == 'presets' else '' }}">
         <span class="nav-ic">{{ icon("star", 15) }}</span>
@@ -70,16 +71,26 @@
         <span class="nav-ic">{{ icon("download", 15) }}</span>
         <span class="nav-label">Догрузка по БИН</span>
       </a>
+      <a href="/users"        class="{{ 'active' if _active == 'users' else '' }}">
+        <span class="nav-ic">{{ icon("list", 15) }}</span>
+        <span class="nav-label">Пользователи</span>
+      </a>
+      {% endif %}
     </nav>
 
     <div class="sidebar-spacer"></div>
 
-    <div class="sidebar-user" title="GZ_NO_AUTH режим — без логина">
-      <div class="avatar" style="background: var(--accent-tint); color: var(--accent-hi)">Р</div>
-      <div class="user-meta">
-        <div class="user-name">Локально</div>
-        <div class="user-role">v{{ version }}</div>
+    <div class="sidebar-user">
+      <div class="avatar" style="background: var(--accent-tint); color: var(--accent-hi)">
+        {{ (user.username[0] | upper) if user and user.username else 'Г' }}
       </div>
+      <div class="user-meta" style="min-width:0">
+        <div class="user-name" style="overflow:hidden; text-overflow:ellipsis">{{ user.username if user else 'Гость' }}</div>
+        <div class="user-role">{{ 'админ' if user and user.is_admin else 'пользователь' }}</div>
+      </div>
+      <form method="post" action="/logout" style="margin-left:auto">
+        <button class="icon-btn" type="submit" title="Выйти">{{ icon("external", 15) }}</button>
+      </form>
     </div>
   </aside>
 
@@ -92,9 +103,13 @@
           <span class="kbd">⌘K</span>
         </form>
         <div class="topbar-right">
+          {% if user and user.is_admin %}
           <a class="btn sm" href="/ingest">{{ icon("refresh", 12) }} Прогон</a>
+          {% endif %}
           <button class="icon-btn" title="Уведомления — скоро" type="button">{{ icon("bell", 15) }}</button>
+          {% if user and user.is_admin %}
           <a class="icon-btn" href="/presets" title="Preset'ы">{{ icon("settings", 15) }}</a>
+          {% endif %}
         </div>
       </div>
     </header>

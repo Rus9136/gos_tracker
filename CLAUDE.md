@@ -6,7 +6,10 @@
 
 Трекер тендеров с goszakup.gov.kz. Скрейпит ежедневно по preset'ам
 (один на каждый из 20 регионов РК), хранит в SQLite, отдаёт FastAPI UI с
-фильтрами и отчётами. Single-user-инструмент (без multi-tenant). Развёрнут на
+фильтрами и отчётами. Данные общие (один скрейпинг на всех), но вход —
+**multi-user**: таблица `users`, форма `/login` + cookie-сессия, у каждого
+пользователя свой read-time **scope** (регионы / IT-категории / мин. сумма).
+Админ видит всё и управляет пользователями. Развёрнут на
 <https://gost.salemsoft.kz> (Linux + systemd + nginx, см. ниже раздел
 «Продакшн»). Может запускаться и под macOS как dev-окружение — launchd-агент
 для этого случая лежит в `scripts/`.
@@ -47,10 +50,14 @@
   единственная истинная схема теперь в миграциях.
 - ENV: подгружается из `./env` через `python-dotenv` (вызов в `config.py`,
   `override=False` — реальный shell-env приоритетнее). Обязательная переменная
-  для LLM/чата — `CEREBRAS_API_KEY`. Опционально: `GZ_LLM_MODEL` (дефолт
-  `gpt-oss-120b`), `GZ_NO_AUTH=1` (выключает Basic Auth, только для
-  dev-машины — на проде НЕ ставить), `GZ_USER`/`GZ_PASSWORD` (если auth включён),
-  **`GZ_REDIS_URL`** (Phase 3, дефолт `redis://localhost:6379/0`).
+  для LLM/чата — `CEREBRAS_API_KEY`. Аутентификация (см. раздел «Пользователи»):
+  **`GZ_SECRET_KEY`** (подпись cookie-сессии — на проде обязателен, иначе
+  при рестарте все сессии слетают), `GZ_USER`/`GZ_PASSWORD` (теперь — только
+  **сид первого админа** при пустой таблице `users`, не Basic Auth),
+  `GZ_NO_AUTH=1` (выключает логин и работает под синтетическим админом —
+  только для dev-машины, на проде НЕ ставить). Опционально: `GZ_LLM_MODEL`
+  (дефолт `gpt-oss-120b`), **`GZ_REDIS_URL`** (Phase 3, дефолт
+  `redis://localhost:6379/0`).
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
@@ -76,7 +83,7 @@
 `docs.salemsoft.kz`, `pro.salemsoft.kz`, …): все проекты живут под
 `/home/rus/projects/` от юзера `rus`.
 
-- **URL**: <https://gost.salemsoft.kz> (HTTPS, Basic Auth).
+- **URL**: <https://gost.salemsoft.kz> (HTTPS, вход по форме `/login`).
 - **Каталог**: `/home/rus/projects/gos_tracker`, venv в `.venv` (python3.12 —
   единственный на сервере, 3.11/3.13 нет, проекту хватает: `requires-python = ">=3.11"`).
 - **БД**: Postgres 15 (`goszakup_prod` в системном кластере на
@@ -85,8 +92,9 @@
   оставлены на диске как фолбэк; для отката закомментировать `GZ_DATABASE_URL`
   в `.env` и `sudo systemctl restart goszakup-web.service`.
 - **`.env`**: лежит в корне, `chmod 600`. Содержит `CEREBRAS_API_KEY`,
-  `GZ_USER`, `GZ_PASSWORD`, **`GZ_DATABASE_URL`** (postgresql+psycopg://...).
-  `GZ_NO_AUTH` **НЕ** выставлен — Basic Auth обязателен. Не пушить.
+  `GZ_USER`, `GZ_PASSWORD` (сид первого админа), **`GZ_SECRET_KEY`** (подпись
+  cookie-сессии), **`GZ_DATABASE_URL`** (postgresql+psycopg://...).
+  `GZ_NO_AUTH` **НЕ** выставлен — логин по форме обязателен. Не пушить.
 - **Сервисы systemd** (юзер `rus`, не `goszakup`/`www-data`):
   - `goszakup-web.service` — uvicorn на `127.0.0.1:8765`,
     `ProtectSystem=strict`, `ReadWritePaths=/home/rus/projects/gos_tracker/data`.
@@ -141,6 +149,14 @@ sudo systemctl restart goszakup-worker.service  # Phase 3, если уже за�
 как safety net, но он не делает ALTER — реальные миграции идут через
 Alembic. Если в релизе бампнули `ANALYZER_VERSION` — следующий `daily`
 сам перегонит лоты со старой версией анализа (правило #8).
+
+**Релиз multi-user-входа (одноразово):** в `.env` добавить `GZ_SECRET_KEY`
+(длинный случайный, напр. `openssl rand -hex 32`); `alembic upgrade head`
+создаст таблицу `users`; при первом старте `goszakup-web` `seed_admin_from_env`
+заведёт первого админа из имеющихся `GZ_USER`/`GZ_PASSWORD` (если `users`
+пуста). Дальше пользователи заводятся через UI `/users` или
+`cli create-user --admin`. После деплоя Basic Auth больше нет — вход по
+форме `/login`.
 
 ### Полезные команды на сервере
 
@@ -290,6 +306,32 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     НЕ возвращать staleness обратно «по `started_at`» — иначе либо
     зомби-прогон блокирует UI до 2ч, либо живой долгий скан реапнется.
 
+15. **Multi-user поверх общих данных — изоляция read-time, НЕ на уровне БД.**
+    Лоты в БД одни на всех (скрейпинг глобальный, по preset'ам/регионам).
+    «Scope» пользователя (`User.regions`/`it_categories`/`min_amount`) — это
+    фильтр на чтение: `web/app._scope_conditions` добавляет `WHERE` к выборкам
+    лотов на `/actual`, `/past`, `/starred`, дашборде и в счётчиках сайдбара;
+    `_lot_in_scope` гейтит `/lot/{id}` (вне scope → 404). Админ
+    (`User.is_admin`) и dev-аноним (`GZ_NO_AUTH=1`) видят всё — пустой список
+    условий. НЕ привязывать лоты к пользователям через FK/M2M и НЕ трогать
+    пайплайн: scope живёт только в web-слое. Пустой `regions`/`it_categories`
+    = «без ограничения по измерению», поэтому проверки `if user.regions:`
+    (а не `is not None`). Кеш счётчиков сайдбара (`_nav_cache`) ключуется по
+    `uid` — у каждого scope свой, общий кеш дал бы протечку чисел.
+
+16. **Аутентификация — таблица `users`, НЕ env Basic Auth.** Пароли —
+    bcrypt в `User.password_hash`; bcrypt вызывается напрямую (passlib 1.7.4
+    несовместим с bcrypt 5.x) с обрезкой пароля до 72 байт. Вход — форма
+    `/login`, идентичность в подписанной cookie (`SessionMiddleware`,
+    `GZ_SECRET_KEY`; `request.session["uid"]`). Зависимости роутов:
+    `require_user` (нет сессии → `NotAuthenticated` → редирект на `/login`),
+    `require_admin` (403 не-админу) — системные страницы (`/presets`, `/scan`,
+    `/runs`, `/ingest`, `/users`) и goszakup-мутирующие POST'ы
+    (`fetch_documents`, `analyze`) только для админа. `GZ_USER`/`GZ_PASSWORD`
+    теперь лишь **сид первого админа** через `seed_admin_from_env` (lifespan,
+    срабатывает только при пустой `users`). Бутстрап из консоли —
+    `cli create-user --admin`.
+
 ## Где что лежит
 
 - `scraper/search.py` — listing-парсер, основа табличной выдачи. Не путать с
@@ -329,6 +371,12 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   `jobs.scan.create_scan_run` (ScrapeRun stub), затем `scan_actor.send(...)`
   → 303 на `/runs/{id}`. Эта же `find_active_run` блокирует параллельные
   запуски — чтобы не нарушить Crawl-delay.
+  Аутентификация: `/login` (GET/POST), `/logout`, CRUD `/users` (admin).
+  `_scope_conditions`/`_lot_in_scope` — persona-scope (правило #15).
+- `web/auth.py` — bcrypt-хеши, `authenticate`, `get_current_user` из сессии,
+  зависимости `require_user`/`require_admin`, `NotAuthenticated` (→ редирект
+  на `/login`), `seed_admin_from_env` (сид первого админа из `GZ_USER`/
+  `GZ_PASSWORD`). `GZ_NO_AUTH=1` → синтетический dev-админ. См. правило #16.
 - `scraper/modal_files.py` — разворачивает кнопку «Перейти» через ajax,
   возвращает прямые ссылки на файлы на `v3bl`. Содержит публичный
   `is_tz_like_name(text)` — переиспользуется в `classify/llm.pick_tz_document`.
@@ -349,7 +397,10 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.
   Режимы (`MODE_LISTING` / `MODE_NO_HEAVY` / `MODE_FULL`) преобразуются в
   тройку флагов `(listing_only, with_docs, with_llm)` через `mode_flags`.
-- `db/models.py` — 9 таблиц. `Organization` — общая для customer/organizer/supplier.
+- `db/models.py` — 10 таблиц. `Organization` — общая для customer/organizer/supplier.
+  `User` — учётка для входа (bcrypt-пароль, `is_admin`, scope-поля
+  `regions`/`it_categories`/`min_amount`); данные с лотами не связаны FK
+  (изоляция read-time, правило #15).
   `LotAnalysis` — 1:1 к `Lot` через FK + UniqueConstraint.
 - `db/engine.py` — `init_db()` делает `create_all` + узкий `_ensure_columns()`
   для редких ALTER TABLE на legacy-БД. Это safety net; **канонические
