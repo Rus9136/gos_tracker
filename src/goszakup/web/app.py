@@ -918,20 +918,24 @@ def preset_toggle(
 # === Семантические запросы пользователя (UserQuery) и матчи ===
 
 
-def _trigger_backfill(query_id: int) -> None:
+def _trigger_backfill(query_id: int) -> int | None:
     """Запустить backfill по запросу. Не валим UI, если брокер/Redis недоступен —
     forward-матчинг новых лотов всё равно сработает, а backfill можно вызвать
-    позже командой `python -m goszakup match-backfill`."""
+    позже командой `python -m goszakup match-backfill`.
+
+    Возвращает число лотов, поставленных в очередь, или None если брокер
+    недоступен (тогда UI покажет предупреждение вместо «поставлено N»)."""
     try:
         from ..jobs.match import backfill_query
 
-        backfill_query(query_id)
+        return backfill_query(query_id)
     except Exception as e:  # noqa: BLE001 — UI важнее, чем мгновенный backfill
         import logging
 
         logging.getLogger(__name__).warning(
             "backfill для query %s не запущен (брокер недоступен?): %s", query_id, e
         )
+        return None
 
 
 @app.get("/queries", response_class=HTMLResponse)
@@ -1007,6 +1011,21 @@ def query_edit(
     else:
         db.commit()
     return RedirectResponse("/queries", status_code=303)
+
+
+@app.post("/queries/{query_id}/rematch")
+def query_rematch(
+    query_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    # Ручной повтор backfill'а: прогнать запрос по актуальным лотам в scope
+    # прямо сейчас, не дожидаясь ночного forward-матчинга новых лотов.
+    q = _owned_query(db, query_id, user)
+    n = _trigger_backfill(q.id)
+    if n is None:
+        return RedirectResponse(f"/queries?rematch_failed={q.id}", status_code=303)
+    return RedirectResponse(f"/queries?rematched={q.id}&queued={n}", status_code=303)
 
 
 @app.post("/queries/{query_id}/toggle")

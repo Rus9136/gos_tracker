@@ -14,10 +14,28 @@
   </div>
 </div>
 
+{% if request.query_params.get('rematched') %}
+<div class="card" style="margin-bottom:16px;border-color:var(--ok,#2e7d32)">
+  <div class="strong">{{ icon("check", 14) }} Подбор запущен</div>
+  <div class="dim" style="font-size:13px;margin-top:4px">
+    Поставлено в очередь {{ request.query_params.get('queued', '0') }} актуальных
+    лотов. Матчи появятся на вкладке «Подходящие» по мере обработки воркером.
+  </div>
+</div>
+{% elif request.query_params.get('rematch_failed') %}
+<div class="card" style="margin-bottom:16px;border-color:var(--danger,#c62828)">
+  <div class="strong">Подбор не запущен</div>
+  <div class="dim" style="font-size:13px;margin-top:4px">
+    Брокер/воркер недоступен. Попробуйте позже или запустите
+    <span class="mono">python -m goszakup match-backfill</span> на сервере.
+  </div>
+</div>
+{% endif %}
+
 <div class="card" style="margin-bottom:16px">
   <form method="post" action="/queries" style="display:flex;flex-direction:column;gap:10px;padding:4px">
-    <input name="name" class="inp" placeholder="Название (напр. «Разработка 1С до 5 млн»)" required>
-    <textarea name="text" class="inp" rows="3" required
+    <input name="name" class="input" placeholder="Название (напр. «Разработка 1С до 5 млн»)" required>
+    <textarea name="text" class="input" rows="3" required
       placeholder="Например: хочу лоты на разработку или доработку 1С, бюджет до 5 млн тенге, желательно по Алматы. Не интересны продление лицензий и поставка железа."></textarea>
     <div>
       <button type="submit" class="btn">{{ icon("plus", 14) }} Создать запрос</button>
@@ -49,8 +67,8 @@
             <summary class="dim" style="font-size:12px;cursor:pointer">редактировать</summary>
             <form method="post" action="/queries/{{ q.id }}/edit"
                   style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-              <input name="name" class="inp" value="{{ q.name }}" required>
-              <textarea name="text" class="inp" rows="3" required>{{ q.text }}</textarea>
+              <input name="name" class="input" value="{{ q.name }}" required>
+              <textarea name="text" class="input" rows="3" required>{{ q.text }}</textarea>
               <div><button type="submit" class="btn sm">Сохранить</button></div>
             </form>
           </details>
@@ -66,6 +84,9 @@
           {% else %}<span class="badge muted">нет</span>{% endif %}
         </td>
         <td>
+          <form method="post" action="/queries/{{ q.id }}/rematch" style="display:inline">
+            <button type="submit" class="btn sm" title="Подобрать среди актуальных лотов прямо сейчас">{{ icon("sparkle", 14) }} подобрать</button>
+          </form>
           <form method="post" action="/queries/{{ q.id }}/toggle" style="display:inline">
             <button type="submit" class="btn sm">{% if q.active %}выключить{% else %}включить{% endif %}</button>
           </form>
