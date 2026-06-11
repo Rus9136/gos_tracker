@@ -191,10 +191,25 @@ def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
             stmt = stmt.where(c)
         return db.scalar(stmt) or 0
 
+    # «Подходящие» — уникальные лоты, сматченные под запросы этого пользователя.
+    # Лот, попавший под несколько запросов, считается один раз (distinct lot_id),
+    # как и на странице /matched список — про лоты, а не про пары.
+    matched = 0
+    if user is not None:
+        matched = db.scalar(
+            select(func.count(func.distinct(UserLotMatch.lot_id)))
+            .join(UserQuery, UserLotMatch.user_query_id == UserQuery.id)
+            .where(
+                UserQuery.user_id == user.id,
+                UserLotMatch.matched.is_(True),
+            )
+        ) or 0
+
     data = {
         "actual": _count(Lot.is_actual.is_(True)),
         "past": _count(Lot.is_actual.is_(False)),
         "starred": _count(Lot.is_starred.is_(True)),
+        "matched": matched,
         "customers": db.scalar(select(func.count(Organization.id))) or 0,
         "presets": db.scalar(select(func.count(Preset.id))) or 0,
     }

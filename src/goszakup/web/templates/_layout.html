@@ -56,6 +56,7 @@
       <a href="/matched"      class="{{ 'active' if _active == 'matched' else '' }}">
         <span class="nav-ic">{{ icon("sparkle", 15) }}</span>
         <span class="nav-label">Подходящие</span>
+        <span class="nav-count">{{ _counts.matched }}</span>
       </a>
       <a href="/queries"      class="{{ 'active' if _active == 'queries' else '' }}">
         <span class="nav-ic">{{ icon("search", 15) }}</span>
