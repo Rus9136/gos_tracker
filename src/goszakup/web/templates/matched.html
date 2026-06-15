@@ -12,12 +12,15 @@
 </div>
 
 {% if queries %}
-<div class="pills" style="margin-bottom:14px">
-  <a href="/matched" class="pill {{ 'active' if active_query_id is none else '' }}">Все запросы</a>
-  {% for q in queries %}
-  <a href="/matched?query_id={{ q.id }}"
-     class="pill {{ 'active' if active_query_id == q.id else '' }}">{{ q.name }}</a>
-  {% endfor %}
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+  <label class="dim" style="font-size:13px">Запрос:</label>
+  <select class="input" style="max-width:320px"
+          onchange="location = this.value ? '/matched?query_id=' + this.value : '/matched'">
+    <option value="" {{ 'selected' if active_query_id is none else '' }}>Все запросы</option>
+    {% for q in queries %}
+    <option value="{{ q.id }}" {{ 'selected' if active_query_id == q.id else '' }}>{{ q.name }}</option>
+    {% endfor %}
+  </select>
 </div>
 {% endif %}
 
