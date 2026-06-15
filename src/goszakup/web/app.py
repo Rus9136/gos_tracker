@@ -199,9 +199,11 @@ def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
         matched = db.scalar(
             select(func.count(func.distinct(UserLotMatch.lot_id)))
             .join(UserQuery, UserLotMatch.user_query_id == UserQuery.id)
+            .join(Lot, UserLotMatch.lot_id == Lot.id)
             .where(
                 UserQuery.user_id == user.id,
                 UserLotMatch.matched.is_(True),
+                Lot.is_actual.is_(True),
             )
         ) or 0
 
@@ -1090,6 +1092,7 @@ def matched_page(
             .where(
                 UserLotMatch.user_query_id.in_(query_ids),
                 UserLotMatch.matched.is_(True),
+                Lot.is_actual.is_(True),
             )
             .order_by(desc(UserLotMatch.score), desc(UserLotMatch.matched_at))
             .limit(PAGE_SIZE)
