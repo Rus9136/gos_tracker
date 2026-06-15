@@ -202,6 +202,7 @@ def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
             .join(Lot, UserLotMatch.lot_id == Lot.id)
             .where(
                 UserQuery.user_id == user.id,
+                UserQuery.active.is_(True),
                 UserLotMatch.matched.is_(True),
                 Lot.is_actual.is_(True),
             )
@@ -1077,8 +1078,12 @@ def matched_page(
     user: User = Depends(require_user),
 ):
     """Подходящие лоты — чистый SQL по кешу UserLotMatch, без LLM."""
+    # Выключенные запросы (active=False) в подбор не попадают: ни в фильтр,
+    # ни в выборку матчей.
     queries = db.scalars(
-        select(UserQuery).where(UserQuery.user_id == user.id).order_by(UserQuery.id)
+        select(UserQuery)
+        .where(UserQuery.user_id == user.id, UserQuery.active.is_(True))
+        .order_by(UserQuery.id)
     ).all()
     query_ids = [q.id for q in queries]
 
