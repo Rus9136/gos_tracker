@@ -421,3 +421,29 @@ class UserLotMatch(Base):
 
     query: Mapped[UserQuery] = relationship(back_populates="matches")
     lot: Mapped[Lot] = relationship()
+
+
+class LlmCall(Base):
+    """Учёт каждого реального вызова Cerebras — для отчёта о расходах.
+
+    Одна строка = один HTTP-вызов к модели (анализ ТЗ, матч запроса, чат по
+    лоту). Дедупликация/идемпотентность LotAnalysis/UserLotMatch сюда НЕ
+    попадают: если LLM не дёргался (скип по версии, копия по simhash, rule-based)
+    — строки нет. `kind` различает три источника. Токены берутся из
+    `response.usage`; стоимость не храним — это оценка на read-time по тарифу.
+
+    Без FK на `lots`/`users`: запись должна пережить удаление лота/юзера и не
+    падать на dev-анониме (id=0 без строки в `users`). Учёт — это лог, не граф.
+    """
+
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)  # analyze|match|chat
+    model: Mapped[str | None] = mapped_column(String(80))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    lot_id: Mapped[int | None] = mapped_column(BigInteger)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, index=True)

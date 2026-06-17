@@ -197,6 +197,7 @@
         <th style="width:200px">Статус</th>
         <th class="num" style="width:140px">Сумма ₸</th>
         <th style="width:130px">Регион</th>
+        <th style="width:150px">До конца приёма</th>
         <th style="width:140px">Замечен</th>
         <th style="width:90px"></th>
       </tr>
@@ -245,6 +246,15 @@
         <td @click="window.location='/lot/{{ lot.id }}'">{{ status_pill(lot.status_code, mini=True) }}</td>
         <td class="num strong mono" @click="window.location='/lot/{{ lot.id }}'" style="font-size:13.5px">{{ lot.plan_amount|n }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'" class="dim">{{ region_name(lot.kato) or '—' }}</td>
+        <td @click="window.location='/lot/{{ lot.id }}'">
+          {% set deadline = lot.announcement.application_end if lot.announcement else None %}
+          {% if deadline %}
+            <span class="gz-countdown mono" data-deadline="{{ deadline|iso }}"
+                  title="Окончание приёма заявок: {{ deadline|dt }}"></span>
+          {% else %}
+            <span class="dimer">—</span>
+          {% endif %}
+        </td>
         <td @click="window.location='/lot/{{ lot.id }}'" class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
         <td @click.stop>
           <div class="row-actions">
@@ -254,7 +264,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="11" class="dim" style="text-align:center; padding:32px">Ничего не найдено</td></tr>
+      <tr><td colspan="12" class="dim" style="text-align:center; padding:32px">Ничего не найдено</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -300,6 +310,14 @@
         <div class="num mono strong" style="font-size:18px">{{ lot.plan_amount|n }} ₸</div>
         <div class="dim mono" style="font-size:11px">{{ region_name(lot.kato) or '—' }} • {{ lot.first_seen|dt }}</div>
       </div>
+      {% set deadline = lot.announcement.application_end if lot.announcement else None %}
+      {% if deadline %}
+      <div class="flex items-center gap-1 mt-2" style="font-size:12px">
+        <span class="dim">До конца приёма:</span>
+        <span class="gz-countdown mono" data-deadline="{{ deadline|iso }}"
+              title="Окончание приёма заявок: {{ deadline|dt }}"></span>
+      </div>
+      {% endif %}
     </div>
   </a>
   {% else %}

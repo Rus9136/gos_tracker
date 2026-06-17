@@ -1,0 +1,110 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Расходы LLM — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Расходы LLM</span></div>
+    <h1 class="page-title">Расход токенов Cerebras</h1>
+    <div class="page-sub">
+      учёт по каждому вызову (анализ ТЗ · подбор · чат) за последние {{ window_days }} дней •
+      стоимость — оценка по тарифу ${{ price_in }}/${{ price_out }} за 1M токенов (вход/выход)
+    </div>
+  </div>
+</div>
+
+{# Сводка за всё окно #}
+<div class="card" style="margin-bottom:16px">
+  <div class="flex gap-2" style="flex-wrap:wrap">
+    <div style="flex:1; min-width:140px">
+      <div class="dim" style="font-size:12px">Всего вызовов</div>
+      <div class="strong mono" style="font-size:22px">{{ grand.calls|n }}</div>
+    </div>
+    <div style="flex:1; min-width:140px">
+      <div class="dim" style="font-size:12px">Всего токенов</div>
+      <div class="strong mono" style="font-size:22px">{{ grand.total_tokens|n }}</div>
+    </div>
+    <div style="flex:1; min-width:140px">
+      <div class="dim" style="font-size:12px">Вход / выход</div>
+      <div class="mono" style="font-size:15px">{{ grand.prompt_tokens|n }} / {{ grand.completion_tokens|n }}</div>
+    </div>
+    <div style="flex:1; min-width:140px">
+      <div class="dim" style="font-size:12px">Оценка стоимости</div>
+      <div class="strong mono" style="font-size:22px">${{ "%.2f"|format(grand.cost) }}</div>
+    </div>
+  </div>
+</div>
+
+{# Разбивка по типу вызова #}
+<div class="card" style="margin-bottom:16px">
+  <div class="card-head"><span class="strong">По типу вызова</span></div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Тип</th>
+        <th class="num">вызовов</th>
+        <th class="num">вход</th>
+        <th class="num">выход</th>
+        <th class="num">всего токенов</th>
+        <th class="num">≈ стоимость</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for k in by_kind %}
+      <tr>
+        <td><span class="badge muted">{{ k.label }}</span></td>
+        <td class="num mono">{{ k.calls|n }}</td>
+        <td class="num mono dim">{{ k.prompt_tokens|n }}</td>
+        <td class="num mono dim">{{ k.completion_tokens|n }}</td>
+        <td class="num mono"><span class="strong">{{ k.total_tokens|n }}</span></td>
+        <td class="num mono">${{ "%.4f"|format(k.cost) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="dim" style="text-align:center; padding:32px">Вызовов пока нет</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% macro period_table(title, rows) %}
+<div class="card" style="margin-bottom:16px">
+  <div class="card-head"><span class="strong">{{ title }}</span></div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Период</th>
+        <th class="num">вызовов</th>
+        <th class="num">вход</th>
+        <th class="num">выход</th>
+        <th class="num">всего токенов</th>
+        <th class="num">≈ стоимость</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in rows %}
+      <tr>
+        <td class="mono">{{ b.label }}</td>
+        <td class="num mono">{{ b.calls|n }}</td>
+        <td class="num mono dim">{{ b.prompt_tokens|n }}</td>
+        <td class="num mono dim">{{ b.completion_tokens|n }}</td>
+        <td class="num mono"><span class="strong">{{ b.total_tokens|n }}</span></td>
+        <td class="num mono">${{ "%.4f"|format(b.cost) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="dim" style="text-align:center; padding:32px">Нет данных</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endmacro %}
+
+{{ period_table("По месяцам (последние 12)", by_month) }}
+{{ period_table("По неделям (последние 12)", by_week) }}
+{{ period_table("По дням (последние 30)", by_day) }}
+
+{% endblock %}

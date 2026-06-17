@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -33,6 +34,18 @@ def format_dt(value) -> str:
     if value is None:
         return "—"
     return value.strftime("%d.%m.%Y %H:%M")
+
+
+def format_iso(value) -> str:
+    # ISO-8601 для data-атрибутов. Метки хранятся в UTC (правило #12), но
+    # SQLite-фолбэк отдаёт их naive — без явного offset'а JS `new Date(...)`
+    # принял бы их за локальное время. Поэтому naive трактуем как UTC и всегда
+    # печатаем со смещением (`+00:00`). Пусто — чтобы шаблон отрисовал прочерк.
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
 
 
 def format_compact(value: Decimal | float | int | None) -> str:

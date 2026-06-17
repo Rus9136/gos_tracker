@@ -86,6 +86,10 @@
         <span class="nav-ic">{{ icon("list", 15) }}</span>
         <span class="nav-label">Пользователи</span>
       </a>
+      <a href="/expenses"     class="{{ 'active' if _active == 'expenses' else '' }}">
+        <span class="nav-ic">{{ icon("grid", 15) }}</span>
+        <span class="nav-label">Расходы LLM</span>
+      </a>
       {% endif %}
     </nav>
 

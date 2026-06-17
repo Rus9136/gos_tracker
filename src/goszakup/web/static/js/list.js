@@ -26,6 +26,45 @@ window.toggleStar = async function (ev, lotId) {
   }
 };
 
+// Обратный отсчёт до окончания приёма заявок. Дедлайн хранится в UTC и
+// отдаётся в data-deadline как ISO-8601 (+00:00) — браузер сам переведёт в
+// местное время пользователя. Тикаем раз в секунду; на коротких списках
+// (≤50 строк) это дёшево. Классы urgency меняют цвет: <24ч — near, <6ч — soon,
+// истёк — expired.
+(function () {
+  function fmt(ms) {
+    if (ms <= 0) return { text: "истёк", cls: "is-expired" };
+    const s = Math.floor(ms / 1000);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    let text;
+    if (d > 0) text = `${d}д ${h}ч`;
+    else if (h > 0) text = `${h}ч ${m}м`;
+    else text = `${m}м ${sec}с`;
+    const cls = ms < 6 * 3600e3 ? "is-soon" : ms < 24 * 3600e3 ? "is-near" : "";
+    return { text, cls };
+  }
+
+  function tick() {
+    const now = Date.now();
+    document.querySelectorAll(".gz-countdown[data-deadline]").forEach((el) => {
+      const iso = el.dataset.deadline;
+      if (!iso) return;
+      const t = new Date(iso).getTime();
+      if (Number.isNaN(t)) { el.textContent = "—"; return; }
+      const { text, cls } = fmt(t - now);
+      el.textContent = text;
+      el.classList.remove("is-expired", "is-soon", "is-near");
+      if (cls) el.classList.add(cls);
+    });
+  }
+
+  tick();
+  setInterval(tick, 1000);
+})();
+
 // Alpine.js компоненты для страницы списка лотов.
 //
 // Регистрируется на событие alpine:init, чтобы дождаться загрузки Alpine'а с CDN.

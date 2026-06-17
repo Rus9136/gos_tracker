@@ -25,12 +25,18 @@ from ..classify.llm import (
     dev_category_label,
     vendor_lock_label,
 )
-from ..config import SECRET_KEY
+from ..classify.usage import record_call
+from ..config import (
+    LLM_PRICE_INPUT_PER_MTOK,
+    LLM_PRICE_OUTPUT_PER_MTOK,
+    SECRET_KEY,
+)
 from ..db.engine import SessionLocal
 from ..db.models import (
     Announcement,
     Contract,
     Document,
+    LlmCall,
     Lot,
     LotAnalysis,
     LotStatusHistory,
@@ -75,7 +81,7 @@ from .auth import (
     require_user,
     seed_admin_from_env,
 )
-from .deps import format_amount, format_compact, format_dt, get_db
+from .deps import format_amount, format_compact, format_dt, format_iso, get_db
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -83,6 +89,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.filters["n"] = format_amount
 templates.env.filters["dt"] = format_dt
 templates.env.filters["compact"] = format_compact
+templates.env.filters["iso"] = format_iso
 templates.env.globals["region_name"] = region_name
 templates.env.globals["dev_category_label"] = dev_category_label
 templates.env.globals["vendor_lock_label"] = vendor_lock_label
@@ -120,6 +127,8 @@ def _nav_active(request: Request) -> str:
         return "scan"
     if path.startswith("/users"):
         return "users"
+    if path.startswith("/expenses"):
+        return "expenses"
     return ""
 
 
@@ -250,7 +259,12 @@ def _lots_query(
     status: int | None = None,
 ):
     stmt = select(Lot).options(
-        selectinload(Lot.customer), selectinload(Lot.analysis)
+        selectinload(Lot.customer),
+        selectinload(Lot.analysis),
+        # announcement нужен для дедлайна (таймер обратного отсчёта) и номера
+        # объявления в списке — без eager-load шаблон лениво дёргал бы его на
+        # каждой строке (N+1).
+        selectinload(Lot.announcement),
     )
     # Persona scope — режет выборку под регионы/категории/сумму пользователя
     # ещё до пользовательских фильтров формы. Для админа условий нет.
@@ -678,11 +692,13 @@ def lot_chat(
         raise HTTPException(400, "последнее сообщение должно быть от user")
     history = [{"role": m.role, "content": m.content} for m in body.messages]
     try:
-        reply = chat_about_lot(lot, history)
+        reply, usage = chat_about_lot(lot, history)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     except Exception as e:
         return JSONResponse({"error": f"внутренняя ошибка: {e}"}, status_code=500)
+    record_call(db, "chat", usage, lot_id=lot.id, user_id=getattr(user, "id", None))
+    db.commit()
     return {"reply": reply}
 
 
@@ -1100,11 +1116,21 @@ def matched_page(
                 Lot.is_actual.is_(True),
             )
             .order_by(desc(UserLotMatch.score), desc(UserLotMatch.matched_at))
-            .limit(PAGE_SIZE)
         )
         if query_id is not None:
             stmt = stmt.where(UserLotMatch.user_query_id == query_id)
-        rows = db.execute(stmt).all()
+        # Список — про лоты, а не про пары (как и бейдж в сайдбаре): лот под
+        # несколькими запросами показываем один раз, оставляя матч с лучшим
+        # баллом. Дедуп в Python (а не DISTINCT ON) — кросс-диалектно и порядок
+        # по score уже задан, поэтому первая встреченная пара лота — лучшая.
+        seen: set[int] = set()
+        for m, lot, q in db.execute(stmt).all():
+            if lot.id in seen:
+                continue
+            seen.add(lot.id)
+            rows.append((m, lot, q))
+            if len(rows) >= PAGE_SIZE:
+                break
 
     return templates.TemplateResponse(
         request,
@@ -1150,6 +1176,124 @@ def runs_list(
     ]
     return templates.TemplateResponse(
         request, "runs.html", {**_base_ctx(request, db, user), "runs": runs}
+    )
+
+
+_LLM_KIND_LABELS = {"analyze": "Анализ ТЗ", "match": "Подбор", "chat": "Чат"}
+
+
+def _llm_cost(prompt_tokens: int, completion_tokens: int) -> float:
+    """Оценка стоимости в USD по тарифу из config (см. LLM_PRICE_*)."""
+    return (
+        prompt_tokens / 1_000_000 * LLM_PRICE_INPUT_PER_MTOK
+        + completion_tokens / 1_000_000 * LLM_PRICE_OUTPUT_PER_MTOK
+    )
+
+
+def _bucket_llm_calls(rows, key_fn, label_fn, limit: int) -> list[dict]:
+    """Сгруппировать вызовы по периоду (key_fn → ключ) и вернуть последние
+    `limit` периодов, свежие сверху."""
+    buckets: dict = {}
+    for created_at, _kind, pt, ct, tt in rows:
+        key = key_fn(created_at)
+        b = buckets.get(key)
+        if b is None:
+            b = buckets[key] = {
+                "key": key,
+                "label": label_fn(created_at),
+                "calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+        b["calls"] += 1
+        b["prompt_tokens"] += pt or 0
+        b["completion_tokens"] += ct or 0
+        b["total_tokens"] += tt or 0
+    out = sorted(buckets.values(), key=lambda b: b["key"], reverse=True)[:limit]
+    for b in out:
+        b["cost"] = _llm_cost(b["prompt_tokens"], b["completion_tokens"])
+    return out
+
+
+@app.get("/expenses", response_class=HTMLResponse)
+def expenses(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    # Окно ~13 месяцев покрывает «по месяцам за год». Объём LlmCall небольшой
+    # (один ряд на вызов), агрегируем в Python — это дёшево и одинаково
+    # работает на SQLite и Postgres (без dialect-специфичного date_trunc).
+    since = datetime.now(UTC) - timedelta(days=400)
+    rows = db.execute(
+        select(
+            LlmCall.created_at,
+            LlmCall.kind,
+            LlmCall.prompt_tokens,
+            LlmCall.completion_tokens,
+            LlmCall.total_tokens,
+        )
+        .where(LlmCall.created_at >= since)
+        .order_by(LlmCall.created_at)
+    ).all()
+
+    by_day = _bucket_llm_calls(
+        rows, lambda d: d.date().isoformat(), lambda d: d.date().isoformat(), 30
+    )
+    by_week = _bucket_llm_calls(
+        rows,
+        lambda d: "{:04d}-W{:02d}".format(*d.isocalendar()[:2]),
+        lambda d: "{:04d} · неделя {:02d}".format(*d.isocalendar()[:2]),
+        12,
+    )
+    by_month = _bucket_llm_calls(
+        rows,
+        lambda d: d.strftime("%Y-%m"),
+        lambda d: d.strftime("%Y-%m"),
+        12,
+    )
+
+    # Итоги по типам вызова за всё окно.
+    by_kind: dict = {}
+    grand = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    for _created_at, kind, pt, ct, tt in rows:
+        k = by_kind.setdefault(
+            kind,
+            {
+                "label": _LLM_KIND_LABELS.get(kind, kind),
+                "calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        )
+        for field, val in (
+            ("calls", 1),
+            ("prompt_tokens", pt or 0),
+            ("completion_tokens", ct or 0),
+            ("total_tokens", tt or 0),
+        ):
+            k[field] += val
+            grand[field] += val
+    for k in by_kind.values():
+        k["cost"] = _llm_cost(k["prompt_tokens"], k["completion_tokens"])
+    grand["cost"] = _llm_cost(grand["prompt_tokens"], grand["completion_tokens"])
+
+    return templates.TemplateResponse(
+        request,
+        "expenses.html",
+        {
+            **_base_ctx(request, db, user),
+            "by_day": by_day,
+            "by_week": by_week,
+            "by_month": by_month,
+            "by_kind": sorted(by_kind.values(), key=lambda x: -x["total_tokens"]),
+            "grand": grand,
+            "price_in": LLM_PRICE_INPUT_PER_MTOK,
+            "price_out": LLM_PRICE_OUTPUT_PER_MTOK,
+            "window_days": 400,
+        },
     )
 
 

@@ -35,6 +35,13 @@ GZ_PROXY_URL = os.environ.get("GZ_PROXY_URL") or None
 # Минимальная сумма лота, ниже которой не отслеживаем (зафиксировано продуктовым решением).
 MIN_AMOUNT = 500_000
 
+# Тариф LLM для ОЦЕНКИ стоимости на странице /expenses (USD за 1M токенов).
+# Токены учитываются точно (LlmCall), деньги — прикидка по этим ставкам;
+# на free-tier Cerebras фактический счёт = $0. Дефолт — платный прайс
+# gpt-oss-120b. Переопределяется через env, если сменится тариф/провайдер.
+LLM_PRICE_INPUT_PER_MTOK = float(os.environ.get("GZ_LLM_PRICE_INPUT", "0.25"))
+LLM_PRICE_OUTPUT_PER_MTOK = float(os.environ.get("GZ_LLM_PRICE_OUTPUT", "0.69"))
+
 # Секрет для подписи cookie-сессии (Starlette SessionMiddleware, форма входа
 # /login). На проде ОБЯЗАТЕЛЕН в .env — иначе при каждом рестарте генерится
 # новый и все сессии инвалидируются. Дефолт — только для dev/тестов.

@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from ..db.models import Lot, UserLotMatch, UserQuery
 from ..scraper.katos import region_name
 from .llm import DEFAULT_MODEL, dev_category_label, vendor_lock_label
+from .usage import record_call, usage_from_response
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ def _build_user_message(query_text: str, lot: Lot) -> str:
 class _Outcome:
     result: MatchResult | None
     error: str | None = None
+    usage: dict | None = None
 
 
 def _call_llm(query_text: str, lot: Lot) -> _Outcome:
@@ -177,22 +179,24 @@ def _call_llm(query_text: str, lot: Lot) -> _Outcome:
     if resp is None:
         return _Outcome(None, f"Cerebras API: 429 после ретраев: {last_err}")
 
+    usage = usage_from_response(resp, model)
+
     choice = resp.choices[0].message if resp.choices else None
     if choice is None or not choice.tool_calls:
         finish = resp.choices[0].finish_reason if resp.choices else "—"
-        return _Outcome(None, f"модель не вызвала tool: finish_reason={finish}")
+        return _Outcome(None, f"модель не вызвала tool: finish_reason={finish}", usage)
 
     try:
         tool_input = json.loads(choice.tool_calls[0].function.arguments)
     except json.JSONDecodeError as e:
-        return _Outcome(None, f"невалидный JSON в tool_call.arguments: {e}")
+        return _Outcome(None, f"невалидный JSON в tool_call.arguments: {e}", usage)
 
     try:
         parsed = MatchResult.model_validate(tool_input)
     except ValidationError as e:
-        return _Outcome(None, f"Pydantic validation failed: {e}")
+        return _Outcome(None, f"Pydantic validation failed: {e}", usage)
 
-    return _Outcome(parsed)
+    return _Outcome(parsed, usage=usage)
 
 
 # === Точка входа ===
@@ -242,6 +246,7 @@ def _match_inner(session: Session, query: UserQuery, lot: Lot) -> bool:
         return False  # уже актуально
 
     outcome = _call_llm(query.text, lot)
+    record_call(session, "match", outcome.usage, lot_id=lot.id, user_id=query.user_id)
     if outcome.result is None:
         # На ошибке запись не создаём — чтобы при следующем прогоне с рабочим
         # ключом пара переанализировалась (та же логика, что в llm.py).

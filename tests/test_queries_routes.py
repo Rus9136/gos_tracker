@@ -90,7 +90,8 @@ def test_foreign_query_404(client, db_session):
 
 def test_matched_page_lists_cached_matches(client, db_session):
     db_session.add(Announcement(id=101, url="u/101"))
-    lot = Lot(id=1, url="u/101", announcement_id=101, name="Доработка 1С", plan_amount=3_000_000)
+    lot = Lot(id=1, url="u/101", announcement_id=101, name="Доработка 1С",
+              plan_amount=3_000_000, is_actual=True)
     db_session.add(lot)
     q = UserQuery(user_id=0, name="1С", text="разработка 1С")
     db_session.add(q)
@@ -113,4 +114,33 @@ def test_matched_page_lists_cached_matches(client, db_session):
     # Фильтр по несуществующему запросу — пусто, но не 500.
     r = client.get("/matched", params={"query_id": 99999})
     assert r.status_code == 200
+
+
+def test_matched_page_dedupes_lot_across_queries(client, db_session):
+    # Лот, попавший под несколько запросов, на странице показывается один раз
+    # (как и бейдж в сайдбаре считает уникальные лоты), с матчем лучшего балла.
+    db_session.add(Announcement(id=201, url="u/201"))
+    lot = Lot(id=11, url="u/201", announcement_id=201, name="Портал на 1С",
+              plan_amount=5_000_000, is_actual=True)
+    db_session.add(lot)
+    q1 = UserQuery(user_id=0, name="Запрос А", text="разработка")
+    q2 = UserQuery(user_id=0, name="Запрос Б", text="внедрение")
+    db_session.add_all([q1, q2])
+    db_session.flush()
+    db_session.add_all([
+        UserLotMatch(user_query_id=q1.id, lot_id=lot.id, matched=True, score=70,
+                     reason="совпадение по А",
+                     matcher_version="match-v1-gpt-oss-120b", query_version=1),
+        UserLotMatch(user_query_id=q2.id, lot_id=lot.id, matched=True, score=92,
+                     reason="совпадение по Б",
+                     matcher_version="match-v1-gpt-oss-120b", query_version=1),
+    ])
+    db_session.commit()
+
+    r = client.get("/matched")
+    assert r.status_code == 200
+    # Лот ровно один раз, показан матч с лучшим баллом (92, «Запрос Б»).
+    assert r.text.count("Портал на 1С") == 1
+    assert "совпадение по Б" in r.text
+    assert "совпадение по А" not in r.text
     assert "Доработка 1С" not in r.text

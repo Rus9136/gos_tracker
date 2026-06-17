@@ -29,6 +29,7 @@ from ..db.models import Announcement, Document, Lot, LotAnalysis
 from ..scraper.modal_files import is_tz_like_name
 from .extractive_summary import extract_summary
 from .rules import CONFIDENCE_THRESHOLD, RULES_VERSION, classify_lot
+from .usage import record_call, usage_from_response
 from .simhash import (
     HAMMING_THRESHOLD,
     from_signed64,
@@ -381,6 +382,7 @@ class _Outcome:
 
     result: AnalysisResult | None
     error: str | None = None
+    usage: dict | None = None
 
 
 def _call_llm(
@@ -442,10 +444,14 @@ def _call_llm(
     if resp is None:
         return _Outcome(None, f"Cerebras API: 429 после {len(_RETRY_DELAYS)} ретраев: {last_err}")
 
+    # Токены списаны вне зависимости от того, распарсился ли результат — usage
+    # тащим во все ветки ниже, чтобы учёт расходов не терял неудачные вызовы.
+    usage = usage_from_response(resp, model)
+
     choice = resp.choices[0].message if resp.choices else None
     if choice is None or not choice.tool_calls:
         finish = resp.choices[0].finish_reason if resp.choices else "—"
-        return _Outcome(None, f"модель не вызвала tool: finish_reason={finish}")
+        return _Outcome(None, f"модель не вызвала tool: finish_reason={finish}", usage)
 
     tool_call = choice.tool_calls[0]
     # У Cerebras (OpenAI-формат) arguments — JSON-строка, не dict
@@ -453,18 +459,18 @@ def _call_llm(
     try:
         tool_input = json.loads(tool_call.function.arguments)
     except json.JSONDecodeError as e:
-        return _Outcome(None, f"невалидный JSON в tool_call.arguments: {e}")
+        return _Outcome(None, f"невалидный JSON в tool_call.arguments: {e}", usage)
 
     try:
         parsed = AnalysisResult.model_validate(tool_input)
     except ValidationError as e:
-        return _Outcome(None, f"Pydantic validation failed: {e}")
+        return _Outcome(None, f"Pydantic validation failed: {e}", usage)
 
     # Если ТЗ нет — принудительно low, даже если модель забыла.
     if tz_text is None and parsed.analysis_confidence != "low":
         parsed = parsed.model_copy(update={"analysis_confidence": "low"})
 
-    return _Outcome(parsed)
+    return _Outcome(parsed, usage=usage)
 
 
 # === Точка входа из пайплайна ===
@@ -584,6 +590,8 @@ def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
             return True
 
     outcome = _call_llm(lot, announcement, tz_text)
+    # Учитываем токены, даже если результат не распарсился: вызов был платный.
+    record_call(session, "analyze", outcome.usage, lot_id=lot.id)
     if outcome.result is None:
         # Не создаём запись на ошибку — иначе при следующем прогоне с
         # работающим ключом мы её не переанализируем (идемпотентность).
@@ -722,12 +730,13 @@ def _chat_system_message(lot: Lot) -> str:
     return "\n".join(lines)
 
 
-def chat_about_lot(lot: Lot, history: list[dict]) -> str:
-    """Один поворот чата: возвращает ответ ассистента.
+def chat_about_lot(lot: Lot, history: list[dict]) -> tuple[str, dict | None]:
+    """Один поворот чата: возвращает (ответ ассистента, usage-токены).
 
     history — список сообщений вида [{"role": "user"|"assistant", "content": str}, ...].
     Последнее сообщение должно быть от user (это и есть текущий вопрос).
-    Бросает RuntimeError при проблемах с API/ключом.
+    Бросает RuntimeError при проблемах с API/ключом. usage может быть None
+    (старый SDK без поля) — учёт расхода тогда просто пропускает этот вызов.
     """
     if not history:
         raise RuntimeError("пустая история")
@@ -759,7 +768,7 @@ def chat_about_lot(lot: Lot, history: list[dict]) -> str:
     content = resp.choices[0].message.content
     if not content:
         raise RuntimeError("модель вернула пустой content")
-    return content
+    return content, usage_from_response(resp, model)
 
 
 # Машинные коды → русские подписи для UI.
