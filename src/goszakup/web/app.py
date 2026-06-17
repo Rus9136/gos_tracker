@@ -1127,7 +1127,7 @@ def matched_page(
             select(UserLotMatch, Lot, UserQuery)
             .join(Lot, UserLotMatch.lot_id == Lot.id)
             .join(UserQuery, UserLotMatch.user_query_id == UserQuery.id)
-            .options(selectinload(Lot.customer))
+            .options(selectinload(Lot.customer), selectinload(Lot.announcement))
             .where(
                 UserLotMatch.user_query_id.in_(query_ids),
                 UserLotMatch.matched.is_(True),

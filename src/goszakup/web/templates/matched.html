@@ -33,6 +33,7 @@
         <th>Лот</th>
         <th style="width:200px">Заказчик</th>
         <th class="num" style="width:130px">Сумма ₸</th>
+        <th style="width:130px">До конца приёма</th>
         <th>Почему подходит</th>
         <th style="width:150px">Запрос</th>
       </tr>
@@ -49,11 +50,20 @@
         </td>
         <td class="dim" style="font-size:13px">{{ lot.customer.name if lot.customer else '—' }}</td>
         <td class="num mono">{{ lot.plan_amount|n }}</td>
+        <td>
+          {% set deadline = lot.announcement.application_end if lot.announcement else None %}
+          {% if deadline %}
+            <span class="gz-countdown mono" data-deadline="{{ deadline|iso }}"
+                  title="Окончание приёма заявок: {{ deadline|dt }}"></span>
+          {% else %}
+            <span class="dimer">—</span>
+          {% endif %}
+        </td>
         <td class="dim" style="font-size:13px;max-width:360px">{{ m.reason or '—' }}</td>
         <td class="dim" style="font-size:12px">{{ q.name }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="dim" style="text-align:center;padding:24px">
+      <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">
         Подходящих лотов пока нет. Создайте запрос на вкладке
         <a href="/queries">«Мои запросы»</a> — матчинг идёт в фоне.
       </td></tr>
