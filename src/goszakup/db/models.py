@@ -90,6 +90,13 @@ class User(Base):
     regions: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
     it_categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
     min_amount: Mapped[int | None] = mapped_column(Integer)
+    # Telegram chat_id (numeric, в виде строки) для уведомлений о новых
+    # подходящих лотах. Пустой → уведомления не шлём. `notify_telegram` —
+    # тумблер: можно сохранить chat_id, но временно выключить рассылку.
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(40))
+    notify_telegram: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
 
@@ -418,6 +425,10 @@ class UserLotMatch(Base):
     matched_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
     matcher_version: Mapped[str] = mapped_column(String(40))
     query_version: Mapped[int] = mapped_column(Integer)
+    # Момент отправки Telegram-уведомления об этом матче. NULL = ещё не слали.
+    # Гарантирует «одно уведомление на пару (запрос, лот)» даже при
+    # переанализе лота, который заново триггерит match_actor. См. queue/notify.py.
+    notified_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
 
     query: Mapped[UserQuery] = relationship(back_populates="matches")
     lot: Mapped[Lot] = relationship()

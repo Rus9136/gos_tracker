@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -27,6 +27,7 @@ from ..classify.llm import (
 )
 from ..classify.usage import record_call
 from ..config import (
+    GZ_TELEGRAM_BOT_TOKEN,
     LLM_PRICE_INPUT_PER_MTOK,
     LLM_PRICE_OUTPUT_PER_MTOK,
     SECRET_KEY,
@@ -117,6 +118,8 @@ def _nav_active(request: Request) -> str:
         return "matched"
     if path.startswith("/queries"):
         return "queries"
+    if path.startswith("/settings"):
+        return "settings"
     if path.startswith("/presets"):
         return "presets"
     if path.startswith("/runs"):
@@ -1584,6 +1587,65 @@ def login_submit(
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    ok: str = "",
+    error: str = "",
+):
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            **_base_ctx(request, db, user),
+            # Без токена бот не настроен на сервере — покажем предупреждение,
+            # чтобы пользователь не думал, что у него что-то сломалось.
+            "bot_configured": bool(GZ_TELEGRAM_BOT_TOKEN),
+            "ok": ok,
+            "error": error,
+        },
+    )
+
+
+@app.post("/settings")
+def settings_save(
+    request: Request,
+    telegram_chat_id: str = Form(""),
+    notify_telegram: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    chat_id = telegram_chat_id.strip()
+    user.telegram_chat_id = chat_id or None
+    # Включать рассылку без chat_id бессмысленно — гасим тумблер.
+    user.notify_telegram = bool(notify_telegram) and bool(chat_id)
+    db.commit()
+    return RedirectResponse("/settings?ok=1", status_code=303)
+
+
+@app.post("/settings/test")
+def settings_test(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    from ..notify.telegram import send_message
+
+    if not user.telegram_chat_id:
+        return RedirectResponse("/settings?error=no_chat_id", status_code=303)
+    ok, err = send_message(
+        user.telegram_chat_id,
+        "✅ Тестовое сообщение от трекера тендеров. Уведомления подключены.",
+    )
+    if ok:
+        return RedirectResponse("/settings?ok=test", status_code=303)
+    return RedirectResponse(
+        f"/settings?error={quote(err or 'unknown')}", status_code=303
+    )
 
 
 def _parse_scope_form(

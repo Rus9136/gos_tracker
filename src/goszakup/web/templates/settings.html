@@ -1,0 +1,88 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Настройки — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Настройки</span></div>
+    <h1 class="page-title">Настройки</h1>
+    <div class="page-sub">
+      Уведомления в Telegram о новых лотах, подходящих под ваши запросы.
+    </div>
+  </div>
+</div>
+
+{% if ok == '1' %}
+<div class="card" style="margin-bottom:16px;border-color:var(--ok,#2e7d32)">
+  <div class="strong">{{ icon("check", 14) }} Сохранено</div>
+</div>
+{% elif ok == 'test' %}
+<div class="card" style="margin-bottom:16px;border-color:var(--ok,#2e7d32)">
+  <div class="strong">{{ icon("check", 14) }} Тестовое сообщение отправлено</div>
+  <div class="dim" style="font-size:13px;margin-top:4px">Проверьте чат с ботом в Telegram.</div>
+</div>
+{% elif error == 'no_chat_id' %}
+<div class="card" style="margin-bottom:16px;border-color:var(--danger,#c62828)">
+  <div class="strong">Сначала сохраните chat_id</div>
+</div>
+{% elif error %}
+<div class="card" style="margin-bottom:16px;border-color:var(--danger,#c62828)">
+  <div class="strong">Не удалось отправить</div>
+  <div class="dim" style="font-size:13px;margin-top:4px">{{ error }}</div>
+</div>
+{% endif %}
+
+{% if not bot_configured %}
+<div class="card" style="margin-bottom:16px;border-color:var(--warn,#ef6c00)">
+  <div class="strong">⚠️ Бот не настроен на сервере</div>
+  <div class="dim" style="font-size:13px;margin-top:4px">
+    Администратор не задал <span class="mono">GZ_TELEGRAM_BOT_TOKEN</span> в окружении.
+    Уведомления отправляться не будут, пока токен не добавлен.
+  </div>
+</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:16px">
+  <div class="strong" style="margin-bottom:6px">{{ icon("bell", 15) }} Telegram-уведомления</div>
+  <div class="dim" style="font-size:13px;margin-bottom:14px;line-height:1.5">
+    Как подключить:
+    <ol style="margin:6px 0 0 18px;padding:0">
+      <li>Откройте бота в Telegram и нажмите «Старт» (напишите ему любое сообщение).</li>
+      <li>Узнайте свой numeric <span class="mono">chat_id</span> — напишите боту
+        <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>,
+        он пришлёт ваш <span class="mono">Id</span>.</li>
+      <li>Вставьте этот <span class="mono">chat_id</span> ниже, включите тумблер и сохраните.</li>
+    </ol>
+  </div>
+
+  <form method="post" action="/settings" style="display:flex;flex-direction:column;gap:12px;padding:4px">
+    <label style="display:flex;flex-direction:column;gap:4px">
+      <span class="dim" style="font-size:13px">Telegram chat_id</span>
+      <input name="telegram_chat_id" class="input" style="max-width:280px"
+             value="{{ user.telegram_chat_id or '' }}"
+             placeholder="например, 123456789" inputmode="numeric">
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" name="notify_telegram" value="1"
+             {{ 'checked' if user.notify_telegram else '' }}>
+      <span>Присылать уведомления о новых подходящих лотах</span>
+    </label>
+    <div>
+      <button type="submit" class="btn">{{ icon("check", 14) }} Сохранить</button>
+    </div>
+  </form>
+</div>
+
+{% if user.telegram_chat_id %}
+<div class="card">
+  <div class="dim" style="font-size:13px;margin-bottom:10px">
+    Проверить связку — отправить тестовое сообщение на сохранённый chat_id.
+  </div>
+  <form method="post" action="/settings/test">
+    <button type="submit" class="btn ghost">{{ icon("bell", 14) }} Отправить тест</button>
+  </form>
+</div>
+{% endif %}
+
+{% endblock %}

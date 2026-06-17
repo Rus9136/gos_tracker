@@ -57,7 +57,10 @@
   `GZ_NO_AUTH=1` (выключает логин и работает под синтетическим админом —
   только для dev-машины, на проде НЕ ставить). Опционально: `GZ_LLM_MODEL`
   (дефолт `gpt-oss-120b`), **`GZ_REDIS_URL`** (Phase 3, дефолт
-  `redis://localhost:6379/0`).
+  `redis://localhost:6379/0`), **`GZ_TELEGRAM_BOT_TOKEN`** (бот для
+  уведомлений о новых матчах, правило #18; без него уведомления тихо
+  выключены), `GZ_PUBLIC_BASE_URL` (адрес UI для ссылки в уведомлении,
+  дефолт `https://gost.salemsoft.kz`).
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
@@ -119,8 +122,8 @@
     ВАЖНО: unit перечисляет очереди ЯВНО через `--queues` — при добавлении
     нового actor'а с новой очередью её надо дописать и в unit (live +
     шаблон `scripts/systemd/`), иначе задачи молча копятся в Redis.
-    Текущий список: daily, listing, detail, llm, matching (все с префиксом
-    `goszakup_`).
+    Текущий список: daily, listing, detail, llm, matching, notify (все с
+    префиксом `goszakup_`).
   - **`goszakup-redis` Docker-контейнер** (отдельный от хостового
     `shared-redis` на 6379, мы к нему не подключаемся — у него auth и его
     используют другие проекты). Запущен через `docker run -d --name
@@ -356,6 +359,23 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     fan-out использует outerjoin, а backfill терпит отсутствующего владельца
     (пустой scope = видит всё).
 
+18. **Telegram-уведомления о новых матчах — ТОЛЬКО на forward-потоке, не на
+    backfill.** Когда лот проанализирован и положительно сматчился
+    (`enqueue_matches_for_lot` → `match_actor(..., notify=True)`), ставится
+    `notify_actor` (очередь `goszakup_notify`), который шлёт сообщение в
+    Telegram владельцу запроса. Backfill (создание/правка запроса, кнопка
+    «Подобрать сейчас») зовёт `match_actor(notify=False)` — иначе при первом
+    запросе пользователю прилетела бы пачка по всем старым лотам. Дедуп — по
+    `UserLotMatch.notified_at` (NULL = не слали): actor идемпотентен,
+    переанализ лота не шлёт повторно. Не уходит, если `User.notify_telegram`
+    выключен / нет `User.telegram_chat_id` / нет `GZ_TELEGRAM_BOT_TOKEN` (в
+    этих случаях `notified_at` всё равно проставляется, чтобы не дёргать
+    повторно). Отправка (`notify/telegram.py`) defensive — не валит матчинг
+    (правило #7). chat_id пользователь сохраняет сам на `/settings` (ручной
+    ввод numeric id от @userinfobot, есть кнопка «Отправить тест»). Один
+    общий бот на сервис (`GZ_TELEGRAM_BOT_TOKEN` в `.env`). Очередь
+    `goszakup_notify` обязана быть в `--queues` воркера (см. выше).
+
 ## Где что лежит
 
 - `scraper/search.py` — listing-парсер, основа табличной выдачи. Не путать с
@@ -427,9 +447,25 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 - `classify/matcher.py` — LLM-matcher запроса против `tz_summary` (правило
   #17). `MATCHER_VERSION`, `match_and_save()` — паттерн `classify/llm.py`
   (strict tool, ретраи 429, ошибки не наружу).
-- `queue/matching.py` — `match_actor` (очередь `goszakup_matching`) +
-  `enqueue_matches_for_lot` (fan-out с pre-filter по scope) и
-  `enqueue_matches_for_query` (backfill).
+- `classify/usage.py` — учёт расхода токенов. `usage_from_response(resp,
+  model)` достаёт `prompt/completion/total_tokens` из ответа Cerebras;
+  `record_call(session, kind, usage, ...)` пишет строку `LlmCall` (defensive,
+  не роняет пайплайн — правило #7). Зовётся из трёх точек: `analyze_and_save`
+  (`kind="analyze"`), `match_and_save` (`kind="match"`), `web.app.lot_chat`
+  (`kind="chat"`). Учитываются ТОЛЬКО реальные вызовы — скипы по
+  идемпотентности, копии по simhash и rule-based строк не создают. Отчёт —
+  страница `/expenses` (admin), агрегация по дням/неделям/месяцам в Python
+  (dialect-независимо), стоимость — оценка по `config.LLM_PRICE_*` (на
+  free-tier Cerebras фактически $0).
+- `queue/matching.py` — `match_actor` (очередь `goszakup_matching`, флаг
+  `notify`) + `enqueue_matches_for_lot` (fan-out с pre-filter по scope,
+  `notify=True`) и `enqueue_matches_for_query` (backfill, `notify=False`).
+- `queue/notify.py` — `notify_actor` (очередь `goszakup_notify`): шлёт
+  Telegram по положительному матчу, дедуп по `UserLotMatch.notified_at`
+  (правило #18).
+- `notify/telegram.py` — defensive-обёртка над Bot API `sendMessage`
+  (`send_message(chat_id, text) -> (ok, error)`); `notify/render.py` —
+  сборка HTML-текста уведомления по лоту/матчу (с экранированием).
 - `scope.py` — `scope_conditions(user)` / `lot_in_scope(lot, user)` — единый
   источник правды для read-time scope (правило #15); используется и web,
   и matcher-fan-out'ом.

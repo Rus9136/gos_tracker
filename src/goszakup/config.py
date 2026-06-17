@@ -42,6 +42,17 @@ MIN_AMOUNT = 500_000
 LLM_PRICE_INPUT_PER_MTOK = float(os.environ.get("GZ_LLM_PRICE_INPUT", "0.25"))
 LLM_PRICE_OUTPUT_PER_MTOK = float(os.environ.get("GZ_LLM_PRICE_OUTPUT", "0.69"))
 
+# Токен Telegram-бота для уведомлений о новых подходящих лотах. Один общий бот
+# на весь сервис; каждый пользователь сохраняет свой chat_id в /settings. Если
+# не задан — уведомления тихо отключены (notify/telegram.py логирует и выходит).
+GZ_TELEGRAM_BOT_TOKEN = os.environ.get("GZ_TELEGRAM_BOT_TOKEN") or None
+
+# Публичный адрес UI — для ссылки на карточку лота в Telegram-уведомлении.
+# На проде это https://gost.salemsoft.kz; на dev можно переопределить.
+PUBLIC_BASE_URL = (
+    os.environ.get("GZ_PUBLIC_BASE_URL") or "https://gost.salemsoft.kz"
+).rstrip("/")
+
 # Секрет для подписи cookie-сессии (Starlette SessionMiddleware, форма входа
 # /login). На проде ОБЯЗАТЕЛЕН в .env — иначе при каждом рестарте генерится
 # новый и все сессии инвалидируются. Дефолт — только для dev/тестов.

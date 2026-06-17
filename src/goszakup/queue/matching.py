@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from ..classify.matcher import match_and_save
 from ..db.engine import SessionLocal
-from ..db.models import Lot, User, UserQuery
+from ..db.models import Lot, User, UserLotMatch, UserQuery
 from ..scope import lot_in_scope
 from .broker import broker  # noqa: F401 — импорт broker до actor'а обязателен
 
@@ -44,8 +44,14 @@ log = logging.getLogger(__name__)
     max_backoff=60_000,
     time_limit=2 * 60 * 1000,
 )
-def match_actor(user_query_id: int, lot_id: int) -> None:
-    """Посчитать матч одной пары (запрос × лот) и сохранить в UserLotMatch."""
+def match_actor(user_query_id: int, lot_id: int, notify: bool = False) -> None:
+    """Посчитать матч одной пары (запрос × лот) и сохранить в UserLotMatch.
+
+    `notify=True` (forward-поток: новый/переанализированный лот) ставит
+    Telegram-уведомление, если матч положительный и ещё не отправлялся.
+    Backfill (создание/правка запроса) зовёт с notify=False — иначе при
+    первом запросе пользователю прилетела бы пачка по всем старым лотам.
+    """
     with SessionLocal() as session:
         query = session.get(UserQuery, user_query_id)
         lot = session.get(Lot, lot_id)
@@ -53,6 +59,24 @@ def match_actor(user_query_id: int, lot_id: int) -> None:
             return
         if match_and_save(session, query, lot):
             session.commit()
+
+        if not notify:
+            return
+        # Берём текущее состояние матча и в случае идемпотентного скипа
+        # (match_and_save вернул False): лот мог быть переанализирован — матч
+        # уже есть, но уведомление по нему ещё не уходило (notified_at IS NULL).
+        match = session.scalar(
+            select(UserLotMatch).where(
+                UserLotMatch.user_query_id == query.id,
+                UserLotMatch.lot_id == lot.id,
+            )
+        )
+        if match is not None and match.matched and match.notified_at is None:
+            # Импорт здесь, чтобы matching.py грузился без notify-зависимостей
+            # (httpx) в путях, где уведомления не нужны.
+            from .notify import notify_actor
+
+            notify_actor.send(match.id)
 
 
 def enqueue_matches_for_lot(session: Session, lot: Lot) -> int:
@@ -74,7 +98,9 @@ def enqueue_matches_for_lot(session: Session, lot: Lot) -> int:
     for query, user in rows:
         if not lot_in_scope(lot, user):
             continue
-        match_actor.send(query.id, lot.id)
+        # notify=True: это forward-поток (лот только что проанализирован) —
+        # положительный матч превратится в Telegram-уведомление.
+        match_actor.send(query.id, lot.id, notify=True)
         n += 1
     if n:
         log.info("fan-out: lot %s -> %d queries", lot.id, n)

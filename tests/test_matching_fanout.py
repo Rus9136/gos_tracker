@@ -23,7 +23,9 @@ def test_actor_queue_follows_naming_convention():
 def sent(monkeypatch):
     calls: list[tuple[int, int]] = []
     monkeypatch.setattr(
-        matching_mod.match_actor, "send", lambda qid, lid: calls.append((qid, lid))
+        matching_mod.match_actor,
+        "send",
+        lambda qid, lid, notify=False: calls.append((qid, lid)),
     )
     return calls
 
@@ -57,6 +59,22 @@ def test_fanout_respects_scope_and_active(db_session, sent):
 
     assert n == 1
     assert sent == [(q_in.id, lot.id)]
+
+
+def test_fanout_passes_notify_true(db_session, monkeypatch):
+    """Forward-поток (новый лот) ставит match_actor с notify=True —
+    положительный матч превратится в Telegram-уведомление."""
+    lot, *_ = _seed(db_session)
+    captured: list[bool] = []
+    monkeypatch.setattr(
+        matching_mod.match_actor,
+        "send",
+        lambda qid, lid, notify=False: captured.append(notify),
+    )
+
+    enqueue_matches_for_lot(db_session, lot)
+
+    assert captured == [True]
 
 
 def test_fanout_keeps_dev_queries_without_user_row(db_session, sent):

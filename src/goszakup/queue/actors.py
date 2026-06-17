@@ -53,6 +53,9 @@ from .broker import REDIS_URL, broker  # noqa: F401 — импорт broker до
 # Импорт регистрирует match_actor в брокере (воркер грузит этот модуль) и
 # даёт fan-out хелпер для analyze_actor.
 from .matching import enqueue_matches_for_lot  # noqa: E402
+
+# Импорт регистрирует notify_actor (очередь goszakup_notify) в брокере.
+from .notify import notify_actor  # noqa: E402,F401
 from .rate_limit import make_http_session
 
 log = logging.getLogger(__name__)
