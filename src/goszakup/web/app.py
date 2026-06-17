@@ -98,6 +98,21 @@ templates.env.globals["status_tone"] = status_tone
 templates.env.globals["status_name"] = STATUS_NAMES.get
 
 
+def static_url(path: str) -> str:
+    # Cache-busting по mtime файла: при каждом изменении статики URL меняется,
+    # браузер перекачивает её, а не отдаёт устаревшую из кеша. __version__ для
+    # этого не годится — он не меняется между деплоями.
+    rel = path.lstrip("/")
+    try:
+        mtime = int((STATIC_DIR / rel).stat().st_mtime)
+    except OSError:
+        mtime = 0
+    return f"/static/{rel}?v={mtime}"
+
+
+templates.env.globals["static_url"] = static_url
+
+
 def _nav_active(request: Request) -> str:
     """Какой пункт sidebar подсветить для текущего URL."""
     path = request.url.path
