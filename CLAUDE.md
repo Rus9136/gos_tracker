@@ -67,7 +67,9 @@
   сети; без него диспетчер автоподачи выключен), `GZ_AUTOSUBMIT_WARMUP_LEAD`
   (за сколько секунд до open_at слать агенту задачу на прогрев, дефолт 300),
   `GZ_AUTOSUBMIT_INGEST_TOKEN` (общий токен для `POST /autosubmit/result` —
-  агент шлёт сюда RunResult; машинная авторизация, без него ingest выключен).
+  агент шлёт сюда RunResult; машинная авторизация, без него ingest выключен),
+  `GZ_AUTOSUBMIT_AGENT_TOKEN` (токен Linux→agent для `POST /run`, заголовок
+  `X-Agent-Token`; должен совпасть с `GZ_AGENT_TOKEN` на Windows-узле).
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
@@ -402,7 +404,11 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     KeyVault (AES-256-GCM) для чужих `.p12`/паролей/PIN, диспетчер задач агенту к
     `open_at`, статус-машина `Submission`, «выстрел» финального POST на httpx.
     **Цена в БД ШИФРУЕТСЯ** (`Submission.bid_enc`) — sealed-bid секретность.
-    Сам Windows-agent (Playwright+pywinauto+Tumar) — Phase 2. Очередь
+    Windows submit-agent (Phase 2) — **каркас в `agent/`** (отдельный деплой,
+    httpx+playwright+pywinauto, НЕ тащит пакет goszakup): сервер `POST /run`,
+    оркестрация прогрев→ожидание→визард→отчёт. «Сантехника» рабочая; UI-селекторы
+    визарда / окно Tumar / NCALayer-логин помечены `TODO(recon)` — заполняются по
+    живому конкурсу (`agent/RECON.md` + `agent/recon_dump.py`). Очередь
     `goszakup_autosubmit` обязана быть в `--queues` воркера.
 
 ## Где что лежит
@@ -508,6 +514,13 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   к `open_at` → ARMED; `apply_result` ← `RunResult`).
 - `queue/autosubmit.py` — `autosubmit_dispatch_actor` (очередь
   `goszakup_autosubmit`): таймер-диспетчер задач submit-agent'у.
+- `agent/` (корень репо, НЕ часть пакета goszakup) — Windows submit-agent
+  (правило #19, Phase 2). Отдельный деплой на Windows-узле. `server.py` (HTTP
+  `POST /run`/`GET /health`), `runner.py` (оркестрация), `wizard.py` (Playwright,
+  `TODO(recon)`), `tumar.py` (pywinauto окно цены, `TODO(recon)`), `report.py`
+  (отчёт на Linux), `protocol.py`/`timing.py` (зеркало `autosubmit/`), `RECON.md`
+  + `recon_dump.py` (снять данные с живого конкурса). Зависит только от
+  httpx+playwright+pywinauto.
 - `db/models.py` — 14 таблиц. `Organization` — общая для customer/organizer/supplier.
   `User` — учётка для входа (bcrypt-пароль, `is_admin`, scope-поля
   `regions`/`it_categories`/`min_amount`); данные с лотами не связаны FK
