@@ -60,7 +60,12 @@
   `redis://localhost:6379/0`), **`GZ_TELEGRAM_BOT_TOKEN`** (бот для
   уведомлений о новых матчах, правило #18; без него уведомления тихо
   выключены), `GZ_PUBLIC_BASE_URL` (адрес UI для ссылки в уведомлении,
-  дефолт `https://gost.salemsoft.kz`).
+  дефолт `https://gost.salemsoft.kz`). Автоподача заявок (правило #19,
+  `TENDER_AUTOSUBMIT_PLAN.md`): **`GZ_VAULT_MASTER_KEY`** (base64 от 32 байт —
+  мастер-ключ KeyVault для чужих .p12/паролей/PIN; без него обращение к Vault
+  падает), `GZ_AUTOSUBMIT_AGENT_URL` (адрес Windows submit-agent по приватной
+  сети; без него диспетчер автоподачи выключен), `GZ_AUTOSUBMIT_WARMUP_LEAD`
+  (за сколько секунд до open_at слать агенту задачу на прогрев, дефолт 300).
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
@@ -122,8 +127,8 @@
     ВАЖНО: unit перечисляет очереди ЯВНО через `--queues` — при добавлении
     нового actor'а с новой очередью её надо дописать и в unit (live +
     шаблон `scripts/systemd/`), иначе задачи молча копятся в Redis.
-    Текущий список: daily, listing, detail, llm, matching, notify (все с
-    префиксом `goszakup_`).
+    Текущий список: daily, listing, detail, llm, matching, notify,
+    autosubmit (все с префиксом `goszakup_`).
   - **`goszakup-redis` Docker-контейнер** (отдельный от хостового
     `shared-redis` на 6379, мы к нему не подключаемся — у него auth и его
     используют другие проекты). Запущен через `docker run -d --name
@@ -376,6 +381,22 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     общий бот на сервис (`GZ_TELEGRAM_BOT_TOKEN` в `.env`). Очередь
     `goszakup_notify` обязана быть в `--queues` воркера (см. выше).
 
+19. **Автоподача заявок — sealed-bid через «золотой клиент», крипто НЕ headless.**
+    Полный дизайн — `TENDER_AUTOSUBMIT_PLAN.md` + `TENDER_ECP_SIGNING_GUIDE.md`.
+    Цель — открытые конкурсы; главный фактор — **скорость** («кто первым подал —
+    выигрывает»). Установлено разведкой по HAR: (а) **пред-стейдж невозможен** —
+    кнопка «Подать» гейтится до `time_open`, весь визард идёт в гонке после
+    старта; (б) цена не подписывается, а **ГОСТ-шифруется** (sealed-bid конверт на
+    сертификат тендера) нативным **Tumar CSP** — поле `sign` считается внутри
+    закрытого CSP и оффлайн не реверсится. Поэтому крипто берём у эталонного
+    Tumar на **Windows submit-agent** (path A′), а не реализуем headless. Linux-
+    часть (`autosubmit/`, `vault/`, `queue/autosubmit.py`) — provider-agnostic:
+    KeyVault (AES-256-GCM) для чужих `.p12`/паролей/PIN, диспетчер задач агенту к
+    `open_at`, статус-машина `Submission`, «выстрел» финального POST на httpx.
+    **Цена в БД ШИФРУЕТСЯ** (`Submission.bid_enc`) — sealed-bid секретность.
+    Сам Windows-agent (Playwright+pywinauto+Tumar) — Phase 2. Очередь
+    `goszakup_autosubmit` обязана быть в `--queues` воркера.
+
 ## Где что лежит
 
 - `scraper/search.py` — listing-парсер, основа табличной выдачи. Не путать с
@@ -469,13 +490,26 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 - `scope.py` — `scope_conditions(user)` / `lot_in_scope(lot, user)` — единый
   источник правды для read-time scope (правило #15); используется и web,
   и matcher-fan-out'ом.
-- `db/models.py` — 12 таблиц. `Organization` — общая для customer/organizer/supplier.
+- `vault/` — KeyVault автоподачи (правило #19). `crypto.py` — AES-256-GCM
+  (мастер-ключ из `GZ_VAULT_MASTER_KEY`, ленивый — модуль грузится и без него).
+  `credentials.py` — `create_credential`/`decrypt_credential` поверх crypto.
+- `autosubmit/` — provider-agnostic ядро автоподачи (правило #19). `timing.py`
+  (NTP-упреждение + busy-wait к `open_at`), `fire.py` (httpx-«выстрел» финального
+  POST `ajax_public_application`), `rpc.py` (контракт Linux↔Windows agent),
+  `agent_client.py` (HTTP к agent'у), `scheduler.py` (`dispatch_due_submissions`
+  к `open_at` → ARMED; `apply_result` ← `RunResult`).
+- `queue/autosubmit.py` — `autosubmit_dispatch_actor` (очередь
+  `goszakup_autosubmit`): таймер-диспетчер задач submit-agent'у.
+- `db/models.py` — 14 таблиц. `Organization` — общая для customer/organizer/supplier.
   `User` — учётка для входа (bcrypt-пароль, `is_admin`, scope-поля
   `regions`/`it_categories`/`min_amount`); данные с лотами не связаны FK
   (изоляция read-time, правило #15).
   `LotAnalysis` — 1:1 к `Lot` через FK + UniqueConstraint.
   `UserQuery`/`UserLotMatch` — семантический подбор (правило #17); матчи
   уникальны по `(user_query_id, lot_id)`, удаление запроса каскадит матчи.
+  `ClientCredential`/`Submission` — автоподача (правило #19): зашифрованные
+  секреты клиента и запланированная/исполненная подача со статус-машиной
+  `SUBMISSION_STATUSES` (цена в `bid_enc` шифрованная).
 - `db/engine.py` — `init_db()` делает `create_all` + узкий `_ensure_columns()`
   для редких ALTER TABLE на legacy-БД. Это safety net; **канонические
   миграции** живут в `migrations/versions/` (Alembic). Engine создан с

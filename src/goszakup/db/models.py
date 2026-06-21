@@ -458,3 +458,117 @@ class LlmCall(Base):
     lot_id: Mapped[int | None] = mapped_column(BigInteger)
     user_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, index=True)
+
+
+# --- Автоподача заявок (TENDER_AUTOSUBMIT_PLAN.md) ------------------------------
+# Статус-машина Submission. Пред-стейдж невозможен (кнопка «Подать» гейтится до
+# time_open), поэтому весь визард идёт в гонке после открытия:
+#   PLANNED  — запланировано, ждём open_at
+#   ARMED    — агент прогрет (залогинен, на странице объявления, PIN разблокирован),
+#              ждёт появления кнопки «Подать заявку»
+#   FIRING   — визард выполняется (лоты→документы→шифрование цены→preview→подача)
+#   SUBMITTED— ajax_public_application принят сервером
+#   CONFIRMED— квитанция подтверждена (заявка в реестре поданных)
+#   FAILED   — ошибка на любом шаге
+#   SKIPPED  — отменено правилом (нет eligibility / отозвано)
+SUBMISSION_STATUSES = (
+    "PLANNED",
+    "ARMED",
+    "FIRING",
+    "SUBMITTED",
+    "CONFIRMED",
+    "FAILED",
+    "SKIPPED",
+)
+
+
+class ClientCredential(Base):
+    """Секреты клиента для подачи от его имени — всё шифровано (KeyVault, §8).
+
+    На диск/в БД попадает ТОЛЬКО шифртекст AES-256-GCM (vault/crypto.py) + nonce.
+    Три секрета: `.p12` signing-ключ (подпись/шифрование цены), пароль учётки
+    портала (двухфактор входа goszakup, гайд §2.4) и PIN ключа. Расшифровка —
+    в момент использования на Windows submit-agent, не на read-time UI.
+
+    БЕЗ связи с `User`/лотами: это операционная сущность подачи, отдельная от
+    multi-user-входа в UI. `iin_bin` — для человекочитаемой привязки и аудита.
+    """
+
+    __tablename__ = "client_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(200))
+    iin_bin: Mapped[str | None] = mapped_column(String(12), index=True)
+
+    p12_enc: Mapped[str] = mapped_column(Text)
+    p12_nonce: Mapped[str] = mapped_column(String(32))
+    portal_password_enc: Mapped[str] = mapped_column(Text)
+    portal_password_nonce: Mapped[str] = mapped_column(String(32))
+    key_pin_enc: Mapped[str | None] = mapped_column(Text)
+    key_pin_nonce: Mapped[str | None] = mapped_column(String(32))
+
+    active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False, index=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
+
+    submissions: Mapped[list[Submission]] = relationship(back_populates="credential")
+
+
+class Submission(Base):
+    """Запланированная автоподача заявки на конкурс и её исполнение.
+
+    Главное требование — СКОРОСТЬ: «кто первым подал — выигрывает». Пред-стейдж
+    черновика невозможен, поэтому весь визард выполняется в гонке после `open_at`
+    (см. TENDER_AUTOSUBMIT_PLAN.md §1). Статус-машина — `SUBMISSION_STATUSES`.
+
+    `bid_enc`/`bid_nonce` — ЗАШИФРОВАННЫЙ план цены `{lot_id: price}`. Цена в
+    sealed-bid секретна до вскрытия комиссией; держать её plaintext в нашей БД =
+    утечкой раскрыть ставку конкурентам. `lot_ids` (несекретно) — какие лоты
+    берём, для отображения/планирования.
+    """
+
+    __tablename__ = "submissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    credential_id: Mapped[int] = mapped_column(
+        ForeignKey("client_credentials.id"), index=True
+    )
+    # id объявления на goszakup (trd_buy_id) и опц. человекочитаемый номер.
+    anno_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    anno_number: Mapped[str | None] = mapped_column(String(40))
+
+    lot_ids: Mapped[list | None] = mapped_column(JSON_TYPE)
+    bid_enc: Mapped[str] = mapped_column(Text)
+    bid_nonce: Mapped[str] = mapped_column(String(32))
+
+    # Момент, когда «Подать заявку» становится доступной (цель гонки), и дедлайн.
+    open_at: Mapped[datetime] = mapped_column(TS_TYPE, index=True)
+    close_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+
+    status: Mapped[str] = mapped_column(
+        String(20), default="PLANNED", server_default="PLANNED",
+        nullable=False, index=True,
+    )
+    agent_node: Mapped[str | None] = mapped_column(String(80))
+    # id черновика заявки на портале (известен только после старта визарда).
+    app_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    armed_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    fired_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    submitted_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    confirmed_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    # Латентность от open_at до принятия сервером — метрика «успели/нет».
+    fire_latency_ms: Mapped[int | None] = mapped_column(Integer)
+    attempts: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
+    result: Mapped[dict | None] = mapped_column(JSON_TYPE)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
+
+    credential: Mapped[ClientCredential] = relationship(back_populates="submissions")

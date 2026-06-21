@@ -347,5 +347,119 @@ def match_backfill(
     typer.echo(f"query #{query_id}: {n} лотов {mode}")
 
 
+@app.command("create-credential")
+def create_credential_cmd(
+    label: str,
+    p12_path: str = typer.Option(..., "--p12", help="Путь к .p12/.pfx ключу клиента"),
+    iin_bin: str = typer.Option(None, "--iin-bin", help="ИИН/БИН клиента (для аудита)"),
+    notes: str = typer.Option(None, "--notes"),
+) -> None:
+    """Завести зашифрованную учётку клиента для автоподачи (KeyVault, §8).
+
+    Требует GZ_VAULT_MASTER_KEY. Пароль портала и PIN спрашиваются интерактивно —
+    в argv/историю не попадают.
+    """
+    from pathlib import Path
+
+    from .vault.credentials import create_credential
+
+    p12_bytes = Path(p12_path).read_bytes()
+    portal_password = typer.prompt("Пароль учётки портала goszakup", hide_input=True)
+    key_pin = typer.prompt("PIN ключа (Enter — пропустить)", default="", hide_input=True) or None
+
+    init_db()
+    with SessionLocal() as session:
+        cred = create_credential(
+            session,
+            label=label,
+            p12_bytes=p12_bytes,
+            portal_password=portal_password,
+            iin_bin=iin_bin,
+            key_pin=key_pin,
+            notes=notes,
+        )
+        session.commit()
+        typer.echo(f"учётка #{cred.id} '{label}' создана (секреты зашифрованы)")
+
+
+@app.command("plan-submission")
+def plan_submission_cmd(
+    credential_id: int,
+    anno_id: int,
+    open_at: str = typer.Option(
+        ..., help="ISO8601 момента открытия приёма, напр. 2026-07-01T05:00:00+00:00"
+    ),
+    lot: list[str] = typer.Option(
+        ..., "--lot", help="lot_id:price (можно несколько --lot)"
+    ),
+    close_at: str = typer.Option(None, help="ISO8601 дедлайна приёма (опц.)"),
+    anno_number: str = typer.Option(None, help="Человекочитаемый номер объявления"),
+) -> None:
+    """Запланировать автоподачу: лоты+цены (цена шифруется — sealed-bid), open_at."""
+    import json
+    from datetime import datetime
+
+    from .db.models import Submission
+    from .vault.crypto import encrypt_str
+
+    bids, lot_ids = [], []
+    for item in lot:
+        lid, price = item.split(":", 1)
+        bids.append({"lot_id": int(lid), "price": price.strip()})
+        lot_ids.append(int(lid))
+    bid_enc, bid_nonce = encrypt_str(json.dumps(bids))
+
+    init_db()
+    with SessionLocal() as session:
+        sub = Submission(
+            credential_id=credential_id,
+            anno_id=anno_id,
+            anno_number=anno_number,
+            lot_ids=lot_ids,
+            bid_enc=bid_enc,
+            bid_nonce=bid_nonce,
+            open_at=datetime.fromisoformat(open_at),
+            close_at=datetime.fromisoformat(close_at) if close_at else None,
+        )
+        session.add(sub)
+        session.commit()
+        typer.echo(
+            f"подача #{sub.id} запланирована: anno={anno_id}, лотов={len(lot_ids)}, open_at={open_at}"
+        )
+
+
+@app.command("autosubmit-dispatch")
+def autosubmit_dispatch_cmd(
+    sync: bool = typer.Option(
+        True, "--sync/--enqueue", help="Считать здесь (--sync) или поставить актора"
+    ),
+) -> None:
+    """Разослать агенту PLANNED-подачи, открывающиеся в ближайший warmup-lead."""
+    from . import config
+
+    init_db()
+    if not sync:
+        from .queue.autosubmit import autosubmit_dispatch_actor
+
+        autosubmit_dispatch_actor.send()
+        typer.echo("autosubmit dispatch: поставлено в очередь")
+        return
+
+    if not config.AUTOSUBMIT_AGENT_URL:
+        typer.echo("GZ_AUTOSUBMIT_AGENT_URL не задан — нечему слать RunRequest")
+        raise typer.Exit(1)
+
+    from .autosubmit.agent_client import AgentClient
+    from .autosubmit.scheduler import dispatch_due_submissions
+
+    with SessionLocal() as session:
+        armed = dispatch_due_submissions(
+            session,
+            AgentClient(config.AUTOSUBMIT_AGENT_URL),
+            warmup_lead=config.AUTOSUBMIT_WARMUP_LEAD,
+        )
+    typer.echo(f"autosubmit dispatch: отправлено {len(armed)} → ARMED {armed}")
+
+
 if __name__ == "__main__":
     app()

@@ -58,6 +58,17 @@ PUBLIC_BASE_URL = (
 # новый и все сессии инвалидируются. Дефолт — только для dev/тестов.
 SECRET_KEY = os.environ.get("GZ_SECRET_KEY") or "dev-insecure-change-me"
 
+# --- Автоподача заявок (TENDER_AUTOSUBMIT_PLAN.md) -----------------------------
+# Мастер-ключ KeyVault (.p12/пароли/PIN клиентов) читается напрямую в
+# vault/crypto.py из GZ_VAULT_MASTER_KEY (base64 от 32 байт). В проде должен
+# приходить из KMS/HSM. Без него обращение к Vault падает с понятной ошибкой.
+# Адрес Windows submit-agent по приватной сети (Tailscale/WireGuard). Без него
+# диспетчер автоподачи отключён (нечему слать RunRequest).
+AUTOSUBMIT_AGENT_URL = os.environ.get("GZ_AUTOSUBMIT_AGENT_URL") or None
+# За сколько секунд до open_at слать задачу агенту на прогрев (логин, страница
+# объявления, разблокировка PIN), чтобы к открытию он уже ждал кнопку «Подать».
+AUTOSUBMIT_WARMUP_LEAD = int(os.environ.get("GZ_AUTOSUBMIT_WARMUP_LEAD", "300"))
+
 # Задержка между HTTP-запросами (Crawl-delay из robots.txt goszakup).
 CRAWL_DELAY = 5.0
 

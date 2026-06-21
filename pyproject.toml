@@ -31,6 +31,13 @@ dependencies = [
     # из коробки, named queues, sync workers (наш scraper тоже sync).
     "dramatiq[redis]>=1.17",
     "redis>=5.0",
+    # Автоподача заявок (TENDER_AUTOSUBMIT_PLAN.md):
+    # cryptography — AES-256-GCM для KeyVault (.p12 + пароль портала + PIN);
+    # httpx — «выстрел» финального POST по тёплой сессии (быстрее requests на
+    # keep-alive/HTTP2) и RPC к Windows submit-agent. Раньше httpx был только
+    # в dev — теперь нужен в проде.
+    "cryptography>=42",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
