@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,8 @@ from sqlalchemy.orm import Session, selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import __version__
+from ..autosubmit.rpc import RunResult
+from ..autosubmit.scheduler import apply_result
 from ..classify.llm import (
     DEV_CATEGORY_LABELS,
     VENDOR_LOCK_LABELS,
@@ -27,6 +30,7 @@ from ..classify.llm import (
 )
 from ..classify.usage import record_call
 from ..config import (
+    AUTOSUBMIT_INGEST_TOKEN,
     GZ_TELEGRAM_BOT_TOKEN,
     LLM_PRICE_INPUT_PER_MTOK,
     LLM_PRICE_OUTPUT_PER_MTOK,
@@ -35,6 +39,7 @@ from ..config import (
 from ..db.engine import SessionLocal
 from ..db.models import (
     Announcement,
+    ClientCredential,
     Contract,
     Document,
     LlmCall,
@@ -44,6 +49,7 @@ from ..db.models import (
     Organization,
     Preset,
     ScrapeRun,
+    Submission,
     User,
     UserLotMatch,
     UserQuery,
@@ -143,6 +149,8 @@ def _nav_active(request: Request) -> str:
         return "ingest"
     if path.startswith("/scan"):
         return "scan"
+    if path.startswith("/submissions"):
+        return "submissions"
     if path.startswith("/users"):
         return "users"
     if path.startswith("/expenses"):
@@ -1195,6 +1203,70 @@ def runs_list(
     return templates.TemplateResponse(
         request, "runs.html", {**_base_ctx(request, db, user), "runs": runs}
     )
+
+
+@app.get("/submissions", response_class=HTMLResponse)
+def submissions_list(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Список автоподач со статусом и латентностью «выстрела» (правило #19).
+
+    Цену НЕ показываем — она зашифрована (sealed-bid). Только лоты/статус/тайминг.
+    """
+    rows = db.execute(
+        select(Submission, ClientCredential.label)
+        .join(ClientCredential, ClientCredential.id == Submission.credential_id)
+        .order_by(desc(Submission.open_at))
+        .limit(200)
+    ).all()
+    subs = [
+        {
+            "id": s.id,
+            "client": label,
+            "anno_id": s.anno_id,
+            "anno_number": s.anno_number,
+            "lot_ids": s.lot_ids or [],
+            "status": s.status,
+            "open_at": s.open_at,
+            "close_at": s.close_at,
+            "fired_at": s.fired_at,
+            "fire_latency_ms": s.fire_latency_ms,
+            "agent_node": s.agent_node,
+            "attempts": s.attempts,
+            "error": s.error,
+        }
+        for s, label in rows
+    ]
+    return templates.TemplateResponse(
+        request, "submissions.html", {**_base_ctx(request, db, user), "subs": subs}
+    )
+
+
+@app.post("/autosubmit/result")
+async def autosubmit_result(request: Request, db: Session = Depends(get_db)):
+    """Ingest RunResult от Windows submit-agent. Машинная авторизация по токену.
+
+    Не cookie-сессия (агент — не залогиненный пользователь). Сравнение токена —
+    constant-time. Без GZ_AUTOSUBMIT_INGEST_TOKEN ingest выключен.
+    """
+    if not AUTOSUBMIT_INGEST_TOKEN:
+        return JSONResponse({"error": "ingest disabled"}, status_code=503)
+    sent = request.headers.get("X-Autosubmit-Token", "")
+    if not hmac.compare_digest(sent, AUTOSUBMIT_INGEST_TOKEN):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        payload = await request.json()
+        result = RunResult.from_dict(payload)
+    except (ValueError, TypeError, KeyError) as e:
+        return JSONResponse({"error": f"bad payload: {e}"}, status_code=400)
+
+    sub = apply_result(db, result)
+    if sub is None:
+        return JSONResponse({"error": "submission not found"}, status_code=404)
+    return JSONResponse({"ok": True, "submission_id": sub.id, "status": sub.status})
 
 
 _LLM_KIND_LABELS = {"analyze": "Анализ ТЗ", "match": "Подбор", "chat": "Чат"}

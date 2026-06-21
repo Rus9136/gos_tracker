@@ -68,6 +68,10 @@ AUTOSUBMIT_AGENT_URL = os.environ.get("GZ_AUTOSUBMIT_AGENT_URL") or None
 # За сколько секунд до open_at слать задачу агенту на прогрев (логин, страница
 # объявления, разблокировка PIN), чтобы к открытию он уже ждал кнопку «Подать».
 AUTOSUBMIT_WARMUP_LEAD = int(os.environ.get("GZ_AUTOSUBMIT_WARMUP_LEAD", "300"))
+# Общий токен для ingest-эндпоинта `POST /autosubmit/result` (агент шлёт сюда
+# RunResult). Машинная аутентификация, не cookie-сессия. Без токена ingest
+# отключён (агенту некуда отчитываться через web).
+AUTOSUBMIT_INGEST_TOKEN = os.environ.get("GZ_AUTOSUBMIT_INGEST_TOKEN") or None
 
 # Задержка между HTTP-запросами (Crawl-delay из robots.txt goszakup).
 CRAWL_DELAY = 5.0

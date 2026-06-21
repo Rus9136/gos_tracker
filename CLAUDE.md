@@ -65,7 +65,9 @@
   мастер-ключ KeyVault для чужих .p12/паролей/PIN; без него обращение к Vault
   падает), `GZ_AUTOSUBMIT_AGENT_URL` (адрес Windows submit-agent по приватной
   сети; без него диспетчер автоподачи выключен), `GZ_AUTOSUBMIT_WARMUP_LEAD`
-  (за сколько секунд до open_at слать агенту задачу на прогрев, дефолт 300).
+  (за сколько секунд до open_at слать агенту задачу на прогрев, дефолт 300),
+  `GZ_AUTOSUBMIT_INGEST_TOKEN` (общий токен для `POST /autosubmit/result` —
+  агент шлёт сюда RunResult; машинная авторизация, без него ingest выключен).
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
@@ -120,6 +122,12 @@
     enqueue `expire_actor` → worker гасит `is_actual` у лотов с истёкшим
     сроком приёма заявок. Шаблоны юнитов — в `scripts/systemd/`. К goszakup
     не ходит, lock/rate-limit не нужны. См. правило #12.
+  - **`goszakup-autosubmit.timer` + `goszakup-autosubmit.service`**
+    (правило #19, шаблоны в `scripts/systemd/`) — `OnCalendar=minutely`, oneshot.
+    Делает `cli autosubmit-dispatch --enqueue` → `autosubmit_dispatch_actor`
+    (очередь `goszakup_autosubmit`) шлёт Windows submit-agent'у PLANNED-подачи,
+    открывающиеся в ближайший warmup-lead. Без `GZ_AUTOSUBMIT_AGENT_URL` актор
+    тихо выходит. Включать только когда Windows-agent (Phase 2) готов.
   - **`goszakup-worker.service`** (Phase 3, задеплоен 2026-05-20) —
     `dramatiq goszakup.queue.actors -p 2 -t 4`. Подключается к выделенному
     Redis-контейнеру `goszakup-redis` на `127.0.0.1:6380`. `ProtectHome=true`

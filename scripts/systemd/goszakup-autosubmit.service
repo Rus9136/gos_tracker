@@ -1,0 +1,15 @@
+[Unit]
+Description=Goszakup Tracker — разослать агенту подачи, открывающиеся в ближайший warmup-lead
+
+[Service]
+Type=oneshot
+User=rus
+Group=rus
+WorkingDirectory=/home/rus/projects/gos_tracker
+# enqueue autosubmit_dispatch_actor (очередь goszakup_autosubmit) — реальную
+# рассылку RunRequest агенту делает worker. Требует GZ_AUTOSUBMIT_AGENT_URL
+# (иначе актор тихо выходит) и наличие очереди goszakup_autosubmit в --queues.
+ExecStart=/home/rus/projects/gos_tracker/.venv/bin/python -m goszakup.cli autosubmit-dispatch --enqueue
+
+NoNewPrivileges=true
+TimeoutStartSec=2m

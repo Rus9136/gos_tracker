@@ -58,3 +58,27 @@ sudo journalctl -u goszakup-worker.service -f
 - 3-стейдж пайплайн (listing → detail → llm) исполняется параллельно
   с глобальным rate-limit на goszakup через Redis-mutex.
 
+ВАЖНО: при добавлении actor'а с новой очередью допиши её в `--queues` воркера
+(`goszakup-worker.service`), иначе задачи молча копятся. Текущий список включает
+`goszakup_autosubmit` (правило #19).
+
+## Установка autosubmit-юнитов (правило #19, Phase 2+)
+
+Диспетчер автоподачи. Включать **только когда готов Windows submit-agent** и в
+`.env` заданы `GZ_AUTOSUBMIT_AGENT_URL` (+ `GZ_VAULT_MASTER_KEY`,
+`GZ_AUTOSUBMIT_INGEST_TOKEN`). Без `GZ_AUTOSUBMIT_AGENT_URL` актор тихо выходит —
+безопасно держать таймер выключенным до готовности agent'а.
+
+```bash
+sudo cp scripts/systemd/goszakup-autosubmit.service /etc/systemd/system/
+sudo cp scripts/systemd/goszakup-autosubmit.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now goszakup-autosubmit.timer
+systemctl list-timers goszakup-autosubmit.timer
+```
+
+Ежеминутно: `cli autosubmit-dispatch --enqueue` → `autosubmit_dispatch_actor`
+(очередь `goszakup_autosubmit`) шлёт агенту PLANNED-подачи, открывающиеся в
+ближайший `GZ_AUTOSUBMIT_WARMUP_LEAD` (дефолт 300с). Агент отчитывается обратно
+на `POST /autosubmit/result`.
+

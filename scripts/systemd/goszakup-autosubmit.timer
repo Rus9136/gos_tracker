@@ -1,0 +1,13 @@
+[Unit]
+Description=Goszakup Tracker — ежеминутный диспетчер автоподачи заявок
+
+[Timer]
+# Ежеминутно: ставит агенту PLANNED-подачи, открывающиеся в ближайший
+# warmup-lead (дефолт 300с). Минутной гранулярности хватает — агент сам держит
+# точный момент «выстрела» к open_at; задача лишь успеть прогреть его заранее.
+OnCalendar=minutely
+Persistent=false
+Unit=goszakup-autosubmit.service
+
+[Install]
+WantedBy=timers.target

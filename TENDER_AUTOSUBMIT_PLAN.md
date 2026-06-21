@@ -96,11 +96,16 @@ Linux (наш репо, есть Dramatiq/Redis/Postgres)        Windows-узе�
 
 - **Phase 0 — recon (блокер):** снять live-HAR с пред-стейджем (п.3.1) и проверкой
   капчи (п.3.2) на тестовом/реальном конкурсе. Без этого фаза 2 не финализируется.
-- **Phase 1 — Linux-каркас (строим сейчас, provider-agnostic):**
-  модели `Tender(time_open/time_close/method/anno_id)`, `ClientCredential`
-  (.p12+пароль портала+PIN, шифр AES-256-GCM, гайд §8), `Submission` (статус-машина:
-  `PLANNED→PRESTAGING→STAGED→ARMED→FIRED→CONFIRMED/FAILED`); контракт RPC
-  Linux↔Windows; `fire()` на сыром httpx; NTP-выверенный планировщик.
+- **Phase 1 — Linux-каркас — ✅ ГОТОВО (ветка `feat/tender-autosubmit`):**
+  KeyVault (`vault/`, AES-256-GCM); модели `ClientCredential`/`Submission`
+  (статус-машина `PLANNED→ARMED→FIRING→SUBMITTED→CONFIRMED/FAILED/SKIPPED`,
+  цена в `bid_enc` шифрованная) + Alembic-миграция; `autosubmit/` (тайминг
+  NTP+busy-wait, `fire()` на httpx, RPC-контракт, диспетчер + `apply_result`);
+  актор `goszakup_autosubmit` + таймер; CLI `create-credential`/`plan-submission`/
+  `autosubmit-dispatch`; web — `GET /submissions` (admin) + `POST /autosubmit/result`
+  (ingest по токену). Всё провалидировано (E2E статус-машины, ingest через
+  TestClient, 124 теста). Осталось по Linux: авто-прогрев eligibility-справок,
+  алерты (Phase 4).
 - **Phase 2 — Windows submit-agent:** Playwright-логин+визард, pywinauto на окно
   цены Tumar, возврат session+appId. Триггерится RPC из Phase 1.
 - **Phase 3 — капча (если enforced):** пред-solve (2captcha/anti-captcha) с

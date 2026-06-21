@@ -1,0 +1,63 @@
+{% extends "_layout.html" %}
+{% block title %}Автоподачи — Goszakup Tracker{% endblock %}
+{% block content %}
+
+{% set tone = {
+  'PLANNED': 'muted', 'ARMED': 'info', 'FIRING': 'warn',
+  'SUBMITTED': 'ok', 'CONFIRMED': 'accent', 'FAILED': 'bad', 'SKIPPED': 'muted'
+} %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Автоподачи</span></div>
+    <h1 class="page-title">Автоподача заявок</h1>
+    <div class="page-sub">{{ subs|length }} последних • гонка к open_at, цена зашифрована (sealed-bid)</div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:48px">#</th>
+        <th>Клиент</th>
+        <th>Объявление</th>
+        <th>Лоты</th>
+        <th style="width:110px">Статус</th>
+        <th style="width:160px">Открытие</th>
+        <th class="num" style="width:110px">Латентность</th>
+        <th>Узел</th>
+        <th class="num">попыт.</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in subs %}
+      <tr>
+        <td class="mono dim">{{ s.id }}</td>
+        <td>{{ s.client }}</td>
+        <td class="mono" style="font-size:12.5px">
+          <a href="https://goszakup.gov.kz/ru/announce/index/{{ s.anno_id }}" target="_blank" rel="noopener">{{ s.anno_number or s.anno_id }}</a>
+        </td>
+        <td class="mono dim" style="font-size:12px">{{ s.lot_ids|join(', ') if s.lot_ids else '—' }}</td>
+        <td><span class="badge {{ tone.get(s.status, 'muted') }}">{{ s.status }}</span></td>
+        <td class="mono" style="font-size:12.5px">{{ s.open_at|dt }}</td>
+        <td class="num mono">
+          {% if s.fire_latency_ms is not none %}{{ s.fire_latency_ms }} мс
+          {% else %}<span class="dim">—</span>{% endif %}
+        </td>
+        <td class="dim" style="font-size:12px">{{ s.agent_node or '—' }}</td>
+        <td class="num mono dim">{{ s.attempts }}</td>
+      </tr>
+      {% if s.error %}
+      <tr><td></td><td colspan="8" class="bad" style="font-size:12px; padding-top:0">⚠ {{ s.error }}</td></tr>
+      {% endif %}
+      {% else %}
+      <tr><td colspan="9" class="dim" style="text-align:center; padding:32px">Автоподач пока нет</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% endblock %}
