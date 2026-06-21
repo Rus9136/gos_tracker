@@ -22,7 +22,11 @@ class AgentError(RuntimeError):
 @dataclass(frozen=True)
 class AgentClient:
     base_url: str
+    token: str | None = None
     timeout: float = 15.0
+
+    def _headers(self) -> dict[str, str]:
+        return {"X-Agent-Token": self.token} if self.token else {}
 
     def dispatch(self, req: RunRequest) -> dict:
         """Поставить агенту задачу на прогрев+гонку. Возвращает ack агента."""
@@ -30,6 +34,7 @@ class AgentClient:
             resp = httpx.post(
                 f"{self.base_url.rstrip('/')}/run",
                 json=req.to_dict(),
+                headers=self._headers(),
                 timeout=self.timeout,
             )
             resp.raise_for_status()

@@ -65,6 +65,9 @@ SECRET_KEY = os.environ.get("GZ_SECRET_KEY") or "dev-insecure-change-me"
 # Адрес Windows submit-agent по приватной сети (Tailscale/WireGuard). Без него
 # диспетчер автоподачи отключён (нечему слать RunRequest).
 AUTOSUBMIT_AGENT_URL = os.environ.get("GZ_AUTOSUBMIT_AGENT_URL") or None
+# Токен авторизации Linux→agent (`POST /run`, заголовок X-Agent-Token). Должен
+# совпасть с GZ_AGENT_TOKEN на Windows-узле. Защита в глубину поверх tailnet.
+AUTOSUBMIT_AGENT_TOKEN = os.environ.get("GZ_AUTOSUBMIT_AGENT_TOKEN") or None
 # За сколько секунд до open_at слать задачу агенту на прогрев (логин, страница
 # объявления, разблокировка PIN), чтобы к открытию он уже ждал кнопку «Подать».
 AUTOSUBMIT_WARMUP_LEAD = int(os.environ.get("GZ_AUTOSUBMIT_WARMUP_LEAD", "300"))

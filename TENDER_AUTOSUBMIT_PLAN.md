@@ -106,8 +106,14 @@ Linux (наш репо, есть Dramatiq/Redis/Postgres)        Windows-узе�
   (ingest по токену). Всё провалидировано (E2E статус-машины, ingest через
   TestClient, 124 теста). Осталось по Linux: авто-прогрев eligibility-справок,
   алерты (Phase 4).
-- **Phase 2 — Windows submit-agent:** Playwright-логин+визард, pywinauto на окно
-  цены Tumar, возврат session+appId. Триггерится RPC из Phase 1.
+- **Phase 2 — Windows submit-agent — 🟡 КАРКАС ГОТОВ (`agent/`):** самодостаточный
+  деплой (httpx+playwright+pywinauto, без пакета goszakup). Рабочее: HTTP-сервер
+  (`POST /run`/`GET /health`, токен X-Agent-Token), тайминг «выстрела», отчёт на
+  Linux (`/autosubmit/result`), оркестрация прогрев→ожидание→визард→отчёт,
+  обработка ошибок (любой сбой → FAILED+отчёт), финальный POST через тёплую
+  сессию браузера. Осталось заполнить из **live recon** (метки `TODO(recon)`):
+  UI-селекторы визарда, заголовок окна Tumar, автоматизация NCALayer-логина,
+  проверка reCAPTCHA. См. `agent/README.md`.
 - **Phase 3 — капча (если enforced):** пред-solve (2captcha/anti-captcha) с
   таймингом под `time_open`.
 - **Phase 4 — масштаб/надёжность:** мультиклиент, мониторинг, алерты, проверка

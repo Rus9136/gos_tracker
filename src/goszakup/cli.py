@@ -455,7 +455,7 @@ def autosubmit_dispatch_cmd(
     with SessionLocal() as session:
         armed = dispatch_due_submissions(
             session,
-            AgentClient(config.AUTOSUBMIT_AGENT_URL),
+            AgentClient(config.AUTOSUBMIT_AGENT_URL, token=config.AUTOSUBMIT_AGENT_TOKEN),
             warmup_lead=config.AUTOSUBMIT_WARMUP_LEAD,
         )
     typer.echo(f"autosubmit dispatch: отправлено {len(armed)} → ARMED {armed}")
