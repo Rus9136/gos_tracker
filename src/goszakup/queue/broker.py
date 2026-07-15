@@ -36,6 +36,17 @@ log = logging.getLogger(__name__)
 
 REDIS_URL = os.environ.get("GZ_REDIS_URL", "redis://localhost:6379/0")
 
+
+class _SecretKeyGuard(dramatiq.Middleware):
+    """Fail-fast на старте воркера с небезопасным SECRET_KEY (см. config).
+
+    Только `after_worker_boot` — срабатывает в реальном worker-процессе, не при
+    enqueue из web/CLI и не в тестах (там задачи не исполняет booted-воркер).
+    """
+
+    def after_worker_boot(self, broker, worker):  # noqa: ARG002
+        config.require_safe_secret_key("worker")
+
 # Без middleware Prometheus — нам пока хватает retries + time-limit.
 # AgeLimit добавит метку «не выполнять, если в очереди >24ч» — нужно
 # на случай, если worker лежит и сообщения не разбираются: лучше дропнуть
@@ -48,6 +59,7 @@ _DEFAULT_MIDDLEWARE = [
     Pipelines(),
     Retries(min_backoff=5_000, max_backoff=10 * 60 * 1000, max_retries=3),
     CurrentMessage(),
+    _SecretKeyGuard(),
 ]
 
 broker = RedisBroker(url=REDIS_URL, middleware=_DEFAULT_MIDDLEWARE)

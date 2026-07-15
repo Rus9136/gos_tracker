@@ -36,6 +36,7 @@ from ..config import (
     LLM_PRICE_OUTPUT_PER_MTOK,
     SECRET_KEY,
     TELEGRAM_WEBHOOK_SECRET,
+    require_safe_secret_key,
 )
 from ..db.engine import SessionLocal
 from ..db.models import (
@@ -169,6 +170,9 @@ setup_sentry("web")
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # Fail-fast: боевой web не должен подниматься на публичном dev-дефолте
+    # SECRET_KEY (иначе подделка cookie-сессии = обход auth). См. config.
+    require_safe_secret_key("web")
     # Плавная миграция прода: первый запуск с пустой users-таблицей и заданными
     # GZ_USER/GZ_PASSWORD заведёт админа из них. См. auth.seed_admin_from_env.
     db = SessionLocal()

@@ -63,7 +63,35 @@ PUBLIC_BASE_URL = (
 # Секрет для подписи cookie-сессии (Starlette SessionMiddleware, форма входа
 # /login). На проде ОБЯЗАТЕЛЕН в .env — иначе при каждом рестарте генерится
 # новый и все сессии инвалидируются. Дефолт — только для dev/тестов.
-SECRET_KEY = os.environ.get("GZ_SECRET_KEY") or "dev-insecure-change-me"
+_INSECURE_SECRET_DEFAULT = "dev-insecure-change-me"
+SECRET_KEY = os.environ.get("GZ_SECRET_KEY") or _INSECURE_SECRET_DEFAULT
+
+
+def secret_key_is_safe() -> bool:
+    """True, если GZ_SECRET_KEY задан и не равен публичному dev-дефолту."""
+    return SECRET_KEY != _INSECURE_SECRET_DEFAULT
+
+
+def _is_dev_mode() -> bool:
+    # GZ_NO_AUTH=1 — явный dev-режим без логина; GZ_TEST_MODE=1 ставит conftest.
+    return os.environ.get("GZ_NO_AUTH") == "1" or os.environ.get("GZ_TEST_MODE") == "1"
+
+
+def require_safe_secret_key(component: str) -> None:
+    """Fail-fast на старте боевого процесса с небезопасным SECRET_KEY.
+
+    Тихая деградация на публичный дефолт (репозиторий открыт) = обход auth:
+    любой подделает подписанную cookie с чужим uid. Поэтому web и worker
+    отказываются стартовать без реального ключа, кроме явного dev-режима.
+    """
+    if secret_key_is_safe() or _is_dev_mode():
+        return
+    raise RuntimeError(
+        f"{component}: GZ_SECRET_KEY не задан или равен небезопасному дефолту "
+        f"'{_INSECURE_SECRET_DEFAULT}'. Сгенерируйте случайный ключ "
+        "(openssl rand -hex 32) и задайте GZ_SECRET_KEY в .env. "
+        "Для локального dev-режима без логина — GZ_NO_AUTH=1."
+    )
 
 # --- Автоподача заявок (TENDER_AUTOSUBMIT_PLAN.md) -----------------------------
 # Мастер-ключ KeyVault (.p12/пароли/PIN клиентов) читается напрямую в
