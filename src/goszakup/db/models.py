@@ -480,6 +480,7 @@ SUBMISSION_STATUSES = (
     "CONFIRMED",
     "FAILED",
     "SKIPPED",
+    "UNKNOWN",  # выстрел ушёл, ответ не получен (ReadTimeout) — состояние неясно
 )
 
 

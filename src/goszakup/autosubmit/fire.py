@@ -28,6 +28,10 @@ class FireResult:
     latency_ms: int
     body: dict | str | None
     error: str | None = None
+    # unknown=True: POST ушёл, но ответ не получен (ReadTimeout/обрыв ПОСЛЕ
+    # отправки). Сервер мог принять заявку — состояние неизвестно, повторять
+    # НЕЛЬЗЯ (задвоит подачу). Наверх уходит как статус UNKNOWN + алерт.
+    unknown: bool = False
 
 
 def _is_success(body: dict | str | None) -> bool:
@@ -89,7 +93,20 @@ def fire(
                     body=body,
                     error=None if ok else "server rejected",
                 )
-            except httpx.HTTPError as e:  # сетевая ошибка — быстрый ретрай
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                # Соединение не установлено → запрос гарантированно НЕ ушёл,
+                # повтор безопасен (не задвоит подачу).
                 last_err = f"{type(e).__name__}: {e}"
                 continue
+            except httpx.HTTPError as e:
+                # ReadTimeout/обрыв ПОСЛЕ отправки: сервер мог уже принять заявку.
+                # Слепой ретрай задвоил бы подачу — НЕ ретраим, помечаем UNKNOWN.
+                return FireResult(
+                    ok=False,
+                    status_code=0,
+                    latency_ms=0,
+                    body=None,
+                    unknown=True,
+                    error=f"UNKNOWN: {type(e).__name__}: {e}",
+                )
     return FireResult(ok=False, status_code=0, latency_ms=0, body=None, error=last_err)
