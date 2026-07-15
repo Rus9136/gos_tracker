@@ -21,12 +21,18 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import AUTOSUBMIT_AGENT_URL, GZ_TELEGRAM_BOT_TOKEN, PUBLIC_BASE_URL
+from ..config import (
+    AUTOSUBMIT_AGENT_URL,
+    DOCS_DIR,
+    GZ_TELEGRAM_BOT_TOKEN,
+    PUBLIC_BASE_URL,
+)
 from ..db.models import User, UserLotMatch
 
 log = logging.getLogger(__name__)
@@ -40,7 +46,34 @@ MATCH_STALE_HOURS = int(os.environ.get("GZ_HEALTH_MATCH_STALE_HOURS", "48"))
 # без этого за две недели прилетело бы 300+ сообщений.
 ALERT_COOLDOWN_S = int(os.environ.get("GZ_HEALTH_ALERT_COOLDOWN", str(6 * 3600)))
 
+# Порог свободного места под скачиваемые ТЗ. `data/docs/` растёт неограниченно
+# (retention гасит только старьё), а переполнение диска рушит скачивание молча.
+DISK_MIN_FREE_GB = float(os.environ.get("GZ_HEALTH_DISK_MIN_FREE_GB", "1.0"))
+
 _ALERT_KEY = "goszakup:health:alerted"
+
+
+def check_redis() -> tuple[bool, str | None]:
+    """Пинг Redis. Он держит очередь Dramatiq, rate-limit и счётчики прогонов —
+    если он лёг, весь пайплайн молча стоит (актёры не исполняются)."""
+    try:
+        import redis
+    except ImportError:
+        return False, "redis-py не установлен"
+    url = os.environ.get("GZ_REDIS_URL", "redis://localhost:6379/0")
+    try:
+        redis.Redis.from_url(url, socket_connect_timeout=3, socket_timeout=3).ping()
+    except Exception as e:  # noqa: BLE001 — любой отказ = «недоступен»
+        return False, f"{type(e).__name__}: {e}"
+    return True, None
+
+
+def disk_free_gb(path) -> float | None:
+    """Свободно ГБ на разделе с документами. None — путь недоступен."""
+    try:
+        return shutil.disk_usage(str(path)).free / (1024**3)
+    except OSError:
+        return None
 
 # Срок лицензии Tumar apiKey (из HAR-разведки, TENDER_AUTOSUBMIT_PLAN.md §).
 # Крипто-подпись и ГОСТ-шифрование цены в автоподаче завязаны на валидный
@@ -117,6 +150,19 @@ def collect_problems(session: Session) -> list[str]:
     ok, err = check_llm()
     if not ok:
         problems.append(f"❌ LLM (Cerebras) не отвечает: {err}")
+
+    ok, err = check_redis()
+    if not ok:
+        problems.append(
+            f"❌ Redis недоступен: {err} — очередь, rate-limit и прогоны стоят"
+        )
+
+    free = disk_free_gb(DOCS_DIR)
+    if free is not None and free < DISK_MIN_FREE_GB:
+        problems.append(
+            f"⚠️ Мало места под документы: {free:.1f} ГБ свободно "
+            f"(порог {DISK_MIN_FREE_GB} ГБ) — скачивание ТЗ может встать"
+        )
 
     if MATCH_STALE_HOURS > 0:
         age = match_age_hours(session)

@@ -15,6 +15,14 @@ from goszakup.db.models import Announcement, Lot, User, UserLotMatch, UserQuery
 from goszakup.jobs import health
 
 
+@pytest.fixture(autouse=True)
+def _healthy_infra(monkeypatch):
+    # По умолчанию Redis/диск здоровы — иначе новые проверки шумели бы во всех
+    # существующих тестах collect_problems. Тесты про них переопределяют это.
+    monkeypatch.setattr(health, "check_redis", lambda: (True, None))
+    monkeypatch.setattr(health, "disk_free_gb", lambda p: 100.0)
+
+
 @pytest.fixture
 def seeded(db_session):
     db_session.execute(UserLotMatch.__table__.delete())
@@ -143,6 +151,28 @@ def test_tumar_license_valid_far(monkeypatch):
 def test_tumar_license_disabled(monkeypatch):
     monkeypatch.setattr(health, "TUMAR_LICENSE_EXPIRES", "")
     assert health.tumar_license_problem(now=_NOW) is None
+
+
+def test_redis_down_is_reported(seeded, monkeypatch):
+    monkeypatch.setattr(health, "check_llm", lambda: (True, None))
+    monkeypatch.setattr(health, "check_redis", lambda: (False, "ConnectionError: refused"))
+    problems = health.collect_problems(seeded)
+    assert any("Redis" in p for p in problems)
+
+
+def test_low_disk_is_reported(seeded, monkeypatch):
+    monkeypatch.setattr(health, "check_llm", lambda: (True, None))
+    monkeypatch.setattr(health, "disk_free_gb", lambda p: 0.2)
+    monkeypatch.setattr(health, "DISK_MIN_FREE_GB", 1.0)
+    problems = health.collect_problems(seeded)
+    assert any("Мало места" in p for p in problems)
+
+
+def test_ample_disk_not_reported(seeded, monkeypatch):
+    monkeypatch.setattr(health, "check_llm", lambda: (True, None))
+    monkeypatch.setattr(health, "disk_free_gb", lambda p: 50.0)
+    monkeypatch.setattr(health, "DISK_MIN_FREE_GB", 1.0)
+    assert not any("Мало места" in p for p in health.collect_problems(seeded))
 
 
 def test_tumar_gated_on_autosubmit_configured(seeded, monkeypatch):
