@@ -67,31 +67,56 @@ def dispatch_due_submissions(
     """
     now = now or datetime.now(UTC)
     horizon = now + timedelta(seconds=warmup_lead)
-    rows = session.scalars(
-        select(Submission).where(
-            Submission.status == "PLANNED",
-            Submission.open_at <= horizon,
-        )
+    is_pg = session.bind.dialect.name == "postgresql"
+
+    candidate_ids = session.scalars(
+        select(Submission.id)
+        .where(Submission.status == "PLANNED", Submission.open_at <= horizon)
+        .order_by(Submission.open_at)
     ).all()
 
     armed: list[int] = []
-    for sub in rows:
+    for sub_id in candidate_ids:
+        # Claim: заблокировать строку и перечитать статус, чтобы параллельный тик
+        # диспетчера или редоставка actor'а не подхватили ту же подачу. На PG —
+        # FOR UPDATE SKIP LOCKED (конкурентный тик пропустит занятую строку); на
+        # SQLite (dev/тест) писатель один, обычный SELECT достаточен.
+        claim = select(Submission).where(
+            Submission.id == sub_id, Submission.status == "PLANNED"
+        )
+        if is_pg:
+            claim = claim.with_for_update(skip_locked=True)
+        sub = session.scalar(claim)
+        if sub is None:
+            continue  # уже застолблена другим тиком либо больше не PLANNED
+
+        # DISPATCHING коммитим ДО отправки агенту. Краш между отправкой и ARMED
+        # оставит подачу в DISPATCHING (не PLANNED) — следующий тик её НЕ отправит
+        # повторно. В домене «кто первый подал — выиграл» двойная заявка дороже
+        # пропущенной, поэтому выбираем «в худшем случае не подали».
         sub.attempts += 1
+        sub.status = "DISPATCHING"
+        session.commit()
+
         try:
             agent.dispatch(build_run_request(sub))
         except AgentError as e:
-            log.warning("autosubmit dispatch #%s failed (attempt %s): %s", sub.id, sub.attempts, e)
+            log.warning(
+                "autosubmit dispatch #%s failed (attempt %s): %s", sub.id, sub.attempts, e
+            )
             sub.error = str(e)
-            if sub.attempts >= MAX_DISPATCH_ATTEMPTS:
-                sub.status = "FAILED"
+            # Возврат в PLANNED — следующий тик повторит; после лимита — FAILED.
+            sub.status = "FAILED" if sub.attempts >= MAX_DISPATCH_ATTEMPTS else "PLANNED"
+            session.commit()
             continue
+
         sub.status = "ARMED"
         sub.armed_at = now
         sub.agent_node = agent_node
         sub.error = None
+        session.commit()
         armed.append(sub.id)
 
-    session.commit()
     if armed:
         log.info("autosubmit armed: %s", armed)
     return armed

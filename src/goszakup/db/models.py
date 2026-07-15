@@ -473,6 +473,7 @@ class LlmCall(Base):
 #   SKIPPED  — отменено правилом (нет eligibility / отозвано)
 SUBMISSION_STATUSES = (
     "PLANNED",
+    "DISPATCHING",  # застолблена диспетчером, задача уходит агенту (claim до отправки)
     "ARMED",
     "FIRING",
     "SUBMITTED",
