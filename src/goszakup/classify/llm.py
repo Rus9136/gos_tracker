@@ -385,6 +385,22 @@ class _Outcome:
     usage: dict | None = None
 
 
+# Маркеры транзиентных отказов (по типу исключения и тексту) — ретраим их.
+# Детерминированные (401/403/400/invalid) сюда НЕ попадают: повтор не помогает.
+_RETRYABLE_LLM_MARKERS = (
+    "429", "queue_exceeded", "too_many_requests", "rate_limit", "rate limit",
+    "500", "502", "503", "504",
+    "internalserver", "internal server", "service unavailable", "serviceunavailable",
+    "bad gateway", "gateway timeout", "overloaded", "temporarily unavailable",
+    "timeout", "timed out", "connection", "connect", "econnreset", "reset by peer",
+)
+
+
+def _is_retryable_llm_error(e: Exception) -> bool:
+    text = f"{type(e).__name__} {e}".lower()
+    return any(m in text for m in _RETRYABLE_LLM_MARKERS)
+
+
 def _call_llm(
     lot: Lot, announcement: Announcement | None, tz_text: str | None
 ) -> _Outcome:
@@ -402,8 +418,9 @@ def _call_llm(
 
     user_msg = _build_user_message(lot, announcement, tz_text)
 
-    # Cerebras free-tier при бурстах отдаёт 429 «queue_exceeded». Ретраим с
-    # бэкоффом — иначе массовый прогон теряет 10-20% лотов на ровном месте.
+    # Транзиентные отказы провайдера (429 бурст free-tier, 5xx, таймауты,
+    # обрывы соединения) ретраим с бэкоффом — иначе массовый прогон теряет
+    # пачку лотов на ровном месте, а восстановление возможно только вручную.
     _RETRY_DELAYS = (5.0, 15.0, 30.0)
 
     resp = None
@@ -435,14 +452,16 @@ def _call_llm(
             break  # успех — выходим из ретрая
         except Exception as e:
             last_err = e
-            # Только 429/queue_exceeded ретраим. Прочие ошибки — сразу наружу.
-            msg = str(e)
-            if "429" in msg or "queue_exceeded" in msg or "too_many_requests" in msg:
+            # Транзиентные — ретраим; детерминированные (401/400/невалидный
+            # запрос) сразу наружу, повтор не поможет.
+            if _is_retryable_llm_error(e):
                 continue
             return _Outcome(None, f"Cerebras API call failed: {e}")
 
     if resp is None:
-        return _Outcome(None, f"Cerebras API: 429 после {len(_RETRY_DELAYS)} ретраев: {last_err}")
+        return _Outcome(
+            None, f"Cerebras API: транзиентный отказ после {len(_RETRY_DELAYS)} ретраев: {last_err}"
+        )
 
     # Токены списаны вне зависимости от того, распарсился ли результат — usage
     # тащим во все ветки ниже, чтобы учёт расходов не терял неудачные вызовы.
