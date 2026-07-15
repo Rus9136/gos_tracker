@@ -57,6 +57,26 @@ def test_second_call_blocks_until_ttl(fake_redis, monkeypatch):
     assert fake_redis.exists(LIMIT_KEY)
 
 
+def test_lock_held_longer_than_request_then_released(fake_redis):
+    # Лок должен перекрывать весь запрос (иначе истечёт в полёте медленного
+    # запроса и второй worker стартует параллельно), а после — окно = delay.
+    sess = RedisThrottledSession(fake_redis, delay=5.0)
+    captured = {}
+
+    class _FakeSession:
+        headers: dict = {}
+
+        def get(self, url, **kwargs):
+            captured["ttl_during"] = fake_redis.ttl(LIMIT_KEY)
+            return "resp"
+
+    sess.session = _FakeSession()
+    sess.get("http://x", timeout=30)
+
+    assert captured["ttl_during"] > 5  # держится дольше delay (перекрывает timeout=30)
+    assert 4 <= fake_redis.ttl(LIMIT_KEY) <= 5  # после запроса окно до след. слота = delay
+
+
 def test_make_http_session_falls_back_without_redis():
     # redis_client=None — должен вернуть простой ThrottledSession.
     sess = make_http_session(None)
