@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..classify.it import classify
@@ -105,6 +106,33 @@ def _ensure_announcement_stub(session: Session, anno_id: int, url: str) -> None:
         session.flush()
 
 
+def _get_or_insert_lot(session: Session, hit: ListingHit) -> tuple[Lot, bool]:
+    """Вернуть (lot, created). Гонку insert'а (параллельный прогон — daily vs
+    /scan с пересекающимися kato — вставил тот же лот) переживаем через savepoint:
+    на Postgres второй INSERT c тем же PK даёт IntegrityError, и без изоляции он
+    откатывал бы ВЕСЬ оставшийся Phase-1 листинг (P0 №4). begin_nested откатывает
+    только эту вставку, после чего продолжаем как update существующего лота.
+    """
+    lot = session.get(Lot, hit.lot_id)
+    if lot is not None:
+        return lot, False
+    for _ in range(2):
+        try:
+            with session.begin_nested():
+                # FK на announcements строгий в Postgres — родитель ДО лота.
+                _ensure_announcement_stub(session, hit.announcement_id, hit.announcement_url)
+                lot = Lot(id=hit.lot_id, url=hit.announcement_url)
+                session.add(lot)
+                session.flush()
+            return lot, True
+        except IntegrityError:
+            existing = session.get(Lot, hit.lot_id)
+            if existing is not None:
+                return existing, False
+            # Конфликт был только по stub объявления — теперь он есть, повторяем.
+    raise RuntimeError(f"upsert лота {hit.lot_id}: не удалось вставить после гонки")
+
+
 def _upsert_lot_from_listing(
     session: Session,
     hit: ListingHit,
@@ -113,13 +141,8 @@ def _upsert_lot_from_listing(
     on_new: list[ListingHit],
     on_status_change: list[tuple[ListingHit, int | None]],
 ) -> Lot:
-    lot = session.get(Lot, hit.lot_id)
-    is_new = lot is None
-    if lot is None:
-        # FK на announcements строгий в Postgres — обеспечиваем родителя ДО insert'а лота.
-        _ensure_announcement_stub(session, hit.announcement_id, hit.announcement_url)
-        lot = Lot(id=hit.lot_id, url=hit.announcement_url)
-        session.add(lot)
+    lot, is_new = _get_or_insert_lot(session, hit)
+    if is_new:
         on_new.append(hit)
 
     prev_status = lot.status_code
