@@ -24,6 +24,35 @@ from .runner import run
 
 log = logging.getLogger(__name__)
 
+# Дедуп подач по submission_id (P0-3b). Диспетчер на Linux может отправить /run
+# повторно (редоставка actor'а, ретрай после ложного таймаута) — второй прогон
+# той же подачи запустил бы ВТОРУЮ гонку и подал бы заявку дважды. Реестр держит
+# state по submission_id на время жизни процесса; повторный /run с тем же id не
+# стартует новый поток. Терминальный state остаётся — повторную подачу уже
+# завершённой заявки тоже не запускаем.
+_active_lock = threading.Lock()
+_active: dict[int, str] = {}
+
+
+def _run_and_track(req: RunRequest) -> None:
+    try:
+        run(req)
+    finally:
+        with _active_lock:
+            _active[req.submission_id] = "done"
+
+
+def _accept_run(req: RunRequest) -> bool:
+    """True — запущен новый прогон; False — дубль (submission_id уже принят)."""
+    with _active_lock:
+        if req.submission_id in _active:
+            return False
+        _active[req.submission_id] = "running"
+    threading.Thread(
+        target=_run_and_track, args=(req,), name=f"submit-{req.submission_id}", daemon=True
+    ).start()
+    return True
+
 
 class _Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, payload: dict) -> None:
@@ -60,7 +89,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": f"bad payload: {e}"})
             return
 
-        threading.Thread(target=run, args=(req,), name=f"submit-{req.submission_id}", daemon=True).start()
+        if not _accept_run(req):
+            log.info("run #%s уже принят — дубль /run игнорирован", req.submission_id)
+            with _active_lock:
+                state = _active.get(req.submission_id, "unknown")
+            self._send(
+                200,
+                {"ack": True, "submission_id": req.submission_id, "duplicate": True, "state": state},
+            )
+            return
         log.info("accepted run #%s (anno=%s)", req.submission_id, req.anno_id)
         self._send(202, {"ack": True, "submission_id": req.submission_id})
 
