@@ -186,15 +186,36 @@ def iter_listing(
                 log.info("listing total: %s", total)
 
         new_in_page = 0
+        # Строки, которые ЯВНО про лот (есть ссылка на объявление), но не
+        # распарсились — признак смены вёрстки goszakup (позиционные tds[0..6]
+        # поехали). Раньше это было тихо: парсер возвращал 0, пагинация
+        # останавливалась, прогон «успешно» завершался с нулём (P0 №7).
+        candidate_rows = 0
         for tr in soup.find_all("tr"):
             hit = _parse_row(tr)
-            if hit is None or hit.lot_id in seen:
+            if hit is None:
+                if tr.find("a", href=re.compile(r"/ru/announce/index/")):
+                    candidate_rows += 1
+                continue
+            if hit.lot_id in seen:
                 continue
             seen.add(hit.lot_id)
             new_in_page += 1
             yield hit
 
         log.info("page %d → +%d (всего %d/%s)", page, new_in_page, len(seen), total or "?")
+        if new_in_page == 0 and candidate_rows > 0:
+            log.warning(
+                "listing page %d: %d строк ссылаются на объявления, но ни одна не "
+                "распарсилась — вёрстка goszakup могла измениться (см. _parse_row)",
+                page, candidate_rows,
+            )
+        if page == 1 and total and len(seen) == 0:
+            log.warning(
+                "listing: goszakup сообщил %d записей, но распарсено 0 — парсер "
+                "листинга деградировал",
+                total,
+            )
         if new_in_page == 0:
             return
         if total is not None and len(seen) >= total:
