@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -1356,26 +1356,35 @@ def _llm_cost(prompt_tokens: int, completion_tokens: int) -> float:
     )
 
 
-def _bucket_llm_calls(rows, key_fn, label_fn, limit: int) -> list[dict]:
-    """Сгруппировать вызовы по периоду (key_fn → ключ) и вернуть последние
-    `limit` периодов, свежие сверху."""
+def _llm_day_expr(dialect: str):
+    """SQL-выражение «UTC-день» строкой YYYY-MM-DD для GROUP BY (кросс-диалектно)."""
+    if dialect == "postgresql":
+        # created_at — timestamptz(UTC); AT TIME ZONE 'UTC' даёт wall-clock UTC,
+        # чтобы граница суток не плавала по таймзоне сессии.
+        return func.to_char(LlmCall.created_at.op("AT TIME ZONE")("UTC"), "YYYY-MM-DD")
+    return func.strftime("%Y-%m-%d", LlmCall.created_at)
+
+
+def _rollup_days(daily: list[dict], key_fn, label_fn, limit: int) -> list[dict]:
+    """Свернуть уже суточно-агрегированные строки в недели/месяцы (в Python —
+    их ≤400, дёшево). Возвращает последние `limit` периодов, свежие сверху."""
     buckets: dict = {}
-    for created_at, _kind, pt, ct, tt in rows:
-        key = key_fn(created_at)
+    for d in daily:
+        key = key_fn(d["date"])
         b = buckets.get(key)
         if b is None:
             b = buckets[key] = {
                 "key": key,
-                "label": label_fn(created_at),
+                "label": label_fn(d["date"]),
                 "calls": 0,
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
             }
-        b["calls"] += 1
-        b["prompt_tokens"] += pt or 0
-        b["completion_tokens"] += ct or 0
-        b["total_tokens"] += tt or 0
+        b["calls"] += d["calls"]
+        b["prompt_tokens"] += d["prompt_tokens"]
+        b["completion_tokens"] += d["completion_tokens"]
+        b["total_tokens"] += d["total_tokens"]
     out = sorted(buckets.values(), key=lambda b: b["key"], reverse=True)[:limit]
     for b in out:
         b["cost"] = _llm_cost(b["prompt_tokens"], b["completion_tokens"])
@@ -1388,62 +1397,72 @@ def expenses(
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    # Окно ~13 месяцев покрывает «по месяцам за год». Объём LlmCall небольшой
-    # (один ряд на вызов), агрегируем в Python — это дёшево и одинаково
-    # работает на SQLite и Postgres (без dialect-специфичного date_trunc).
+    # Окно ~13 месяцев покрывает «по месяцам за год». Агрегируем в SQL: суточный
+    # GROUP BY сжимает 800K строк до ≤400 суток (по индексу created_at), а недели
+    # и месяцы дешёво сворачиваем из суток в Python. Раньше тянули ВСЕ строки в
+    # память на каждый заход админа.
     since = datetime.now(UTC) - timedelta(days=400)
-    rows = db.execute(
+    day_col = _llm_day_expr(db.bind.dialect.name)
+    day_rows = db.execute(
         select(
-            LlmCall.created_at,
-            LlmCall.kind,
-            LlmCall.prompt_tokens,
-            LlmCall.completion_tokens,
-            LlmCall.total_tokens,
+            day_col.label("day"),
+            func.count().label("calls"),
+            func.coalesce(func.sum(LlmCall.prompt_tokens), 0),
+            func.coalesce(func.sum(LlmCall.completion_tokens), 0),
+            func.coalesce(func.sum(LlmCall.total_tokens), 0),
         )
         .where(LlmCall.created_at >= since)
-        .order_by(LlmCall.created_at)
+        .group_by(day_col)
     ).all()
+    daily = [
+        {
+            "date": date.fromisoformat(r[0]),
+            "calls": r[1],
+            "prompt_tokens": r[2],
+            "completion_tokens": r[3],
+            "total_tokens": r[4],
+        }
+        for r in day_rows
+    ]
 
-    by_day = _bucket_llm_calls(
-        rows, lambda d: d.date().isoformat(), lambda d: d.date().isoformat(), 30
-    )
-    by_week = _bucket_llm_calls(
-        rows,
+    by_day = _rollup_days(daily, lambda d: d.isoformat(), lambda d: d.isoformat(), 30)
+    by_week = _rollup_days(
+        daily,
         lambda d: "{:04d}-W{:02d}".format(*d.isocalendar()[:2]),
         lambda d: "{:04d} · неделя {:02d}".format(*d.isocalendar()[:2]),
         12,
     )
-    by_month = _bucket_llm_calls(
-        rows,
-        lambda d: d.strftime("%Y-%m"),
-        lambda d: d.strftime("%Y-%m"),
-        12,
+    by_month = _rollup_days(
+        daily, lambda d: d.strftime("%Y-%m"), lambda d: d.strftime("%Y-%m"), 12
     )
 
-    # Итоги по типам вызова за всё окно.
+    # Итоги по типам вызова за всё окно — тоже GROUP BY в SQL.
+    kind_rows = db.execute(
+        select(
+            LlmCall.kind,
+            func.count(),
+            func.coalesce(func.sum(LlmCall.prompt_tokens), 0),
+            func.coalesce(func.sum(LlmCall.completion_tokens), 0),
+            func.coalesce(func.sum(LlmCall.total_tokens), 0),
+        )
+        .where(LlmCall.created_at >= since)
+        .group_by(LlmCall.kind)
+    ).all()
     by_kind: dict = {}
     grand = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    for _created_at, kind, pt, ct, tt in rows:
-        k = by_kind.setdefault(
-            kind,
-            {
-                "label": _LLM_KIND_LABELS.get(kind, kind),
-                "calls": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            },
-        )
-        for field, val in (
-            ("calls", 1),
-            ("prompt_tokens", pt or 0),
-            ("completion_tokens", ct or 0),
-            ("total_tokens", tt or 0),
-        ):
-            k[field] += val
-            grand[field] += val
-    for k in by_kind.values():
-        k["cost"] = _llm_cost(k["prompt_tokens"], k["completion_tokens"])
+    for kind, calls, pt, ct, tt in kind_rows:
+        by_kind[kind] = {
+            "label": _LLM_KIND_LABELS.get(kind, kind),
+            "calls": calls,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": tt,
+            "cost": _llm_cost(pt, ct),
+        }
+        grand["calls"] += calls
+        grand["prompt_tokens"] += pt
+        grand["completion_tokens"] += ct
+        grand["total_tokens"] += tt
     grand["cost"] = _llm_cost(grand["prompt_tokens"], grand["completion_tokens"])
 
     return templates.TemplateResponse(
