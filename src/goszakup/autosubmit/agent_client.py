@@ -8,7 +8,8 @@ WireGuard + mTLS) — `RunRequest` несёт расшифрованные се�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -24,12 +25,35 @@ class AgentClient:
     base_url: str
     token: str | None = None
     timeout: float = 15.0
+    # Хосты, которым разрешён plain-HTTP (приватный tailnet). По умолчанию пусто —
+    # секреты уходят только по https, если хост не в allowlist явно.
+    allow_http_hosts: tuple[str, ...] = field(default_factory=tuple)
 
     def _headers(self) -> dict[str, str]:
         return {"X-Agent-Token": self.token} if self.token else {}
 
+    def _validate_transport(self) -> None:
+        """RunRequest несёт расшифрованные p12/пароль/PIN — не слать их без
+        авторизации и по незашифрованному каналу (кроме явного allowlist)."""
+        if not self.token:
+            raise AgentError(
+                "GZ_AUTOSUBMIT_AGENT_TOKEN обязателен: отказ слать секреты клиента "
+                "без авторизации канала"
+            )
+        scheme = urlsplit(self.base_url).scheme
+        if scheme == "https":
+            return
+        host = urlsplit(self.base_url).hostname
+        if scheme == "http" and host in self.allow_http_hosts:
+            return
+        raise AgentError(
+            f"небезопасный транспорт до агента {self.base_url!r}: нужен https либо "
+            f"host в allowlist ({self.allow_http_hosts or '—'})"
+        )
+
     def dispatch(self, req: RunRequest) -> dict:
         """Поставить агенту задачу на прогрев+гонку. Возвращает ack агента."""
+        self._validate_transport()
         try:
             resp = httpx.post(
                 f"{self.base_url.rstrip('/')}/run",

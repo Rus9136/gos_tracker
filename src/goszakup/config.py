@@ -101,8 +101,16 @@ def require_safe_secret_key(component: str) -> None:
 # диспетчер автоподачи отключён (нечему слать RunRequest).
 AUTOSUBMIT_AGENT_URL = os.environ.get("GZ_AUTOSUBMIT_AGENT_URL") or None
 # Токен авторизации Linux→agent (`POST /run`, заголовок X-Agent-Token). Должен
-# совпасть с GZ_AGENT_TOKEN на Windows-узле. Защита в глубину поверх tailnet.
+# совпасть с GZ_AGENT_TOKEN на Windows-узле. Обязателен: без него диспетчер
+# отказывается слать секреты клиента (см. autosubmit/agent_client.py).
 AUTOSUBMIT_AGENT_TOKEN = os.environ.get("GZ_AUTOSUBMIT_AGENT_TOKEN") or None
+# Хосты, которым разрешён plain-HTTP до агента (приватный tailnet, где TLS даёт
+# WireGuard/Tailscale). Пусто = только https. Пример: "100.64.0.5,agent.tailnet".
+AUTOSUBMIT_AGENT_ALLOW_HTTP = tuple(
+    h.strip()
+    for h in (os.environ.get("GZ_AUTOSUBMIT_AGENT_ALLOW_HTTP") or "").split(",")
+    if h.strip()
+)
 # За сколько секунд до open_at слать задачу агенту на прогрев (логин, страница
 # объявления, разблокировка PIN), чтобы к открытию он уже ждал кнопку «Подать».
 AUTOSUBMIT_WARMUP_LEAD = int(os.environ.get("GZ_AUTOSUBMIT_WARMUP_LEAD", "300"))

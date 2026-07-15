@@ -102,7 +102,18 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(202, {"ack": True, "submission_id": req.submission_id})
 
 
+def _ensure_auth_configured() -> None:
+    """Агент держит расшифрованные секреты клиента — стартовать без токена
+    авторизации нельзя (fail-closed). Явный dev без токена — GZ_AGENT_DEV=1."""
+    if not config.AGENT_TOKEN and not config.AGENT_DEV:
+        raise RuntimeError(
+            "GZ_AGENT_TOKEN обязателен: submit-agent отказывается стартовать без "
+            "токена авторизации канала (для локального dev — GZ_AGENT_DEV=1)."
+        )
+
+
 def serve() -> None:
+    _ensure_auth_configured()
     httpd = ThreadingHTTPServer((config.AGENT_HOST, config.AGENT_PORT), _Handler)
     log.info("submit-agent слушает http://%s:%s (token=%s)",
              config.AGENT_HOST, config.AGENT_PORT, "on" if config.AGENT_TOKEN else "OFF")

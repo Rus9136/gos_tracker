@@ -17,6 +17,7 @@ import dramatiq
 from ..autosubmit.agent_client import AgentClient
 from ..autosubmit.scheduler import dispatch_due_submissions
 from ..config import (
+    AUTOSUBMIT_AGENT_ALLOW_HTTP,
     AUTOSUBMIT_AGENT_TOKEN,
     AUTOSUBMIT_AGENT_URL,
     AUTOSUBMIT_WARMUP_LEAD,
@@ -37,6 +38,10 @@ def autosubmit_dispatch_actor() -> None:
     if not AUTOSUBMIT_AGENT_URL:
         log.info("autosubmit: GZ_AUTOSUBMIT_AGENT_URL не задан — диспетчер выключен")
         return
-    agent = AgentClient(AUTOSUBMIT_AGENT_URL, token=AUTOSUBMIT_AGENT_TOKEN)
+    agent = AgentClient(
+        AUTOSUBMIT_AGENT_URL,
+        token=AUTOSUBMIT_AGENT_TOKEN,
+        allow_http_hosts=AUTOSUBMIT_AGENT_ALLOW_HTTP,
+    )
     with SessionLocal() as session:
         dispatch_due_submissions(session, agent, warmup_lead=AUTOSUBMIT_WARMUP_LEAD)
