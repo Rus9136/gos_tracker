@@ -115,3 +115,44 @@ def test_notify_false_never_sends(seeded, monkeypatch):
     monkeypatch.setattr(health, "_alert_allowed", lambda: pytest.fail("не должно дойти до дедупа"))
     problems = health.run_health_check(seeded, notify=False)
     assert problems  # проблему вернул…
+
+
+# --- Лицензия Tumar (P1) ---------------------------------------------------
+
+_NOW = datetime(2026, 7, 15, tzinfo=UTC)
+
+
+def test_tumar_license_expired(monkeypatch):
+    monkeypatch.setattr(health, "TUMAR_LICENSE_EXPIRES", "2026-07-01")
+    p = health.tumar_license_problem(now=_NOW)
+    assert p and "истекла" in p
+
+
+def test_tumar_license_warns_before_expiry(monkeypatch):
+    monkeypatch.setattr(health, "TUMAR_LICENSE_EXPIRES", "2026-07-20")
+    monkeypatch.setattr(health, "TUMAR_LICENSE_WARN_DAYS", 14)
+    p = health.tumar_license_problem(now=_NOW)
+    assert p and "истекает через" in p
+
+
+def test_tumar_license_valid_far(monkeypatch):
+    monkeypatch.setattr(health, "TUMAR_LICENSE_EXPIRES", "2027-01-01")
+    assert health.tumar_license_problem(now=_NOW) is None
+
+
+def test_tumar_license_disabled(monkeypatch):
+    monkeypatch.setattr(health, "TUMAR_LICENSE_EXPIRES", "")
+    assert health.tumar_license_problem(now=_NOW) is None
+
+
+def test_tumar_gated_on_autosubmit_configured(seeded, monkeypatch):
+    monkeypatch.setattr(health, "check_llm", lambda: (True, None))
+    monkeypatch.setattr(health, "TUMAR_LICENSE_EXPIRES", "2026-07-01")  # истекла
+
+    # Автоподача не сконфигурирована → лицензию не проверяем (нет шума).
+    monkeypatch.setattr(health, "AUTOSUBMIT_AGENT_URL", None)
+    assert not any("Tumar" in p for p in health.collect_problems(seeded))
+
+    # Автоподача сконфигурирована → проблема поднимается.
+    monkeypatch.setattr(health, "AUTOSUBMIT_AGENT_URL", "http://agent")
+    assert any("Tumar" in p for p in health.collect_problems(seeded))

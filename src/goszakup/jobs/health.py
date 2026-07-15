@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import GZ_TELEGRAM_BOT_TOKEN, PUBLIC_BASE_URL
+from ..config import AUTOSUBMIT_AGENT_URL, GZ_TELEGRAM_BOT_TOKEN, PUBLIC_BASE_URL
 from ..db.models import User, UserLotMatch
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,39 @@ MATCH_STALE_HOURS = int(os.environ.get("GZ_HEALTH_MATCH_STALE_HOURS", "48"))
 ALERT_COOLDOWN_S = int(os.environ.get("GZ_HEALTH_ALERT_COOLDOWN", str(6 * 3600)))
 
 _ALERT_KEY = "goszakup:health:alerted"
+
+# Срок лицензии Tumar apiKey (из HAR-разведки, TENDER_AUTOSUBMIT_PLAN.md §).
+# Крипто-подпись и ГОСТ-шифрование цены в автоподаче завязаны на валидный
+# apiKey — истёк = визард агента не сможет сформировать заявку. Пустая строка
+# отключает проверку. Проверяется только когда автоподача вообще сконфигурирована.
+TUMAR_LICENSE_EXPIRES = os.environ.get("GZ_TUMAR_LICENSE_EXPIRES") or "2026-07-01"
+TUMAR_LICENSE_WARN_DAYS = int(os.environ.get("GZ_TUMAR_LICENSE_WARN_DAYS", "14"))
+
+
+def tumar_license_problem(now: datetime | None = None) -> str | None:
+    """Проблема, если лицензия Tumar истекла или истекает скоро; иначе None."""
+    if not TUMAR_LICENSE_EXPIRES:
+        return None
+    try:
+        expires = datetime.fromisoformat(TUMAR_LICENSE_EXPIRES)
+    except ValueError:
+        log.warning("health: не разобрал GZ_TUMAR_LICENSE_EXPIRES=%r", TUMAR_LICENSE_EXPIRES)
+        return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    days_left = (expires - now).total_seconds() / 86400
+    if days_left < 0:
+        return (
+            f"❌ Лицензия Tumar apiKey истекла {TUMAR_LICENSE_EXPIRES} — "
+            f"автоподача не сформирует заявку (крипто-подпись/шифрование цены)."
+        )
+    if days_left <= TUMAR_LICENSE_WARN_DAYS:
+        return (
+            f"⚠️ Лицензия Tumar apiKey истекает через {days_left:.0f}д "
+            f"({TUMAR_LICENSE_EXPIRES}) — продлить до включения автоподачи в бой."
+        )
+    return None
 
 
 def check_llm() -> tuple[bool, str | None]:
@@ -92,6 +125,13 @@ def collect_problems(session: Session) -> list[str]:
                 f"⚠️ Последний матч был {age:.0f}ч назад (порог {MATCH_STALE_HOURS}ч) — "
                 f"матчинг мог встать даже при живом LLM."
             )
+
+    # Лицензию Tumar проверяем только когда автоподача сконфигурирована — иначе
+    # на инстансе без автоподачи это ложный шум.
+    if AUTOSUBMIT_AGENT_URL:
+        tumar = tumar_license_problem()
+        if tumar:
+            problems.append(tumar)
 
     return problems
 
