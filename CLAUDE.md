@@ -59,7 +59,10 @@
   (дефолт `gpt-oss-120b`), **`GZ_REDIS_URL`** (Phase 3, дефолт
   `redis://localhost:6379/0`), **`GZ_TELEGRAM_BOT_TOKEN`** (бот для
   уведомлений о новых матчах, правило #18; без него уведомления тихо
-  выключены), `GZ_PUBLIC_BASE_URL` (адрес UI для ссылки в уведомлении,
+  выключены), `GZ_TELEGRAM_WEBHOOK_SECRET` (секрет вебхука кнопки
+  «Подробнее» в уведомлении; без него `POST /telegram/webhook` отвечает 503;
+  после добавления один раз выполнить `cli telegram-set-webhook`),
+  `GZ_PUBLIC_BASE_URL` (адрес UI для ссылки в уведомлении,
   дефолт `https://gost.salemsoft.kz`). Автоподача заявок (правило #19,
   `TENDER_AUTOSUBMIT_PLAN.md`): **`GZ_VAULT_MASTER_KEY`** (base64 от 32 байт —
   мастер-ключ KeyVault для чужих .p12/паролей/PIN; без него обращение к Vault
@@ -390,6 +393,19 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     ввод numeric id от @userinfobot, есть кнопка «Отправить тест»). Один
     общий бот на сервис (`GZ_TELEGRAM_BOT_TOKEN` в `.env`). Очередь
     `goszakup_notify` обязана быть в `--queues` воркера (см. выше).
+    **Кнопка «Подробнее о лоте»** в уведомлении — inline-callback →
+    `POST /telegram/webhook` (машинная авторизация по
+    `X-Telegram-Bot-Api-Secret-Token` = `GZ_TELEGRAM_WEBHOOK_SECRET`,
+    constant-time; без секрета — 503) → `explain_actor` (та же очередь
+    `goszakup_notify`, `max_retries=0` — при ошибке LLM пользователю сразу
+    уходит fallback-сообщение, ретрай дал бы дубли). Actor отвечает ТОЛЬКО
+    известным `telegram_chat_id` (вебхук публичный, callback_data
+    подделываемая), зовёт `classify/llm.explain_lot` (тот же контекст, что
+    чат: поля лота + полный текст ТЗ) и шлёт объяснение простым языком в
+    чат; расход пишется в LlmCall `kind="explain"`. Вебхук регистрируется
+    одноразово: `cli telegram-set-webhook` (снять — `--drop`;
+    `allowed_updates=["callback_query"]` — обычные сообщения боту не
+    приходят).
 
 19. **Автоподача заявок — sealed-bid через «золотой клиент», крипто НЕ headless.**
     Полный дизайн — `TENDER_AUTOSUBMIT_PLAN.md` + `TENDER_ECP_SIGNING_GUIDE.md`.

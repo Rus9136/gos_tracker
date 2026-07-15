@@ -35,6 +35,7 @@ from ..config import (
     LLM_PRICE_INPUT_PER_MTOK,
     LLM_PRICE_OUTPUT_PER_MTOK,
     SECRET_KEY,
+    TELEGRAM_WEBHOOK_SECRET,
 )
 from ..db.engine import SessionLocal
 from ..db.models import (
@@ -1269,7 +1270,47 @@ async def autosubmit_result(request: Request, db: Session = Depends(get_db)):
     return JSONResponse({"ok": True, "submission_id": sub.id, "status": sub.status})
 
 
-_LLM_KIND_LABELS = {"analyze": "Анализ ТЗ", "match": "Подбор", "chat": "Чат"}
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Callback'и inline-кнопок Telegram (кнопка «Подробнее» в уведомлении).
+
+    Машинная авторизация: Telegram шлёт secret_token из setWebhook в заголовке
+    X-Telegram-Bot-Api-Secret-Token. Ответ пользователю готовит explain_actor
+    (LLM — десятки секунд, вебхук должен вернуть 200 быстро). На нерелевантные
+    апдейты отвечаем 200 — иначе Telegram будет ретраить их бесконечно.
+    """
+    if not TELEGRAM_WEBHOOK_SECRET:
+        return JSONResponse({"error": "webhook disabled"}, status_code=503)
+    sent = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(sent, TELEGRAM_WEBHOOK_SECRET):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    from ..notify.telegram import answer_callback_query
+    from ..queue.notify import explain_actor
+
+    try:
+        update = await request.json()
+    except ValueError:
+        return JSONResponse({"ok": True})
+
+    cq = update.get("callback_query") if isinstance(update, dict) else None
+    if not cq:
+        return JSONResponse({"ok": True})
+
+    data = cq.get("data") or ""
+    chat_id = (cq.get("message") or {}).get("chat", {}).get("id")
+    if data.startswith("explain:") and chat_id is not None:
+        try:
+            lot_id = int(data.split(":", 1)[1])
+        except ValueError:
+            lot_id = None
+        if lot_id is not None:
+            answer_callback_query(cq.get("id", ""), "Готовлю объяснение…")
+            explain_actor.send(lot_id, str(chat_id))
+    return JSONResponse({"ok": True})
+
+
+_LLM_KIND_LABELS = {"analyze": "Анализ ТЗ", "match": "Подбор", "chat": "Чат", "explain": "Объяснение (TG)"}
 
 
 def _llm_cost(prompt_tokens: int, completion_tokens: int) -> float:

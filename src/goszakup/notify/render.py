@@ -44,3 +44,28 @@ def build_match_message(query: UserQuery, lot: Lot, match: UserLotMatch) -> str:
         f'<a href="{escape(lot.url)}">goszakup</a>',
     ]
     return "\n".join(lines)
+
+
+def build_explain_keyboard(lot: Lot) -> dict:
+    """Inline-кнопка «Подробнее»: callback уходит на наш вебхук
+    (web POST /telegram/webhook), ответ готовит explain_actor."""
+    return {
+        "inline_keyboard": [
+            [{"text": "🤖 Подробнее о лоте", "callback_data": f"explain:{lot.id}"}]
+        ]
+    }
+
+
+def build_explain_message(lot: Lot, explanation: str) -> str:
+    name = (lot.name or "Лот без названия").strip()
+    site_url = f"{PUBLIC_BASE_URL}/lot/{lot.id}"
+    return "\n".join(
+        [
+            f"🤖 <b>Простыми словами: {escape(name)}</b>",
+            "",
+            escape(explanation.strip()),
+            "",
+            f'<a href="{escape(site_url)}">Открыть в трекере</a> · '
+            f'<a href="{escape(lot.url)}">goszakup</a>',
+        ]
+    )

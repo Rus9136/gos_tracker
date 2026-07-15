@@ -286,6 +286,32 @@ def list_users() -> None:
             typer.echo(f"  #{u.id:>3} [{active}] {role} {u.username:<24} регионы={regions}")
 
 
+@app.command("telegram-set-webhook")
+def telegram_set_webhook(
+    drop: bool = typer.Option(False, "--drop", help="снять вебхук вместо установки"),
+) -> None:
+    """Зарегистрировать Telegram-вебхук кнопки «Подробнее» (одноразово).
+
+    Требует GZ_TELEGRAM_BOT_TOKEN и GZ_TELEGRAM_WEBHOOK_SECRET в .env;
+    URL берётся из GZ_PUBLIC_BASE_URL + /telegram/webhook.
+    """
+    from .config import PUBLIC_BASE_URL, TELEGRAM_WEBHOOK_SECRET
+    from .notify.telegram import delete_webhook, set_webhook
+
+    if drop:
+        ok, err = delete_webhook()
+        typer.echo("вебхук снят" if ok else f"ошибка: {err}")
+        raise typer.Exit(0 if ok else 1)
+
+    if not TELEGRAM_WEBHOOK_SECRET:
+        typer.echo("GZ_TELEGRAM_WEBHOOK_SECRET не задан (сгенерируйте: openssl rand -hex 32)", err=True)
+        raise typer.Exit(1)
+    url = f"{PUBLIC_BASE_URL}/telegram/webhook"
+    ok, err = set_webhook(url, TELEGRAM_WEBHOOK_SECRET)
+    typer.echo(f"вебхук установлен: {url}" if ok else f"ошибка: {err}")
+    raise typer.Exit(0 if ok else 1)
+
+
 @app.command("set-password")
 def set_password(
     username: str,

@@ -47,6 +47,13 @@ LLM_PRICE_OUTPUT_PER_MTOK = float(os.environ.get("GZ_LLM_PRICE_OUTPUT", "0.69"))
 # не задан — уведомления тихо отключены (notify/telegram.py логирует и выходит).
 GZ_TELEGRAM_BOT_TOKEN = os.environ.get("GZ_TELEGRAM_BOT_TOKEN") or None
 
+# Секрет Telegram-вебхука (кнопка «Подробнее» в уведомлении). Передаётся в
+# setWebhook как secret_token — Telegram шлёт его обратно в заголовке
+# X-Telegram-Bot-Api-Secret-Token, по нему web отличает Telegram от произвольных
+# POST'ов. Без него POST /telegram/webhook выключен (503). Установка вебхука —
+# `cli telegram-set-webhook` (одноразово после добавления секрета в .env).
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("GZ_TELEGRAM_WEBHOOK_SECRET") or None
+
 # Публичный адрес UI — для ссылки на карточку лота в Telegram-уведомлении.
 # На проде это https://gost.salemsoft.kz; на dev можно переопределить.
 PUBLIC_BASE_URL = (
