@@ -26,7 +26,7 @@ from ..classify.usage import record_call
 from ..db.engine import SessionLocal
 from ..db.models import Lot, User, UserLotMatch
 from ..notify.render import build_explain_keyboard, build_explain_message, build_match_message
-from ..notify.telegram import send_message
+from ..notify.telegram import edit_message, send_message
 from .broker import broker  # noqa: F401 — импорт broker до actor'а обязателен
 
 log = logging.getLogger(__name__)
@@ -81,13 +81,24 @@ def notify_actor(match_id: int) -> None:
     max_retries=0,
     time_limit=3 * 60 * 1000,
 )
-def explain_actor(lot_id: int, chat_id: str) -> None:
+def explain_actor(lot_id: int, chat_id: str, placeholder_id: int | None = None) -> None:
     """LLM-объяснение лота по кнопке «Подробнее» из Telegram-уведомления.
 
     chat_id приходит из callback'а вебхука. Отвечаем только чатам известных
     пользователей — вебхук публичный, callback_data подделываемая.
+    placeholder_id — message_id заглушки «⏳ Готовлю…», отправленной вебхуком:
+    готовый ответ редактируется в неё (editMessageText), чтобы пользователь
+    видел процесс, а не получал молчание на время LLM-вызова.
     """
     from ..classify.llm import explain_lot  # локально: не тянуть LLM-стек при импорте очереди
+
+    def deliver(text: str, *, parse_mode: str = "HTML") -> tuple[bool, str | None]:
+        if placeholder_id is not None:
+            ok, err = edit_message(chat_id, placeholder_id, text, parse_mode=parse_mode)
+            if ok:
+                return True, None
+            log.warning("explain_actor: edit заглушки не удался (%s), шлю новым", err)
+        return send_message(chat_id, text, parse_mode=parse_mode)
 
     with SessionLocal() as session:
         user = session.execute(
@@ -99,15 +110,14 @@ def explain_actor(lot_id: int, chat_id: str) -> None:
 
         lot = session.get(Lot, lot_id)
         if lot is None:
-            send_message(chat_id, "Лот не найден — возможно, он уже удалён из трекера.", parse_mode="")
+            deliver("Лот не найден — возможно, он уже удалён из трекера.", parse_mode="")
             return
 
         try:
             explanation, usage = explain_lot(lot)
         except Exception as e:  # noqa: BLE001 — правило #7: наружу не роняем
             log.warning("explain_actor: LLM не ответил для lot=%s: %s", lot_id, e)
-            send_message(
-                chat_id,
+            deliver(
                 "Не получилось подготовить объяснение — попробуйте ещё раз "
                 "через пару минут или откройте лот в трекере.",
                 parse_mode="",
@@ -117,6 +127,6 @@ def explain_actor(lot_id: int, chat_id: str) -> None:
         record_call(session, "explain", usage, lot_id=lot.id, user_id=user.id)
         session.commit()
 
-        ok, err = send_message(chat_id, build_explain_message(lot, explanation))
+        ok, err = deliver(build_explain_message(lot, explanation))
         if not ok:
             log.warning("explain_actor: не доставлено lot=%s chat=%s: %s", lot_id, chat_id, err)

@@ -23,10 +23,12 @@ _API = "https://api.telegram.org/bot{token}/{method}"
 _TIMEOUT = 10.0
 
 
-def _call_api(method: str, payload: dict) -> tuple[bool, str | None]:
+def _call_api(method: str, payload: dict) -> tuple[bool, str | None, dict | None]:
+    """Возвращает (ok, error, result) — result это поле `result` ответа
+    Telegram, если оно объект (для sendMessage там message с message_id)."""
     token = GZ_TELEGRAM_BOT_TOKEN
     if not token:
-        return False, "GZ_TELEGRAM_BOT_TOKEN не задан"
+        return False, "GZ_TELEGRAM_BOT_TOKEN не задан", None
 
     try:
         resp = httpx.post(
@@ -36,10 +38,14 @@ def _call_api(method: str, payload: dict) -> tuple[bool, str | None]:
         )
     except Exception as e:  # noqa: BLE001 — сеть/таймаут не должны ронять вызов
         log.warning("telegram %s failed: %s", method, e)
-        return False, f"сетевая ошибка: {e}"
+        return False, f"сетевая ошибка: {e}", None
 
     if resp.status_code == 200:
-        return True, None
+        try:
+            result = resp.json().get("result")
+        except Exception:  # noqa: BLE001
+            result = None
+        return True, None, result if isinstance(result, dict) else None
 
     # Telegram отдаёт причину в JSON `description` — пробрасываем для UI/логов.
     try:
@@ -47,7 +53,7 @@ def _call_api(method: str, payload: dict) -> tuple[bool, str | None]:
     except Exception:  # noqa: BLE001
         desc = resp.text
     log.warning("telegram %s API %s: %s", method, resp.status_code, desc)
-    return False, f"Telegram API {resp.status_code}: {desc}"
+    return False, f"Telegram API {resp.status_code}: {desc}", None
 
 
 def send_message(
@@ -71,7 +77,38 @@ def send_message(
         payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    return _call_api("sendMessage", payload)
+    ok, err, _ = _call_api("sendMessage", payload)
+    return ok, err
+
+
+def send_placeholder(chat_id: str, text: str) -> int | None:
+    """Plain-text сообщение-заглушка; возвращает message_id для editMessageText.
+
+    None при любой ошибке — вызывающий тогда просто шлёт финальный текст
+    обычным send_message.
+    """
+    ok, _err, result = _call_api(
+        "sendMessage",
+        {"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+    )
+    if ok and result:
+        return result.get("message_id")
+    return None
+
+
+def edit_message(
+    chat_id: str, message_id: int, text: str, *, parse_mode: str = "HTML"
+) -> tuple[bool, str | None]:
+    payload: dict = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    ok, err, _ = _call_api("editMessageText", payload)
+    return ok, err
 
 
 def answer_callback_query(callback_query_id: str, text: str | None = None) -> tuple[bool, str | None]:
@@ -79,11 +116,12 @@ def answer_callback_query(callback_query_id: str, text: str | None = None) -> tu
     payload: dict = {"callback_query_id": callback_query_id}
     if text:
         payload["text"] = text
-    return _call_api("answerCallbackQuery", payload)
+    ok, err, _ = _call_api("answerCallbackQuery", payload)
+    return ok, err
 
 
 def set_webhook(url: str, secret_token: str) -> tuple[bool, str | None]:
-    return _call_api(
+    ok, err, _ = _call_api(
         "setWebhook",
         {
             "url": url,
@@ -93,7 +131,9 @@ def set_webhook(url: str, secret_token: str) -> tuple[bool, str | None]:
             "allowed_updates": ["callback_query"],
         },
     )
+    return ok, err
 
 
 def delete_webhook() -> tuple[bool, str | None]:
-    return _call_api("deleteWebhook", {})
+    ok, err, _ = _call_api("deleteWebhook", {})
+    return ok, err

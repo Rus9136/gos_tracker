@@ -1285,7 +1285,7 @@ async def telegram_webhook(request: Request):
     if not hmac.compare_digest(sent, TELEGRAM_WEBHOOK_SECRET):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    from ..notify.telegram import answer_callback_query
+    from ..notify.telegram import answer_callback_query, send_placeholder
     from ..queue.notify import explain_actor
 
     try:
@@ -1305,8 +1305,14 @@ async def telegram_webhook(request: Request):
         except ValueError:
             lot_id = None
         if lot_id is not None:
-            answer_callback_query(cq.get("id", ""), "Готовлю объяснение…")
-            explain_actor.send(lot_id, str(chat_id))
+            answer_callback_query(cq.get("id", ""))
+            # Заглушка в чат сразу: LLM думает десятки секунд, а тост от
+            # answerCallbackQuery живёт пару секунд — пользователь должен
+            # видеть, что процесс идёт. Актор потом отредактирует её в ответ.
+            placeholder_id = send_placeholder(
+                str(chat_id), "⏳ Готовлю объяснение лота — обычно занимает до минуты…"
+            )
+            explain_actor.send(lot_id, str(chat_id), placeholder_id)
     return JSONResponse({"ok": True})
 
 

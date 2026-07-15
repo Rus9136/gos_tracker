@@ -103,6 +103,7 @@ def test_webhook_enqueues_explain(client, monkeypatch):
     answered: list[str] = []
     monkeypatch.setattr(notify_mod.explain_actor, "send", lambda *a: enq.append(a))
     monkeypatch.setattr(tg, "answer_callback_query", lambda cid, text=None: answered.append(cid) or (True, None))
+    monkeypatch.setattr(tg, "send_placeholder", lambda chat_id, text: 777)
 
     r = client.post(
         "/telegram/webhook",
@@ -110,7 +111,7 @@ def test_webhook_enqueues_explain(client, monkeypatch):
         headers={"X-Telegram-Bot-Api-Secret-Token": "s3cret"},
     )
     assert r.status_code == 200
-    assert enq == [(1, "123456")]
+    assert enq == [(1, "123456", 777)]
     assert answered == ["cbq-1"]
 
 
@@ -146,6 +147,49 @@ def test_explain_actor_sends_explanation(seeded, db_session, monkeypatch):
     assert len(sent) == 1
     assert "Простое объяснение." in sent[0]
     assert "Простыми словами" in sent[0]
+
+
+def test_explain_actor_edits_placeholder(seeded, db_session, monkeypatch):
+    import goszakup.classify.llm as llm_mod
+    import goszakup.queue.notify as notify_mod
+
+    edited: list[tuple] = []
+    sent: list[str] = []
+    monkeypatch.setattr(llm_mod, "explain_lot", lambda lot: ("Простое объяснение.", None))
+    monkeypatch.setattr(
+        notify_mod, "edit_message",
+        lambda chat_id, mid, text, **kw: (edited.append((mid, text)) or (True, None)),
+    )
+    monkeypatch.setattr(
+        notify_mod, "send_message",
+        lambda chat_id, text, **kw: (sent.append(text) or (True, None)),
+    )
+
+    notify_mod.explain_actor(1, "123456", 777)
+    # Ответ отредактирован в заглушку, новое сообщение не отправлялось.
+    assert len(edited) == 1 and edited[0][0] == 777
+    assert "Простое объяснение." in edited[0][1]
+    assert sent == []
+
+
+def test_explain_actor_falls_back_when_edit_fails(seeded, db_session, monkeypatch):
+    import goszakup.classify.llm as llm_mod
+    import goszakup.queue.notify as notify_mod
+
+    sent: list[str] = []
+    monkeypatch.setattr(llm_mod, "explain_lot", lambda lot: ("Простое объяснение.", None))
+    monkeypatch.setattr(
+        notify_mod, "edit_message",
+        lambda chat_id, mid, text, **kw: (False, "message to edit not found"),
+    )
+    monkeypatch.setattr(
+        notify_mod, "send_message",
+        lambda chat_id, text, **kw: (sent.append(text) or (True, None)),
+    )
+
+    notify_mod.explain_actor(1, "123456", 777)
+    assert len(sent) == 1
+    assert "Простое объяснение." in sent[0]
 
 
 def test_explain_actor_unknown_chat_silent(seeded, db_session, monkeypatch):
