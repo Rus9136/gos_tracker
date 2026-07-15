@@ -1150,32 +1150,43 @@ def matched_page(
 
     rows = []
     if query_ids:
-        stmt = (
-            select(UserLotMatch, Lot, UserQuery)
-            .join(Lot, UserLotMatch.lot_id == Lot.id)
-            .join(UserQuery, UserLotMatch.user_query_id == UserQuery.id)
-            .options(selectinload(Lot.customer), selectinload(Lot.announcement))
-            .where(
-                UserLotMatch.user_query_id.in_(query_ids),
-                UserLotMatch.matched.is_(True),
-                Lot.is_actual.is_(True),
-            )
-            .order_by(desc(UserLotMatch.score), desc(UserLotMatch.matched_at))
-        )
+        match_filter = [
+            UserLotMatch.user_query_id.in_(query_ids),
+            UserLotMatch.matched.is_(True),
+            Lot.is_actual.is_(True),
+        ]
         if query_id is not None:
-            stmt = stmt.where(UserLotMatch.user_query_id == query_id)
-        # Список — про лоты, а не про пары (как и бейдж в сайдбаре): лот под
-        # несколькими запросами показываем один раз, оставляя матч с лучшим
-        # баллом. Дедуп в Python (а не DISTINCT ON) — кросс-диалектно и порядок
-        # по score уже задан, поэтому первая встреченная пара лота — лучшая.
-        seen: set[int] = set()
-        for m, lot, q in db.execute(stmt).all():
-            if lot.id in seen:
-                continue
-            seen.add(lot.id)
-            rows.append((m, lot, q))
-            if len(rows) >= PAGE_SIZE:
-                break
+            match_filter.append(UserLotMatch.user_query_id == query_id)
+
+        # Список — про лоты, а не про пары: лот под несколькими запросами
+        # показываем один раз с лучшим баллом. Раньше тянули ВСЕ матчи с
+        # eager-load и резали в Python — на N запросов × 800K лотов это full
+        # result set на каждый заход. Теперь двухфазно с LIMIT в SQL:
+        # Фаза 1 — top-N РАЗНЫХ лотов по лучшему баллу (без eager-load).
+        best = (
+            select(UserLotMatch.lot_id, func.max(UserLotMatch.score).label("best"))
+            .join(Lot, UserLotMatch.lot_id == Lot.id)
+            .where(*match_filter)
+            .group_by(UserLotMatch.lot_id)
+            .order_by(desc("best"), UserLotMatch.lot_id)
+            .limit(PAGE_SIZE)
+        )
+        lot_ids_ordered = [r.lot_id for r in db.execute(best).all()]
+
+        # Фаза 2 — сами лоты + лучший матч на лот; eager-load только для ≤PAGE_SIZE.
+        if lot_ids_ordered:
+            pair_stmt = (
+                select(UserLotMatch, Lot, UserQuery)
+                .join(Lot, UserLotMatch.lot_id == Lot.id)
+                .join(UserQuery, UserLotMatch.user_query_id == UserQuery.id)
+                .options(selectinload(Lot.customer), selectinload(Lot.announcement))
+                .where(*match_filter, UserLotMatch.lot_id.in_(lot_ids_ordered))
+                .order_by(desc(UserLotMatch.score), desc(UserLotMatch.matched_at))
+            )
+            best_by_lot: dict[int, tuple] = {}
+            for m, lot, q in db.execute(pair_stmt).all():
+                best_by_lot.setdefault(lot.id, (m, lot, q))
+            rows = [best_by_lot[lid] for lid in lot_ids_ordered if lid in best_by_lot]
 
     return templates.TemplateResponse(
         request,

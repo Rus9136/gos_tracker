@@ -144,3 +144,31 @@ def test_matched_page_dedupes_lot_across_queries(client, db_session):
     assert "совпадение по Б" in r.text
     assert "совпадение по А" not in r.text
     assert "Доработка 1С" not in r.text
+
+
+def test_matched_page_limits_to_page_size(client, db_session):
+    # 55 сматченных лотов, балл = номер. Страница показывает только top-50 по
+    # баллу (LIMIT в SQL), а не весь result set — самый слабый лот отсутствует.
+    from goszakup.web.app import PAGE_SIZE
+
+    db_session.add(Announcement(id=900, url="u/900"))
+    q = UserQuery(user_id=0, name="все", text="разработка")
+    db_session.add(q)
+    db_session.flush()
+    total = PAGE_SIZE + 5
+    for n in range(1, total + 1):
+        db_session.add(
+            Lot(id=n, url="u/900", announcement_id=900, name=f"MATCHLOT{n:03d}",
+                plan_amount=1_000_000, is_actual=True)
+        )
+        db_session.add(
+            UserLotMatch(user_query_id=q.id, lot_id=n, matched=True, score=n,
+                         reason="r", matcher_version="m", query_version=1)
+        )
+    db_session.commit()
+
+    body = client.get("/matched").text
+    shown = [n for n in range(1, total + 1) if f"MATCHLOT{n:03d}" in body]
+    assert len(shown) == PAGE_SIZE
+    assert f"MATCHLOT{total:03d}" in body          # самый высокий балл показан
+    assert "MATCHLOT001" not in body               # самый низкий отсечён LIMIT'ом
