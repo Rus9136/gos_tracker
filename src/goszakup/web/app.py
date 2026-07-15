@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import __version__
@@ -1334,14 +1335,20 @@ async def telegram_webhook(request: Request):
         except ValueError:
             lot_id = None
         if lot_id is not None:
-            answer_callback_query(cq.get("id", ""))
+            # answer_callback_query/send_placeholder/explain_actor.send —
+            # синхронный блокирующий httpx/Redis I/O. В async-роуте вызывать их
+            # напрямую нельзя: блокируют event loop uvicorn на каждый клик
+            # кнопки. Оффлоадим в threadpool (Гейт 2).
+            await run_in_threadpool(answer_callback_query, cq.get("id", ""))
             # Заглушка в чат сразу: LLM думает десятки секунд, а тост от
             # answerCallbackQuery живёт пару секунд — пользователь должен
             # видеть, что процесс идёт. Актор потом отредактирует её в ответ.
-            placeholder_id = send_placeholder(
-                str(chat_id), "⏳ Готовлю объяснение лота — обычно занимает до минуты…"
+            placeholder_id = await run_in_threadpool(
+                send_placeholder,
+                str(chat_id),
+                "⏳ Готовлю объяснение лота — обычно занимает до минуты…",
             )
-            explain_actor.send(lot_id, str(chat_id), placeholder_id)
+            await run_in_threadpool(explain_actor.send, lot_id, str(chat_id), placeholder_id)
     return JSONResponse({"ok": True})
 
 
