@@ -68,19 +68,31 @@ Telegram Bot API, NCALayer/Tumar (только Windows-агент), Redis, Sentr
   принята?», которого нет в recon. Реализован фаллбэк (UNKNOWN + алерт);
   reconcile — когда появятся данные об API.
 
-### OPEN — Гейт 2 (масштаб) и Гейт 3 (расширение пользователей)
+### Гейт 2 — масштаб до 800K (закрыт)
 
-Не бралось в эту сессию (по заданию — только верификация + 2 быстрых фикса +
-Гейт 1). Остаётся к работе:
+| Находка | Статус | Коммит |
+|---|---|---|
+| Составные индексы под `/actual`/`/matched`/`/runs` | **FIXED** | `42914ae` |
+| `/matched` без `LIMIT` в SQL (материализация всех матчей) | **FIXED** | `87391c8` |
+| `Lot.name` под `ILIKE` без trgm/GIN | **FIXED** | `4d5eeef` |
+| `init_db.create_all` конфликтует с Alembic | **FIXED** | `e49cb01` |
+| `/expenses` тянет все `LlmCall` в Python | **FIXED** | `10e15b1` |
+| P0 №4 гонка get-then-insert лота рушит листинг | **FIXED** | `e81d93f` |
+| Дубли безбиновых организаций из гонки | **FIXED** | `3e40b20` |
+| P0 №6 `_status_code_from_name`→None молча гасит лот | **FIXED** | `ab0e690` |
+| P0 №7 тихая деградация листинг-парсера | **FIXED** | `13e84f3` |
+| Health слеп к Redis/диску | **FIXED** | `25a076c` |
+| Потеря лотов при прерванном листинге (self-healing reconcile) | **FIXED** | `3c0e6ff` |
+| Нет ретрая на не-429 ошибки LLM | **FIXED** | `2ab8013` |
+| TTL-мьютекс rate-limit (5с < длительности запроса) | **FIXED** | `a51bc8e` |
+| Блокирующий `httpx.post` в async `telegram_webhook` | **FIXED** | `7f9e8c8` |
+| Retention `data/docs/` (рост диска) | **FIXED** | `e7bca36` |
 
-**Гейт 2 (до 800K):** составные индексы под `/actual` и `/matched`; `/matched`
-без `LIMIT` в SQL; `init_db.create_all` конфликтует с Alembic; гонка get-then-insert
-в `_upsert_lot_from_listing` (P0 №4) и `_get_or_create_org`; retention `data/docs/`;
-TTL-мьютекс rate-limit (5с < длительности запроса); потеря лотов при прерванном
-листинге; `_status_code_from_name`→None молча гасит лот (P0 №6); тихая деградация
-листинг-парсера (P0 №7); нет ретрая на не-429 ошибки LLM; health-сторож слеп к
-Redis/воркеру/диску/backlog; `/expenses` тянет все `LlmCall` в Python; блокирующий
-`httpx.post` в async `telegram_webhook`.
+Прод-деплой Гейта 2: `alembic upgrade head` (составные + trgm-индексы + дедуп
+организаций; проверено на PG16 во временном контейнере) перед `systemctl restart`.
+Health-проверки Redis/диска и retention активируются автоматически (expire-таймер).
+
+### OPEN — Гейт 3 (расширение пользователей)
 
 **Гейт 3 (безопасность/UX):** IDOR `/organization`, `/lot/chat`, `/star`;
 prompt-injection через текст ТЗ в чат; CSRF-токены + `https_only`/`SameSite`
