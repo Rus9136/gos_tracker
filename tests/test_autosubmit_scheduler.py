@@ -14,7 +14,8 @@ import pytest
 
 from goszakup.autosubmit import scheduler as scheduler_mod
 from goszakup.autosubmit.agent_client import AgentError
-from goszakup.autosubmit.scheduler import dispatch_due_submissions
+from goszakup.autosubmit.rpc import RunResult
+from goszakup.autosubmit.scheduler import apply_result, dispatch_due_submissions
 from goszakup.db.models import ClientCredential, Submission
 
 
@@ -143,3 +144,48 @@ def test_agent_error_returns_to_planned_then_failed(db_session):
     sub = db_session.get(Submission, 1)
     assert sub.status == "FAILED"
     assert sub.attempts == scheduler_mod.MAX_DISPATCH_ATTEMPTS
+
+
+# --- apply_result: forward-only (P0-apply) ---------------------------------
+
+
+def _mk_sub_status(db_session, status):
+    due = datetime.now(UTC) + timedelta(seconds=60)
+    _mk_submission(db_session, sub_id=1, open_at=due, status=status)
+
+
+def test_late_result_does_not_overwrite_confirmed(db_session):
+    _mk_sub_status(db_session, "CONFIRMED")
+    apply_result(db_session, RunResult(submission_id=1, status="SUBMITTED"))
+    assert db_session.get(Submission, 1).status == "CONFIRMED"
+
+
+def test_duplicate_confirmed_is_idempotent(db_session):
+    _mk_sub_status(db_session, "CONFIRMED")
+    apply_result(db_session, RunResult(submission_id=1, status="CONFIRMED", app_id=77))
+    sub = db_session.get(Submission, 1)
+    assert sub.status == "CONFIRMED"
+    # терминальный статус не трогаем — app_id из позднего дубля не записываем
+    assert sub.app_id is None
+
+
+def test_forward_transition_applies(db_session):
+    _mk_sub_status(db_session, "ARMED")
+    apply_result(db_session, RunResult(submission_id=1, status="SUBMITTED", app_id=5))
+    sub = db_session.get(Submission, 1)
+    assert sub.status == "SUBMITTED"
+    assert sub.app_id == 5
+
+
+def test_backward_nonterminal_is_rejected(db_session):
+    _mk_sub_status(db_session, "SUBMITTED")
+    apply_result(db_session, RunResult(submission_id=1, status="ARMED"))
+    assert db_session.get(Submission, 1).status == "SUBMITTED"
+
+
+def test_unknown_applies_over_nonterminal(db_session):
+    _mk_sub_status(db_session, "FIRING")
+    apply_result(db_session, RunResult(submission_id=1, status="UNKNOWN", error="read timeout"))
+    sub = db_session.get(Submission, 1)
+    assert sub.status == "UNKNOWN"
+    assert sub.error == "read timeout"

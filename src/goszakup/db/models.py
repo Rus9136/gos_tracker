@@ -483,6 +483,14 @@ SUBMISSION_STATUSES = (
     "UNKNOWN",  # выстрел ушёл, ответ не получен (ReadTimeout) — состояние неясно
 )
 
+# Ранг «продвижения» — apply_result не откатывает подачу на более ранний
+# не-терминальный статус при поздней/повторной доставке отчёта (P0-apply).
+SUBMISSION_STATUS_RANK = {name: i for i, name in enumerate(SUBMISSION_STATUSES)}
+
+# Терминальные статусы: попав сюда, подача больше не меняется — поздний отчёт
+# агента (ретрай/редоставка) не перезаписывает исход (в т.ч. CONFIRMED).
+SUBMISSION_TERMINAL_STATUSES = frozenset({"CONFIRMED", "FAILED", "SKIPPED", "UNKNOWN"})
+
 
 class ClientCredential(Base):
     """Секреты клиента для подачи от его имени — всё шифровано (KeyVault, §8).

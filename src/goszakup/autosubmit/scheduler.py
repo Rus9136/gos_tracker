@@ -20,7 +20,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db.models import Submission
+from ..db.models import (
+    SUBMISSION_STATUS_RANK,
+    SUBMISSION_TERMINAL_STATUSES,
+    Submission,
+)
 from ..vault.credentials import decrypt_credential
 from ..vault.crypto import decrypt_str
 from .agent_client import AgentClient, AgentError
@@ -123,11 +127,36 @@ def dispatch_due_submissions(
 
 
 def apply_result(session: Session, result: RunResult) -> Submission | None:
-    """Применить отчёт агента к Submission (ingest финального RunResult)."""
+    """Применить отчёт агента к Submission (ingest финального RunResult).
+
+    Forward-only: терминальный статус (в т.ч. CONFIRMED) не перезаписывается, а
+    поздняя/повторная доставка с более ранним статусом не откатывает подачу —
+    иначе ретрай/редоставка RunResult могли бы затереть исход (P0-apply).
+    """
     sub = session.get(Submission, result.submission_id)
     if sub is None:
         log.warning("autosubmit result для несуществующей submission #%s", result.submission_id)
         return None
+
+    if sub.status in SUBMISSION_TERMINAL_STATUSES:
+        log.info(
+            "autosubmit result #%s игнорирован: статус %s уже терминальный (пришёл %s)",
+            sub.id, sub.status, result.status,
+        )
+        return sub
+    new_rank = SUBMISSION_STATUS_RANK.get(result.status)
+    if new_rank is None:
+        log.warning("autosubmit result #%s: неизвестный статус %r", sub.id, result.status)
+        return sub
+    if (
+        result.status not in SUBMISSION_TERMINAL_STATUSES
+        and new_rank < SUBMISSION_STATUS_RANK[sub.status]
+    ):
+        log.info(
+            "autosubmit result #%s: %s раньше текущего %s — не откатываем",
+            sub.id, result.status, sub.status,
+        )
+        return sub
 
     sub.status = result.status
     if result.app_id is not None:
