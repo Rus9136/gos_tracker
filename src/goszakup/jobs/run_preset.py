@@ -37,6 +37,15 @@ from ..scraper.statuses import is_actual
 log = logging.getLogger(__name__)
 
 
+def _find_org(session: Session, bin_: str | None, name: str) -> Organization | None:
+    org = None
+    if bin_:
+        org = session.scalar(select(Organization).where(Organization.bin == bin_))
+    if org is None and name:
+        org = session.scalar(select(Organization).where(Organization.name == name))
+    return org
+
+
 def _get_or_create_org(
     session: Session, *, bin_: str | None, name: str
 ) -> Organization | None:
@@ -44,20 +53,25 @@ def _get_or_create_org(
     bin_ = (bin_ or "").strip() or None
     if not name and not bin_:
         return None
-    org = None
-    if bin_:
-        org = session.scalar(select(Organization).where(Organization.bin == bin_))
-    if org is None and name:
-        org = session.scalar(select(Organization).where(Organization.name == name))
+    org = _find_org(session, bin_, name)
     if org is None:
-        org = Organization(bin=bin_, name=name or bin_ or "")
-        session.add(org)
-        session.flush()
-    else:
-        if bin_ and not org.bin:
-            org.bin = bin_
-        if name and not org.name:
-            org.name = name
+        # Гонку (параллельный прогон создал ту же организацию) ловим savepoint'ом:
+        # уникальность по bin / частичный uq_org_name_no_bin даёт IntegrityError,
+        # мы откатываем только вставку и берём созданную конкурентом запись —
+        # иначе на /organizations копились бы дубли заказчиков (P1, Гейт 2).
+        try:
+            with session.begin_nested():
+                org = Organization(bin=bin_, name=name or bin_ or "")
+                session.add(org)
+                session.flush()
+        except IntegrityError:
+            org = _find_org(session, bin_, name)
+            if org is None:
+                raise
+    if bin_ and not org.bin:
+        org.bin = bin_
+    if name and not org.name:
+        org.name = name
     return org
 
 

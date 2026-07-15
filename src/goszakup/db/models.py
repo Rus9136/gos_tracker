@@ -31,6 +31,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -106,6 +107,19 @@ class Organization(Base):
     """Заказчик / организатор / поставщик. Одно лицо может быть во всех ролях."""
 
     __tablename__ = "organizations"
+    __table_args__ = (
+        # Организации из листинга приходят без БИН (goszakup не показывает БИН
+        # заказчика) — идентичность = имя. Частичный уникальный индекс не даёт
+        # параллельным прогонам создать дубль безбиновой организации по имени
+        # (для орг. с БИН уникальность держит колонка bin).
+        Index(
+            "uq_org_name_no_bin",
+            "name",
+            unique=True,
+            sqlite_where=text("bin IS NULL"),
+            postgresql_where=text("bin IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     bin: Mapped[str | None] = mapped_column(String(20), unique=True, index=True)
