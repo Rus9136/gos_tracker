@@ -19,7 +19,9 @@ from typing import Any
 @dataclass(frozen=True)
 class LotBid:
     lot_id: int
-    price: str  # Decimal как строка — без потери точности по сети
+    # Decimal как строка — без потери точности по сети. repr=False: цена —
+    # sealed-bid секрет, не должна утекать в логи/Sentry через repr (verify-7).
+    price: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -28,10 +30,11 @@ class RunRequest:
     anno_id: int
     open_at_iso: str
     lot_bids: list[LotBid]
-    # секреты клиента (по VPN/mTLS, не логировать)
-    p12_b64: str
-    portal_password: str
-    key_pin: str | None = None
+    # секреты клиента (по VPN/mTLS, не логировать). repr=False: не раскрывать в
+    # repr — Sentry сериализует reprs локальных переменных в стеке (verify-7).
+    p12_b64: str = field(repr=False)
+    portal_password: str = field(repr=False)
+    key_pin: str | None = field(default=None, repr=False)
     anno_number: str | None = None
     close_at_iso: str | None = None
     # server−local, сек (если измерено точнее NTP); упреждение выстрела, сек

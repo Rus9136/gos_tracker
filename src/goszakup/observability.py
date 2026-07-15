@@ -13,6 +13,26 @@ log = logging.getLogger(__name__)
 
 _initialised = False
 
+# Ключи секретов автоподачи — вычищаем из Sentry-события, включая локальные
+# переменные в стеке (verify-7). Defence-in-depth поверх repr=False на
+# dataclass'ах RunRequest/DecryptedCredential/LotBid: send_default_pii=True не
+# отключает явно переданный EventScrubber.
+SECRET_DENYLIST_EXTRA = [
+    "p12",
+    "p12_b64",
+    "p12_bytes",
+    "p12_enc",
+    "portal_password",
+    "portal_password_enc",
+    "key_pin",
+    "key_pin_enc",
+    "pin",
+    "price",
+    "bid",
+    "bid_enc",
+    "bid_nonce",
+]
+
 
 def setup_sentry(component: str) -> None:
     """`component` — 'web' / 'cli' / 'daily', попадает в тег для фильтрации в UI."""
@@ -28,6 +48,7 @@ def setup_sentry(component: str) -> None:
     try:
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
     except ImportError:
         log.warning("sentry-sdk не установлен — пропускаю инициализацию")
         return
@@ -49,6 +70,11 @@ def setup_sentry(component: str) -> None:
         # PII — урлы и заголовки могут содержать БИН/контакты заказчиков,
         # но не пользовательский PII. Включаем — это упрощает диагностику.
         send_default_pii=True,
+        # Но секреты автоподачи (p12/пароль/PIN/цена) вычищаем явно — из полей
+        # события И из локальных переменных в стеке (verify-7).
+        event_scrubber=EventScrubber(
+            denylist=DEFAULT_DENYLIST + SECRET_DENYLIST_EXTRA, recursive=True
+        ),
     )
     sentry_sdk.set_tag("component", component)
     _initialised = True

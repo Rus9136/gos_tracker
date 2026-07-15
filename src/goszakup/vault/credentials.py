@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
@@ -17,11 +17,15 @@ from . import crypto
 
 @dataclass(frozen=True)
 class DecryptedCredential:
-    """Секреты клиента в открытом виде — только на время использования."""
+    """Секреты клиента в открытом виде — только на время использования.
 
-    p12_bytes: bytes
-    portal_password: str
-    key_pin: str | None
+    repr=False на всех полях: repr не должен раскрывать plaintext — Sentry
+    сериализует reprs локальных переменных в стеке при исключении (verify-7).
+    """
+
+    p12_bytes: bytes = field(repr=False)
+    portal_password: str = field(repr=False)
+    key_pin: str | None = field(repr=False)
 
 
 def create_credential(
