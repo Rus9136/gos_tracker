@@ -25,6 +25,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -165,6 +166,15 @@ class Lot(Base):
     """Лот внутри объявления."""
 
     __tablename__ = "lots"
+    __table_args__ = (
+        # /actual, /past: WHERE is_actual=? ORDER BY first_seen DESC — составной
+        # индекс закрывает и фильтр, и сортировку одним проходом (на 800K строк
+        # одноколоночные is_actual+first_seen дают bitmap-and + отдельный Sort).
+        Index("ix_lots_actual_first_seen", "is_actual", "first_seen"),
+        # /runs/{id}: WHERE last_synced BETWEEN started_at AND upper — раньше
+        # last_synced не был индексирован вообще (в отличие от first_seen).
+        Index("ix_lots_last_synced", "last_synced"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # lot_id с сайта
     number: Mapped[str | None] = mapped_column(String(50), index=True)
@@ -411,6 +421,10 @@ class UserLotMatch(Base):
     __tablename__ = "user_lot_matches"
     __table_args__ = (
         UniqueConstraint("user_query_id", "lot_id", name="uq_match_query_lot"),
+        # /matched: WHERE user_query_id IN (...) AND matched=? ORDER BY score DESC —
+        # составной индекс вместо bitmap-and по трём одноколоночным при росте
+        # UserLotMatch (N запросов × 800K лотов).
+        Index("ix_match_query_matched_score", "user_query_id", "matched", "score"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
