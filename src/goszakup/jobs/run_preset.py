@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -162,6 +163,12 @@ def _upsert_lot_from_listing(
     prev_status = lot.status_code
     new_status_name = hit.status_name or lot.status_name
     new_status_code = _status_code_from_name(new_status_name)
+    if new_status_name and new_status_code is None:
+        # Неизвестный статус → is_actual=False молча гасит лот (пропадёт из
+        # /actual, матчинга, уведомлений). Раньше это было тихо; теперь активный
+        # сигнал (WARNING уходит в Sentry) — значит goszakup ввёл новый статус
+        # и STATUS_NAMES пора обновить (P0 №6).
+        _warn_unknown_status(new_status_name)
 
     customer = _get_or_create_org(session, bin_=None, name=hit.customer_name)
 
@@ -379,6 +386,17 @@ def _status_code_from_name(name: str | None) -> int | None:
         if n == name:
             return code
     return None
+
+
+@lru_cache(maxsize=256)
+def _warn_unknown_status(name: str) -> None:
+    """Один WARNING на каждое новое неизвестное имя статуса за жизнь процесса
+    (lru_cache дедупит — иначе спам на каждый лот с этим статусом)."""
+    log.warning(
+        "неизвестный статус goszakup %r — лот помечен НЕактуальным; "
+        "обновите scraper/statuses.py:STATUS_NAMES",
+        name,
+    )
 
 
 @dataclass
