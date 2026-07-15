@@ -48,13 +48,13 @@ from ..jobs.run_preset import (
 )
 from ..scraper.announce import fetch_announcement
 from ..scraper.search import SearchParams, iter_listing
+
+# Импорты ниже регистрируют actor'ы в брокере (воркер грузит именно этот модуль).
+# Без них actor не зарегистрирован, и его задачи молча копятся в Redis независимо
+# от --queues воркера — ровно то, что случилось с autosubmit (P0-2).
+from .autosubmit import autosubmit_dispatch_actor  # noqa: E402,F401
 from .broker import REDIS_URL, broker  # noqa: F401 — импорт broker до actor'ов обязателен
-
-# Импорт регистрирует match_actor в брокере (воркер грузит этот модуль) и
-# даёт fan-out хелпер для analyze_actor.
-from .matching import enqueue_matches_for_lot  # noqa: E402
-
-# Импорт регистрирует notify_actor (очередь goszakup_notify) в брокере.
+from .matching import enqueue_matches_for_lot  # noqa: E402 — fan-out хелпер для analyze_actor
 from .notify import notify_actor  # noqa: E402,F401
 from .rate_limit import make_http_session
 
