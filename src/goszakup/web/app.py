@@ -839,7 +839,21 @@ def document_download(
     user: User = Depends(require_user),
 ):
     doc = db.get(Document, doc_id)
-    if not doc or not doc.local_path or not Path(doc.local_path).exists():
+    if not doc:
+        raise HTTPException(404, "файл не найден")
+    # IDOR-защита: документ показывается на карточке лота, поэтому доступ к нему
+    # гейтим тем же scope. Отдаём, только если хотя бы один лот его объявления в
+    # scope пользователя. Вне scope — 404 (не раскрываем существование), как на
+    # /lot/{id}. Проверяем ДО обращения к диску.
+    if not user.is_admin:
+        in_scope = db.scalar(
+            select(Lot.id)
+            .where(Lot.announcement_id == doc.announcement_id, *scope_conditions(user))
+            .limit(1)
+        )
+        if in_scope is None:
+            raise HTTPException(404, "файл не найден")
+    if not doc.local_path or not Path(doc.local_path).exists():
         raise HTTPException(404, "файл не найден")
     return FileResponse(
         doc.local_path,
