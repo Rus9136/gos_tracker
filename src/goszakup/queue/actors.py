@@ -39,6 +39,7 @@ from ..db.models import Lot, Preset, ScrapeRun
 from ..jobs.expire import expire_actual_lots
 from ..jobs.ingest import close_stale_runs
 from ..jobs.reconcile import find_orphan_stub_annos
+from ..jobs.retention import cleanup_old_documents
 from ..jobs.run_preset import (
     _apply_details,
     _apply_enstru_code,
@@ -168,6 +169,9 @@ def expire_actor() -> None:
         closed = close_stale_runs(session)
     if closed:
         log.info("expire_actor: закрыто %d зависших прогонов", closed)
+    # Retention скачанных ТЗ — чтобы data/docs/ не рос вечно.
+    with SessionLocal() as session:
+        cleanup_old_documents(session)
     # И дозаполняем объявления-заглушки, осиротевшие при обрыве листинга.
     reconcile_actor.send()
 
