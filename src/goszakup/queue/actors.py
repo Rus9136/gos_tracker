@@ -38,6 +38,7 @@ from ..db.engine import SessionLocal
 from ..db.models import Lot, Preset, ScrapeRun
 from ..jobs.expire import expire_actual_lots
 from ..jobs.ingest import close_stale_runs
+from ..jobs.reconcile import find_orphan_stub_annos
 from ..jobs.run_preset import (
     _apply_details,
     _apply_enstru_code,
@@ -167,6 +168,30 @@ def expire_actor() -> None:
         closed = close_stale_runs(session)
     if closed:
         log.info("expire_actor: закрыто %d зависших прогонов", closed)
+    # И дозаполняем объявления-заглушки, осиротевшие при обрыве листинга.
+    reconcile_actor.send()
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
+def reconcile_actor() -> None:
+    """Дозаполнить объявления-заглушки без деталей (оборванный листинг /
+    потерянная detail-задача) — ставит detail_actor для затронутых объявлений.
+
+    Self-healing: детали к таким лотам иначе не приедут никогда (на ретрае
+    листинга они уже «не новые»). Ставится ежечасно из expire_actor."""
+    r = _redis_client()
+    with SessionLocal() as session:
+        anno_ids = find_orphan_stub_annos(session)
+        if not anno_ids:
+            return
+        run = ScrapeRun(preset_id=None, note="reconcile: дозаполнение заглушек")
+        session.add(run)
+        session.commit()
+        run_id = run.id
+    _set_pending(r, run_id, len(anno_ids))
+    for anno_id in anno_ids:
+        detail_actor.send(anno_id, run_id)
+    log.info("reconcile: %d объявлений на дозаполнение (run %d)", len(anno_ids), run_id)
 
 
 @dramatiq.actor(
