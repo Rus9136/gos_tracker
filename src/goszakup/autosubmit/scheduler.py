@@ -29,6 +29,7 @@ from ..vault.credentials import decrypt_credential
 from ..vault.crypto import decrypt_str
 from .agent_client import AgentClient, AgentError
 from .rpc import LotBid, RunRequest, RunResult
+from .timing import deadline_guard
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,14 @@ def dispatch_due_submissions(
         sub = session.scalar(claim)
         if sub is None:
             continue  # уже застолблена другим тиком либо больше не PLANNED
+
+        # Дедлайн подачи истёк — не отправляем (агенту нечего гнать в молоко).
+        if not deadline_guard(sub.close_at):
+            sub.status = "SKIPPED"
+            sub.error = "close_at прошёл до отправки агенту"
+            session.commit()
+            log.warning("autosubmit #%s SKIPPED: дедлайн подачи истёк", sub.id)
+            continue
 
         # DISPATCHING коммитим ДО отправки агенту. Краш между отправкой и ARMED
         # оставит подачу в DISPATCHING (не PLANNED) — следующий тик её НЕ отправит

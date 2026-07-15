@@ -48,7 +48,7 @@ class _CountingAgent:
         return {"ack": True}
 
 
-def _mk_submission(session, *, sub_id, open_at, status="PLANNED"):
+def _mk_submission(session, *, sub_id, open_at, status="PLANNED", close_at=None):
     cred = ClientCredential(
         label="t",
         p12_enc="x",
@@ -65,6 +65,7 @@ def _mk_submission(session, *, sub_id, open_at, status="PLANNED"):
         bid_enc="e",
         bid_nonce="n",
         open_at=open_at,
+        close_at=close_at,
         status=status,
     )
     session.add(sub)
@@ -144,6 +145,19 @@ def test_agent_error_returns_to_planned_then_failed(db_session):
     sub = db_session.get(Submission, 1)
     assert sub.status == "FAILED"
     assert sub.attempts == scheduler_mod.MAX_DISPATCH_ATTEMPTS
+
+
+def test_expired_close_at_is_skipped_not_dispatched(db_session):
+    due = datetime.now(UTC) + timedelta(seconds=60)
+    past_close = datetime.now(UTC) - timedelta(minutes=1)
+    _mk_submission(db_session, sub_id=1, open_at=due, close_at=past_close)
+    agent = _CountingAgent()
+
+    armed = dispatch_due_submissions(db_session, agent, warmup_lead=300)
+
+    assert armed == []
+    assert agent.calls == []  # агенту не отправляли
+    assert db_session.get(Submission, 1).status == "SKIPPED"
 
 
 # --- apply_result: forward-only (P0-apply) ---------------------------------

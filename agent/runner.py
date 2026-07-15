@@ -11,7 +11,7 @@ from datetime import datetime
 
 from .protocol import RunRequest, RunResult
 from .report import report_result
-from .timing import wait_until
+from .timing import deadline_guard, wait_until
 from .wizard import Wizard
 
 log = logging.getLogger(__name__)
@@ -26,8 +26,20 @@ def run(req: RunRequest) -> RunResult:
         open_at = datetime.fromisoformat(req.open_at_iso)
         log.info("#%s прогрет, ждём open_at", req.submission_id)
         wait_until(open_at, clock_offset=req.clock_offset, lead=req.fire_lead)
-        fields = wiz.submit_after_open()  # гонка визарда
-        result = RunResult(submission_id=req.submission_id, **fields)
+        close_at = (
+            datetime.fromisoformat(req.close_at_iso) if req.close_at_iso else None
+        )
+        if not deadline_guard(close_at):
+            # Дедлайн подачи истёк, пока ждали/прогревались — не стреляем.
+            log.warning("run #%s: close_at прошёл — подача пропущена", req.submission_id)
+            result = RunResult(
+                submission_id=req.submission_id,
+                status="SKIPPED",
+                error="close_at прошёл до выстрела",
+            )
+        else:
+            fields = wiz.submit_after_open()  # гонка визарда
+            result = RunResult(submission_id=req.submission_id, **fields)
     except Exception as e:  # noqa: BLE001 — любой сбой → FAILED + отчёт
         log.exception("run #%s failed", req.submission_id)
         result = RunResult(
