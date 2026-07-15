@@ -1,0 +1,15 @@
+[Unit]
+Description=Goszakup Tracker — сторож LLM-контура (алерт в Telegram при отказе)
+
+[Service]
+Type=oneshot
+User=rus
+Group=rus
+WorkingDirectory=/home/rus/projects/gos_tracker
+# Живой пинг Cerebras + проверка давности матчей. К goszakup не ходит,
+# rate-limit не нужен. Exit 1 при проблеме — юнит станет failed, это видно
+# в `systemctl list-units --failed` даже если Telegram недоступен.
+ExecStart=/home/rus/projects/gos_tracker/.venv/bin/python -m goszakup.cli health-check
+
+NoNewPrivileges=true
+TimeoutStartSec=5m

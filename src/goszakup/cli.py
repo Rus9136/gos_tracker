@@ -169,6 +169,32 @@ def expire(
     typer.echo(f"enqueued expire_actor (message_id={msg.message_id})")
 
 
+@app.command("health-check")
+def health_check(
+    notify: bool = typer.Option(
+        True, "--notify/--no-notify", help="Слать алерт в Telegram админам."
+    ),
+) -> None:
+    """Проверить, жив ли LLM-контур; при поломке — алерт админам в Telegram.
+
+    Так гоняет ежечасный systemd-таймер. Существует потому, что правило #7
+    гасит ошибки LLM намеренно: без активной проверки отказ провайдера виден
+    только в journal (402 от Cerebras однажды тихо гасил матчинг 15 дней).
+    Exit code 1 при проблеме — чтобы systemd пометил юнит failed.
+    """
+    _setup_logging(verbose=False)
+    from .jobs.health import run_health_check
+
+    with SessionLocal() as s:
+        problems = run_health_check(s, notify=notify)
+    if not problems:
+        typer.echo("health: ок")
+        return
+    for p in problems:
+        typer.echo(p)
+    raise typer.Exit(1)
+
+
 @app.command()
 def reanalyze(
     lot_id: int | None = typer.Option(None, "--lot-id", help="один лот по id"),

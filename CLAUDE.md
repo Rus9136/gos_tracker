@@ -63,7 +63,10 @@
   «Подробнее» в уведомлении; без него `POST /telegram/webhook` отвечает 503;
   после добавления один раз выполнить `cli telegram-set-webhook`),
   `GZ_PUBLIC_BASE_URL` (адрес UI для ссылки в уведомлении,
-  дефолт `https://gost.salemsoft.kz`). Автоподача заявок (правило #19,
+  дефолт `https://gost.salemsoft.kz`). Сторож LLM-контура (правило #20):
+  `GZ_HEALTH_MATCH_STALE_HOURS` (порог давности матча для тревоги, дефолт 48;
+  `0` — выключить эту проверку), `GZ_HEALTH_ALERT_COOLDOWN` (пауза между
+  повторными алертами, дефолт 21600 = 6ч). Автоподача заявок (правило #19,
   `TENDER_AUTOSUBMIT_PLAN.md`): **`GZ_VAULT_MASTER_KEY`** (base64 от 32 байт —
   мастер-ключ KeyVault для чужих .p12/паролей/PIN; без него обращение к Vault
   падает), `GZ_AUTOSUBMIT_AGENT_URL` (адрес Windows submit-agent по приватной
@@ -127,6 +130,12 @@
     enqueue `expire_actor` → worker гасит `is_actual` у лотов с истёкшим
     сроком приёма заявок. Шаблоны юнитов — в `scripts/systemd/`. К goszakup
     не ходит, lock/rate-limit не нужны. См. правило #12.
+  - **`goszakup-health.timer` + `goszakup-health.service`** (правило #20,
+    шаблоны в `scripts/systemd/`) — `OnCalendar=*-*-* *:35:00` (ежечасно),
+    oneshot. Делает `cli health-check`: пингует Cerebras и смотрит давность
+    матчей, при поломке шлёт алерт админам в Telegram. К goszakup и в очередь
+    не ходит. Ставится один раз:
+    `sudo cp scripts/systemd/goszakup-health.* /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now goszakup-health.timer`.
   - **`goszakup-autosubmit.timer` + `goszakup-autosubmit.service`**
     (правило #19, шаблоны в `scripts/systemd/`) — `OnCalendar=minutely`, oneshot.
     Делает `cli autosubmit-dispatch --enqueue` → `autosubmit_dispatch_actor`
@@ -427,6 +436,25 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     живому конкурсу (`agent/RECON.md` + `agent/recon_dump.py`). Очередь
     `goszakup_autosubmit` обязана быть в `--queues` воркера.
 
+20. **Отказ LLM молчалив — его ловит только активный сторож.** Правило #7
+    намеренно гасит ошибки LLM (пайплайн не должен падать из-за провайдера),
+    поэтому его отказ не виден нигде, кроме `log.warning`. 2026-06-30 Cerebras
+    начал отдавать `402 payment_required` (кончилась квота) — матчинг и
+    Telegram-уведомления молча стояли **15 дней**, пока пользователь не заметил
+    сам. `jobs/health.py` + `cli health-check` + `goszakup-health.timer`
+    (ежечасно, `:35`) дают сигнал: **живой пинг** Cerebras (~10 токенов) и
+    давность последнего матча. НЕ выводить здоровье из «давно не было
+    LLM-вызовов»: в тихий день новых IT-лотов может не быть вовсе, и такой
+    признак врёт (29.06.2026 — легитимный ноль вызовов). Алерт идёт админам с
+    `telegram_chat_id`, дедуп — Redis-ключ `goszakup:health:alerted` с TTL
+    (`GZ_HEALTH_ALERT_COOLDOWN`), иначе за две недели прилетело бы 300+
+    сообщений. Redis недоступен → шлём (лучше лишнее, чем тишина).
+    Диагностика такого сбоя по БД: у актуального IT-лота **нет строки** в
+    `lot_analyses` (при ошибке LLM запись не создаётся намеренно — чтобы
+    следующий прогон переанализировал). `analyzer_version='rules-v1-ru'` —
+    НЕ признак сбоя: rule-based идёт до LLM и экономит вызов при
+    `confidence >= 0.85`.
+
 ## Где что лежит
 
 - `scraper/search.py` — listing-парсер, основа табличной выдачи. Не путать с
@@ -487,6 +515,12 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   для актуальных лотов с истёкшим `Announcement.application_end`. Источник
   правила #12. Бэкофилл для старых лотов — `scripts/backfill_deadlines.py`
   (тянет только таб `general`, по одному запросу на объявление).
+- `jobs/health.py` — сторож LLM-контура (правило #20). `check_llm()` — живой
+  пинг Cerebras; `match_age_hours()` — давность последнего матча;
+  `run_health_check(session, notify=)` — собрать проблемы и разослать алерт
+  админам. Точка входа — `cli health-check` (exit 1 при проблеме, чтобы юнит
+  стал failed и это было видно в `systemctl list-units --failed` даже когда
+  Telegram недоступен).
 - `jobs/scan.py` — `create_scan_run(...)` для UI `/scan`. Собирает
   человекочитаемый `note` (регион, диапазон сумм, статусы, IT-категории,
   режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.

@@ -1,0 +1,14 @@
+[Unit]
+Description=Goszakup Tracker — ежечасный таймер health-check
+
+[Timer]
+# Каждый час в :35 — подальше от daily (06:00) и expire (:05), чтобы пинг
+# не тонул в их нагрузке. Повторные алерты гасит cooldown в jobs/health.py,
+# а не редкость таймера: сбой надо ловить быстро, спамить — не надо.
+OnCalendar=*-*-* *:35:00
+Persistent=true
+RandomizedDelaySec=120
+Unit=goszakup-health.service
+
+[Install]
+WantedBy=timers.target
