@@ -9,12 +9,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
-from ..config import DB_URL
+from ..config import DB_URL, ROOT
 from .models import Base
+
+log = logging.getLogger(__name__)
 
 _is_sqlite = make_url(DB_URL).get_backend_name() == "sqlite"
 
@@ -70,10 +74,41 @@ def _ensure_columns() -> None:
             conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
 
 
+def _stamp_alembic_head() -> None:
+    """Пометить только что созданную create_all-схему как Alembic head.
+
+    Единственная истинная схема — миграции (`migrations/`). Но create_all может
+    построить полную схему на пустой БД, минуя историю Alembic — тогда `alembic
+    upgrade head` упадёт на «table already exists» или схема разойдётся молча.
+    Поэтому свежесозданную БД сразу штампуем head: create_all строит ровно
+    текущие модели = состояние head, а alembic_version делает это официальным.
+
+    Config() без ini — чтобы env.py не звал fileConfig и не переопределял
+    логирование приложения. Defensive: сбой штампа не должен ронять init_db.
+    """
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ROOT / "migrations"))
+        command.stamp(cfg, "head")
+    except Exception as e:  # noqa: BLE001 — safety net, не критично для старта
+        log.warning("alembic stamp head пропущен (%s)", e)
+
+
 def init_db() -> None:
-    """Создаёт таблицы (idempotent) и добавляет недостающие колонки."""
+    """Создаёт таблицы (idempotent) и добавляет недостающие колонки.
+
+    Канонический источник схемы — Alembic (`migrations/`). create_all оставлен
+    как safety net для свежих/dev-БД; на пустой БД мы дополнительно штампуем
+    Alembic head, чтобы create_all-схема и история миграций не расходились.
+    """
+    fresh = not inspect(engine).has_table("lots")
     Base.metadata.create_all(engine)
     _ensure_columns()
+    if fresh:
+        _stamp_alembic_head()
 
 
 def get_session() -> Session:
