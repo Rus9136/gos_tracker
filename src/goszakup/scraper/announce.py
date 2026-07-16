@@ -131,6 +131,23 @@ class ContractRow:
 
 
 @dataclass
+class WinnerRow:
+    """Строка вкладки «Информация о победителях» (tab=winners).
+
+    Цены победителя там нет — только плановая сумма; фактическая сумма
+    берётся из договора (tab=contracts), когда он появится.
+    """
+
+    lot_number: str
+    lot_status: str
+    plan_amount: float | None
+    winner_bin: str
+    winner_name: str
+    second_bin: str
+    second_name: str
+
+
+@dataclass
 class AnnouncementDetail:
     id: int
     url: str
@@ -152,6 +169,7 @@ class AnnouncementDetail:
     lots: list[LotDetail] = field(default_factory=list)
     documents: list[DocumentRow] = field(default_factory=list)
     contracts: list[ContractRow] = field(default_factory=list)
+    winners: list[WinnerRow] = field(default_factory=list)
 
 
 def _split_bin_name(s: str) -> tuple[str, str]:
@@ -389,6 +407,57 @@ def _parse_contracts(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
                 )
 
 
+def _parse_winners(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
+    for table in soup.select("table"):
+        headers = [_clean(th.get_text(" ")) for th in table.find_all("th")]
+        if not headers or "Победитель" not in headers or "Номер лота" not in headers:
+            continue
+        idx = {h: i for i, h in enumerate(headers)}
+
+        def cell(row, key: str) -> str:
+            i = idx.get(key)
+            if i is None:
+                return ""
+            cells = row.find_all("td")
+            if i >= len(cells):
+                return ""
+            return _clean(cells[i].get_text(" "))
+
+        for tr in table.find_all("tr"):
+            if not tr.find("td"):
+                continue
+            winner_bin, winner_name = _split_bin_name(cell(tr, "Победитель"))
+            second_bin, second_name = _split_bin_name(
+                cell(tr, "Поставщик, занявший второе место")
+            )
+            if not (winner_bin or winner_name):
+                continue
+            detail.winners.append(
+                WinnerRow(
+                    lot_number=cell(tr, "Номер лота"),
+                    lot_status=cell(tr, "Статус лота"),
+                    plan_amount=_parse_amount(cell(tr, "Плановая сумма лота, тенге")),
+                    winner_bin=winner_bin,
+                    winner_name=winner_name,
+                    second_bin=second_bin,
+                    second_name=second_name,
+                )
+            )
+        return
+
+
+def _winners_possible(detail: AnnouncementDetail) -> bool:
+    """Пока все лоты в «открытых» статусах, победителей нет по определению —
+    экономим запрос tab=winners. Detail-фаза повторяется на смене статуса,
+    так что вкладку дёрнем, как только лот уйдёт из приёма заявок."""
+    from .statuses import ACTUAL_STATUSES, STATUS_NAMES
+
+    open_names = {STATUS_NAMES[c] for c in ACTUAL_STATUSES}
+    if not detail.lots:
+        return True
+    return any(ld.status_name and ld.status_name not in open_names for ld in detail.lots)
+
+
 def fetch_announcement(
     anno_id: int, session: ThrottledSession | None = None
 ) -> AnnouncementDetail:
@@ -420,6 +489,13 @@ def fetch_announcement(
     r = sess.get(f"{ANNOUNCE_URL}/{anno_id}", params={"tab": "contracts"})
     r.raise_for_status()
     _parse_contracts(BeautifulSoup(r.text, "lxml"), detail)
+
+    # winners: победитель появляется раньше договора (у ценовых предложений
+    # договор может отсутствовать вовсе), поэтому это отдельный источник.
+    if _winners_possible(detail):
+        r = sess.get(f"{ANNOUNCE_URL}/{anno_id}", params={"tab": "winners"})
+        r.raise_for_status()
+        _parse_winners(BeautifulSoup(r.text, "lxml"), detail)
 
     return detail
 

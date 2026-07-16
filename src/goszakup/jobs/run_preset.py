@@ -225,6 +225,11 @@ def _apply_details(session: Session, lot: Lot, detail: AnnouncementDetail) -> No
     lot.amount_y1 = matched.amount_y1 or lot.amount_y1
     lot.amount_y2 = matched.amount_y2 or lot.amount_y2
     lot.amount_y3 = matched.amount_y3 or lot.amount_y3
+    for w in detail.winners:
+        if w.lot_number and lot.number and w.lot_number == lot.number:
+            lot.winner_bin = w.winner_bin or lot.winner_bin
+            lot.winner_name = w.winner_name or lot.winner_name
+            break
     session.flush()
 
 

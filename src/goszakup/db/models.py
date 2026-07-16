@@ -215,6 +215,11 @@ class Lot(Base):
     amount_y3: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
     status_code: Mapped[int | None] = mapped_column(Integer, index=True)
     status_name: Mapped[str | None] = mapped_column(String(200), index=True)
+    # Вкладка «Информация о победителях» (tab=winners): победитель появляется
+    # раньше договора, а у ценовых предложений договора может не быть вовсе.
+    # Сумму победителя вкладка не публикует — фактическая сумма в contracts.
+    winner_bin: Mapped[str | None] = mapped_column(String(20), index=True)
+    winner_name: Mapped[str | None] = mapped_column(String(500))
     is_actual: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     # Ручная пометка «интересный лот» из UI (звёздочка на карточке/в списке).
     # Не связана с автоматикой пайплайна — выставляется только пользователем.
