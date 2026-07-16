@@ -25,8 +25,8 @@ import time
 
 import requests
 
-from ..config import CRAWL_DELAY, HTTP_HEADERS
-from ..scraper.http import ThrottledSession
+from ..config import CRAWL_DELAY
+from ..scraper.http import ThrottledSession, build_goszakup_session
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +41,7 @@ class RedisThrottledSession:
     def __init__(self, redis_client, delay: float = CRAWL_DELAY) -> None:
         self.redis = redis_client
         self.delay = delay
-        self.session = requests.Session()
-        self.session.headers.update(HTTP_HEADERS)
+        self.session = build_goszakup_session()
 
     def _wait_for_slot(self, hold_ttl: int | None = None) -> None:
         # Цикл: пытаемся занять слот; если занят — спим оставшийся TTL.

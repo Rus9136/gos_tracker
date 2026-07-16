@@ -25,11 +25,12 @@ DB_PATH = DATA_DIR / "goszakup.sqlite"
 # Alembic autogenerate (пустая БД) и будущим переездом на Postgres.
 DB_URL = os.environ.get("GZ_DATABASE_URL", f"sqlite:///{DB_PATH}")
 
-# SOCKS/HTTP-прокси для запросов к v3bl.goszakup.gov.kz. С нашего FR-IP
-# v3bl возвращает 403 на уровне nginx (геоблок по ASN), поэтому файлы
-# скачиваем через туннель в KZ. Применяется ТОЛЬКО к v3bl-хосту —
-# листинги и страницы объявлений идут напрямую (быстрее, без лишней
-# нагрузки на туннель). См. systemd-юнит goszakup-tunnel.service.
+# SOCKS/HTTP-прокси (туннель в KZ) для запросов к goszakup. Исходно был
+# только для v3bl.goszakup.gov.kz (403-геоблок по ASN на nginx), но с
+# 2026-07-16 и основной goszakup.gov.kz начал массово дропать TCP-коннекты
+# с нашего FR-IP (перемежающиеся ConnectTimeout), поэтому через туннель
+# идёт ВЕСЬ трафик скрейперных сессий (см. build_goszakup_session).
+# См. systemd-юнит goszakup-tunnel.service.
 GZ_PROXY_URL = os.environ.get("GZ_PROXY_URL") or None
 
 # Минимальная сумма лота, ниже которой не отслеживаем (зафиксировано продуктовым решением).
