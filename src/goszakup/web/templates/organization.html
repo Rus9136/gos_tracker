@@ -34,79 +34,89 @@
 </div>
 
 <div class="card mb-3">
-  <div class="card-head">
-    <div>
-      <div class="card-title">Актуальные <span class="dim">({{ actual|length }})</span></div>
+  <div class="card-head"><div class="card-title">Данные в трекере</div></div>
+  <div class="card-body">
+    {% if year_counts %}
+    <div class="flex gap-2" style="flex-wrap:wrap; align-items:center">
+      <span class="dim" style="font-size:12.5px">Лотов по годам публикации:</span>
+      {% for y in year_counts %}
+      <span class="badge muted mono">{{ y.yr|int }}: {{ y.n|n }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="dim mt-2" style="font-size:12.5px">
+      Победитель записан у <span class="strong">{{ n_winner|n }}</span> лотов
+      {% if last_synced %} • последняя синхронизация: <span class="mono">{{ last_synced|dt }}</span>{% endif %}.
+      Если по нужным годам лотов мало или нет — данные не загружались:
+      {% if user and user.is_admin and org.bin %}<a href="/ingest?customer_bin={{ org.bin }}">дозагрузить по БИН</a>{% else %}нужна дозагрузка через /ingest (admin){% endif %}.
     </div>
   </div>
-  {% if actual %}
-  <div style="overflow:auto">
-  <table class="tbl">
-    <thead>
-      <tr>
-        <th style="width:120px">Лот</th>
-        <th>Название</th>
-        <th style="width:160px">Категория</th>
-        <th style="width:200px">Статус</th>
-        <th class="num" style="width:140px">Сумма ₸</th>
-        <th style="width:140px">Замечен</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for lot in actual %}
-      <tr onclick="window.location='/lot/{{ lot.id }}'">
-        <td class="mono dim" style="font-size:12px">#{{ lot.number or lot.id }}</td>
-        <td><div class="strong clamp-2" style="max-width:500px">{{ lot.name or '—' }}</div></td>
-        <td>{{ cat_tag(lot.it_category) }}</td>
-        <td>{{ status_pill(lot.status_code, mini=True) }}</td>
-        <td class="num mono">{{ lot.plan_amount|n }}</td>
-        <td class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}
-  <div class="card-body dim">Нет актуальных лотов.</div>
-  {% endif %}
 </div>
 
+{% set tabs = [("all", "Все лоты", lots), ("actual", "Актуальные", actual), ("past", "Прошедшие", past)] %}
 <div class="card">
   <div class="card-head">
-    <div>
-      <div class="card-title">Прошедшие <span class="dim">({{ past|length }})</span></div>
+    <div class="flex gap-1">
+      {% for key, label, items in tabs %}
+      <button class="btn sm {{ '' if loop.first else 'ghost' }}" type="button"
+              data-tab-btn="{{ key }}" onclick="orgTab('{{ key }}')">
+        {{ label }} <span class="dim">({{ items|length }})</span>
+      </button>
+      {% endfor %}
     </div>
   </div>
-  {% if past %}
-  <div style="overflow:auto">
-  <table class="tbl">
-    <thead>
-      <tr>
-        <th style="width:120px">Лот</th>
-        <th>Название</th>
-        <th style="width:160px">Категория</th>
-        <th style="width:200px">Статус</th>
-        <th class="num" style="width:140px">Сумма ₸</th>
-        <th style="width:140px">Замечен</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for lot in past %}
-      <tr onclick="window.location='/lot/{{ lot.id }}'">
-        <td class="mono dim" style="font-size:12px">#{{ lot.number or lot.id }}</td>
-        <td><div class="strong clamp-2" style="max-width:500px">{{ lot.name or '—' }}</div></td>
-        <td>{{ cat_tag(lot.it_category) }}</td>
-        <td>{{ status_pill(lot.status_code, mini=True) }}</td>
-        <td class="num mono">{{ lot.plan_amount|n }}</td>
-        <td class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% for key, label, items in tabs %}
+  <div data-tab-pane="{{ key }}" {% if not loop.first %}style="display:none"{% endif %}>
+    {% if items %}
+    <div style="overflow:auto">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:110px">Лот</th>
+          <th>Название</th>
+          <th style="width:140px">Категория</th>
+          <th style="width:180px">Статус</th>
+          <th class="num" style="width:130px">Сумма ₸</th>
+          <th style="width:220px">Победитель</th>
+          <th style="width:130px">Замечен</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lot in items %}
+        <tr onclick="window.location='/lot/{{ lot.id }}'">
+          <td class="mono dim" style="font-size:12px">#{{ lot.number or lot.id }}</td>
+          <td><div class="strong clamp-2" style="max-width:440px">{{ lot.name or '—' }}</div></td>
+          <td>{{ cat_tag(lot.it_category) }}</td>
+          <td>{{ status_pill(lot.status_code, mini=True) }}</td>
+          <td class="num mono">{{ lot.plan_amount|n }}</td>
+          <td>
+            {% if lot.winner_name %}
+            <div class="clamp-2" style="max-width:220px; font-size:12.5px">{{ lot.winner_name }}</div>
+            <div class="dim mono" style="font-size:11px">{{ lot.winner_bin or '' }}</div>
+            {% else %}<span class="dim">—</span>{% endif %}
+          </td>
+          <td class="mono dim" style="font-size:12px">{{ lot.first_seen|dt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="card-body dim">Пусто.</div>
+    {% endif %}
   </div>
-  {% else %}
-  <div class="card-body dim">Нет прошедших лотов.</div>
-  {% endif %}
+  {% endfor %}
 </div>
+
+<script>
+function orgTab(key) {
+  document.querySelectorAll("[data-tab-pane]").forEach(p => {
+    p.style.display = p.dataset.tabPane === key ? "" : "none";
+  });
+  document.querySelectorAll("[data-tab-btn]").forEach(b => {
+    b.classList.toggle("ghost", b.dataset.tabBtn !== key);
+  });
+}
+</script>
 
 {% endblock %}

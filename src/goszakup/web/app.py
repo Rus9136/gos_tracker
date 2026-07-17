@@ -956,21 +956,33 @@ def organization_detail(
     # Одна организация в БД часто живёт двумя строками (customer без БИН из
     # листинга + organizer с БИН из деталей) — показываем лоты всех её записей.
     org_ids = related_org_ids(db, org)
+    org_lots_cond = or_(
+        Lot.customer_id.in_(org_ids),
+        Announcement.organizer_id.in_(org_ids),
+    )
     lots = db.scalars(
         select(Lot)
         .outerjoin(Announcement, Announcement.id == Lot.announcement_id)
-        .where(
-            or_(
-                Lot.customer_id.in_(org_ids),
-                Announcement.organizer_id.in_(org_ids),
-            )
-        )
+        .where(org_lots_cond)
         .order_by(desc(Lot.first_seen))
         .options(selectinload(Lot.customer))
     ).all()
     actual = [lt for lt in lots if lt.is_actual]
     past = [lt for lt in lots if not lt.is_actual]
     total_plan = sum((lt.plan_amount or 0) for lt in lots)
+    # Покрытие данных: сколько лотов по годам публикации уже в БД и когда
+    # последний раз синхронизировались — видно, нужна ли дозагрузка /ingest.
+    yr = func.extract("year", Announcement.publish_date)
+    year_counts = db.execute(
+        select(yr.label("yr"), func.count(Lot.id).label("n"))
+        .select_from(Lot)
+        .join(Announcement, Announcement.id == Lot.announcement_id)
+        .where(org_lots_cond, Announcement.publish_date.is_not(None))
+        .group_by(yr)
+        .order_by(yr)
+    ).all()
+    last_synced = max((lt.last_synced for lt in lots), default=None)
+    n_winner = sum(1 for lt in lots if lt.winner_bin)
     return templates.TemplateResponse(
         request,
         "organization.html",
@@ -979,7 +991,11 @@ def organization_detail(
             "org": org,
             "actual": actual,
             "past": past,
+            "lots": lots,
             "total_plan": total_plan,
+            "year_counts": year_counts,
+            "last_synced": last_synced,
+            "n_winner": n_winner,
         },
     )
 
