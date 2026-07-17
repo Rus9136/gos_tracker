@@ -21,6 +21,12 @@
     {% if org.address %}<div class="dim mt-1" style="font-size:12px">{{ org.address }}</div>{% endif %}
   </div>
   <div class="flex gap-2">
+    {% if user and user.is_admin %}
+    <a class="btn" href="/organization/{{ org.id }}/report">{{ icon("grid", 13) }} Отчёт по закупкам</a>
+    {% if org.bin %}
+    <a class="btn" href="/ingest?customer_bin={{ org.bin }}">{{ icon("refresh", 13) }} Дозагрузить лоты</a>
+    {% endif %}
+    {% endif %}
     {% if org.bin %}
     <button class="btn" type="button" onclick="navigator.clipboard.writeText('{{ org.bin }}'); this.textContent='✓ скопирован'">{{ icon("copy", 13) }} Скопировать БИН</button>
     {% endif %}

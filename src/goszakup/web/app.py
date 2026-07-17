@@ -9,7 +9,13 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -35,6 +41,7 @@ from ..config import (
     GZ_TELEGRAM_BOT_TOKEN,
     LLM_PRICE_INPUT_PER_MTOK,
     LLM_PRICE_OUTPUT_PER_MTOK,
+    PUBLIC_BASE_URL,
     SECRET_KEY,
     TELEGRAM_WEBHOOK_SECRET,
     require_safe_secret_key,
@@ -62,6 +69,7 @@ from ..jobs.ingest import (
     create_ingest_run,
     find_active_run,
 )
+from ..jobs.org_report import build_org_report, related_org_ids, render_markdown
 from ..jobs.run_preset import _save_announcement, _save_documents
 from ..jobs.scan import (
     ALL_MODES,
@@ -945,9 +953,18 @@ def organization_detail(
     org = db.get(Organization, org_id)
     if not org:
         raise HTTPException(404, "не найдено")
+    # Одна организация в БД часто живёт двумя строками (customer без БИН из
+    # листинга + organizer с БИН из деталей) — показываем лоты всех её записей.
+    org_ids = related_org_ids(db, org)
     lots = db.scalars(
         select(Lot)
-        .where(Lot.customer_id == org_id)
+        .outerjoin(Announcement, Announcement.id == Lot.announcement_id)
+        .where(
+            or_(
+                Lot.customer_id.in_(org_ids),
+                Announcement.organizer_id.in_(org_ids),
+            )
+        )
         .order_by(desc(Lot.first_seen))
         .options(selectinload(Lot.customer))
     ).all()
@@ -964,6 +981,38 @@ def organization_detail(
             "past": past,
             "total_plan": total_plan,
         },
+    )
+
+
+@app.get("/organization/{org_id}/report", response_class=HTMLResponse)
+def organization_report(
+    org_id: int,
+    request: Request,
+    format: str = "",
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Отчёт по закупкам организации: агрегаты по уже загруженным лотам.
+
+    Только SQL по локальной БД — к goszakup не ходит. Для полноты картины
+    лоты организации сначала догружаются через /ingest по БИН. Admin-only:
+    отчёт агрегирует все данные без persona-scope (правило #15)."""
+    org = db.get(Organization, org_id)
+    if not org:
+        raise HTTPException(404, "не найдено")
+    report = build_org_report(db, org)
+    if format == "md":
+        md = render_markdown(report, base_url=PUBLIC_BASE_URL)
+        fname = f"report_{org.bin or org.id}.md"
+        return PlainTextResponse(
+            md,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    return templates.TemplateResponse(
+        request,
+        "org_report.html",
+        {**_base_ctx(request, db, user), **report},
     )
 
 

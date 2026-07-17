@@ -1,0 +1,172 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import status_pill, cat_tag %}
+{% block title %}Отчёт: {{ org.name[:60] }} — Goszakup Tracker{% endblock %}
+{% block content %}
+
+<div class="crumb">
+  <a href="/organizations">{{ icon("arrowLeft", 12) }} Заказчики</a>
+  <span class="sep">/</span>
+  <a href="/organization/{{ org.id }}">{{ org.name[:60] }}</a>
+  <span class="sep">/</span>
+  <span class="strong">Отчёт</span>
+</div>
+
+<div class="page-head">
+  <div style="min-width:0">
+    <h1 class="page-title">Отчёт по закупкам</h1>
+    <div class="page-sub">
+      {{ org.name }}
+      {% if org.bin %} • БИН <span class="mono strong" style="color: var(--accent-hi)">{{ org.bin }}</span>{% endif %}
+      {% if org_ids|length > 1 %} • объединены {{ org_ids|length }} записи организации{% endif %}
+    </div>
+  </div>
+  <div class="flex gap-2">
+    <a class="btn" href="/organization/{{ org.id }}/report?format=md">{{ icon("download", 13) }} Скачать .md</a>
+    {% if org.bin %}
+    <a class="btn" href="/ingest?customer_bin={{ org.bin }}">{{ icon("refresh", 13) }} Дозагрузить лоты</a>
+    {% endif %}
+  </div>
+</div>
+
+{% set share = (kpis.n_ok * 100 / kpis.n_lots)|round|int if kpis.n_lots else 0 %}
+<div class="grid-4 mb-3" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px">
+  <div class="card"><div class="card-body">
+    <div class="strong" style="font-size:22px">{{ kpis.n_lots|n }} <span class="dim" style="font-size:14px">лотов · {{ kpis.n_annos|n }} объявл.</span></div>
+    <div class="dim" style="font-size:12.5px">загружено в трекер</div>
+  </div></div>
+  <div class="card"><div class="card-body">
+    <div class="strong" style="font-size:22px">{{ kpis.n_ok|n }} <span class="dim" style="font-size:14px">({{ share }}%)</span></div>
+    <div class="dim" style="font-size:12.5px">состоялись; победитель у {{ kpis.n_winner|n }}</div>
+  </div></div>
+  <div class="card"><div class="card-body">
+    <div class="strong mono" style="font-size:22px">{{ kpis.contract_total|n }} ₸</div>
+    <div class="dim" style="font-size:12.5px">сумма договоров (без НДС)</div>
+  </div></div>
+  <div class="card"><div class="card-body">
+    <div class="strong" style="font-size:22px">{{ kpis.it_n|n }} <span class="dim" style="font-size:14px">IT-лотов</span></div>
+    <div class="dim" style="font-size:12.5px">{{ kpis.it_ok|n }} состоялись · {{ kpis.it_contract_total|n }} ₸</div>
+  </div></div>
+</div>
+
+{% if actual_lots %}
+<div class="card mb-3">
+  <div class="card-head"><div class="card-title">Открытые лоты сейчас <span class="dim">({{ actual_lots|length }})</span></div></div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead><tr><th>Название</th><th style="width:150px">Категория</th><th style="width:200px">Статус</th><th class="num" style="width:140px">План ₸</th><th style="width:150px">Приём до</th></tr></thead>
+    <tbody>
+      {% for a in actual_lots %}
+      <tr onclick="window.location='/lot/{{ a.id }}'">
+        <td><div class="strong clamp-2" style="max-width:520px">{{ a.name or '—' }}</div></td>
+        <td>{{ cat_tag(a.it_category) }}</td>
+        <td>{{ a.status_name or '—' }}</td>
+        <td class="num mono">{{ a.plan_amount|n }}</td>
+        <td class="mono dim" style="font-size:12px">{{ a.application_end|dt if a.application_end else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+  <div class="card-head"><div class="card-title">Динамика по годам <span class="dim">(состоявшиеся закупки)</span></div></div>
+  {% if years %}
+  {% set max_contract = years|map(attribute='contract_ok')|max %}
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead><tr><th style="width:70px">Год</th><th class="num" style="width:100px">Лотов</th><th class="num" style="width:110px">Состоялось</th><th class="num" style="width:150px">План ₸</th><th class="num" style="width:150px">Договоры ₸</th><th></th></tr></thead>
+    <tbody>
+      {% for y in years %}
+      <tr>
+        <td class="mono strong">{{ y.yr|int }}</td>
+        <td class="num mono">{{ y.n_all|n }}</td>
+        <td class="num mono">{{ y.n_ok|n }}</td>
+        <td class="num mono dim">{{ y.plan_ok|n }}</td>
+        <td class="num mono strong">{{ y.contract_ok|n }}</td>
+        <td style="min-width:180px">
+          <div style="height:14px; border-radius:3px; background: var(--accent); opacity:.85; width: {{ (y.contract_ok * 100 / max_contract)|round(1) if max_contract else 0 }}%"></div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="card-body dim">Нет данных с датой публикации.</div>
+  {% endif %}
+</div>
+
+{% if it_lots %}
+<div class="card mb-3">
+  <div class="card-head"><div class="card-title">Состоявшиеся IT-лоты <span class="dim">({{ it_lots|length }})</span></div></div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead><tr><th style="width:60px">Год</th><th>Лот</th><th style="width:140px">Категория</th><th class="num" style="width:130px">План ₸</th><th class="num" style="width:130px">Договор ₸</th><th>Победитель</th></tr></thead>
+    <tbody>
+      {% for l in it_lots %}
+      <tr onclick="window.location='/lot/{{ l.id }}'">
+        <td class="mono dim">{{ l.yr|int if l.yr else '—' }}</td>
+        <td><div class="clamp-2" style="max-width:420px">{{ l.name or '—' }}</div></td>
+        <td>{{ cat_tag(l.it_category) }}</td>
+        <td class="num mono">{{ l.plan_amount|n }}</td>
+        <td class="num mono">{{ l.contract_amount|n if l.contract_amount is not none else '—' }}</td>
+        <td>{{ l.winner_name or '—' }} <span class="dim mono" style="font-size:11.5px">{{ l.winner_bin or '' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+  <div class="card-head"><div class="card-title">Категории — топ по сумме договоров</div></div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead><tr><th>Категория (ЕНС ТРУ)</th><th class="num" style="width:90px">Лотов</th><th class="num" style="width:130px">Состоялось</th><th class="num" style="width:150px">План ₸</th><th class="num" style="width:150px">Договоры ₸</th></tr></thead>
+    <tbody>
+      {% for c in cats %}
+      <tr>
+        <td><div class="clamp-2" style="max-width:520px">{{ c.enstru or '—' }}</div></td>
+        <td class="num mono">{{ c.n_all|n }}</td>
+        <td class="num mono">{{ c.n_ok|n }} <span class="dim">({{ (c.n_ok * 100 / c.n_all)|round|int if c.n_all else 0 }}%)</span></td>
+        <td class="num mono dim">{{ c.plan_ok|n }}</td>
+        <td class="num mono strong">{{ c.contract_ok|n }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-head"><div class="card-title">Поставщики-победители — топ по сумме</div></div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead><tr><th>Поставщик</th><th style="width:140px">БИН/ИИН</th><th class="num" style="width:120px">Лотов</th><th class="num" style="width:160px">Сумма ₸</th></tr></thead>
+    <tbody>
+      {% for w in winners %}
+      <tr>
+        <td>{{ w.winner_name or '—' }}</td>
+        <td class="mono dim">{{ w.winner_bin }}</td>
+        <td class="num mono">{{ w.n|n }}</td>
+        <td class="num mono strong">{{ w.total|n }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="dim" style="font-size:12.5px; max-width:92ch">
+  Отчёт считается по лотам, уже загруженным в трекер (заказчик или организатор — эта организация,
+  записи объединены по БИН/имени). Чтобы получить полную историю, сначала догрузите лоты по БИН
+  через «Дозагрузить лоты» — с деталями приедут договоры и победители. «Не состоялась» чаще всего
+  означает отсутствие участников: закупка публикуется повторно. Где договора нет, в топе
+  победителей учтена плановая сумма.
+</div>
+
+{% endblock %}

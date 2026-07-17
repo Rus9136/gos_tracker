@@ -521,6 +521,14 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   админам. Точка входа — `cli health-check` (exit 1 при проблеме, чтобы юнит
   стал failed и это было видно в `systemctl list-units --failed` даже когда
   Telegram недоступен).
+- `jobs/org_report.py` — отчёт по закупкам организации (`/organization/{id}/report`,
+  admin-only, `?format=md` — выгрузка в Markdown). Чистый SQL по уже загруженным
+  лотам, к goszakup не ходит. `related_org_ids` склеивает дубли организации
+  (customer без БИН из листинга + organizer с БИН из деталей — БИН в таблице
+  уникален, поэтому дубль всегда такой пары). Победители лотов приезжают из
+  вкладки winners в detail-фазе (поля `Lot.winner_bin`/`winner_name`). Типовой
+  сценарий: `/ingest` по БИН (услуги, годы, завершённые статусы) → дождаться
+  прогона → кнопка «Отчёт по закупкам» на странице организации.
 - `jobs/scan.py` — `create_scan_run(...)` для UI `/scan`. Собирает
   человекочитаемый `note` (регион, диапазон сумм, статусы, IT-категории,
   режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.
