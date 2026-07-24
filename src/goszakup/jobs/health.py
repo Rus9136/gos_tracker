@@ -109,6 +109,68 @@ def tumar_license_problem(now: datetime | None = None) -> str | None:
     return None
 
 
+OWS_TOKEN_WARN_DAYS = int(os.environ.get("GZ_OWS_TOKEN_WARN_DAYS", "14"))
+
+
+def ows_token_problem(now: datetime | None = None) -> str | None:
+    """Токен OWS выдан на год; истёкший маскируется под 404 «Invalid Route»,
+    сам по себе он не всплывёт — предупреждаем заранее по дате из env."""
+    from ..config import OWS_TOKEN, OWS_TOKEN_EXPIRES
+
+    if not OWS_TOKEN or not OWS_TOKEN_EXPIRES:
+        return None
+    try:
+        expires = datetime.fromisoformat(OWS_TOKEN_EXPIRES)
+    except ValueError:
+        log.warning("health: не разобрал GZ_OWS_TOKEN_EXPIRES=%r", OWS_TOKEN_EXPIRES)
+        return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    days_left = (expires - now).total_seconds() / 86400
+    if days_left < 0:
+        return (
+            f"❌ Токен OWS API истёк {OWS_TOKEN_EXPIRES} — скрейпинг работает "
+            f"на медленном HTML-фолбэке. Запросить новый токен у ЦЭФ."
+        )
+    if days_left <= OWS_TOKEN_WARN_DAYS:
+        return (
+            f"⚠️ Токен OWS API истекает через {days_left:.0f}д "
+            f"({OWS_TOKEN_EXPIRES}) — запросить продление у ЦЭФ заранее."
+        )
+    return None
+
+
+def check_ows_api() -> tuple[bool, str | None]:
+    """Дешёвый живой запрос к OWS (справочник, 1 запись). (ok, причина)."""
+    from ..api.client import OwsApiError, OwsAuthError, OwsClient
+    from ..config import OWS_TOKEN
+
+    if not OWS_TOKEN:
+        return True, None  # API не сконфигурирован — HTML-путь, не проблема
+    try:
+        OwsClient().get_json("/v3/refs/ref_buy_status", params={"limit": 1})
+    except OwsAuthError as e:
+        return False, f"токен истёк/невалиден: {e}"
+    except OwsApiError as e:
+        return False, str(e)
+    return True, None
+
+
+def api_degraded_reason() -> str | None:
+    """Флаг деградации выставляет FallbackSource при уходе на HTML."""
+    try:
+        import redis
+
+        from ..sources import API_DEGRADED_KEY
+
+        url = os.environ.get("GZ_REDIS_URL", "redis://localhost:6379/0")
+        client = redis.Redis.from_url(url, decode_responses=True, socket_timeout=3)
+        return client.get(API_DEGRADED_KEY)
+    except Exception:  # noqa: BLE001 — про Redis скажет check_redis
+        return None
+
+
 def check_llm() -> tuple[bool, str | None]:
     """Минимальный живой вызов Cerebras. (ok, причина отказа)."""
     api_key = os.environ.get("CEREBRAS_API_KEY")
@@ -171,6 +233,22 @@ def collect_problems(session: Session) -> list[str]:
                 f"⚠️ Последний матч был {age:.0f}ч назад (порог {MATCH_STALE_HOURS}ч) — "
                 f"матчинг мог встать даже при живом LLM."
             )
+
+    ok, err = check_ows_api()
+    if not ok:
+        problems.append(
+            f"❌ OWS API не отвечает ({err}) — скрейпинг на медленном HTML-фолбэке"
+        )
+
+    token_problem = ows_token_problem()
+    if token_problem:
+        problems.append(token_problem)
+
+    degraded = api_degraded_reason()
+    if degraded:
+        problems.append(
+            f"⚠️ Источник деградировал на HTML-фолбэк (последняя причина: {degraded})"
+        )
 
     # Лицензию Tumar проверяем только когда автоподача сконфигурирована — иначе
     # на инстансе без автоподачи это ложный шум.

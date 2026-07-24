@@ -123,6 +123,24 @@ AUTOSUBMIT_INGEST_TOKEN = os.environ.get("GZ_AUTOSUBMIT_INGEST_TOKEN") or None
 # Задержка между HTTP-запросами (Crawl-delay из robots.txt goszakup).
 CRAWL_DELAY = 5.0
 
+# Официальный API goszakup (OWS, ows.goszakup.gov.kz). Токен выдаёт ЦЭФ на
+# 1 год; без токена источником данных остаётся HTML-скрейпинг
+# (см. sources.make_source).
+OWS_TOKEN = os.environ.get("GZ_OWS_TOKEN") or None
+OWS_BASE_URL = (
+    os.environ.get("GZ_OWS_BASE_URL") or "https://ows.goszakup.gov.kz"
+).rstrip("/")
+# Пауза между запросами к OWS. Лимит API нигде не заявлен (бурст 6+ rps
+# проходил без 429), 1 rps — консервативный запас. Независим от CRAWL_DELAY:
+# у HTML-скрейпера контракт robots.txt, у API его нет.
+API_DELAY = float(os.environ.get("GZ_API_DELAY", "1.0"))
+# ISO-дата истечения токена (YYYY-MM-DD) — health-check предупреждает за 14
+# дней. Истёкший токен ows маскирует под 404 «Invalid Route», сам он не виден.
+OWS_TOKEN_EXPIRES = os.environ.get("GZ_OWS_TOKEN_EXPIRES") or ""
+# OWS доступен с зарубежного IP напрямую (в отличие от goszakup.gov.kz) —
+# ходим без туннеля, чтобы его не грузить. Флаг — закладка на случай геоблока.
+OWS_USE_PROXY = os.environ.get("GZ_OWS_USE_PROXY", "").lower() in ("1", "true", "yes")
+
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"

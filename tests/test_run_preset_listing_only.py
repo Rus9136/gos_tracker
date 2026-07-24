@@ -1,8 +1,8 @@
 """execute_search с listing_only=True не должен трогать details/docs/LLM.
 
-Глушим `iter_listing` и `fetch_announcement`: проверяем, что:
+Подсовываем фейковый DataSource: проверяем, что:
 1) listing-фаза отработала и stat-счётчики проставлены;
-2) `fetch_announcement` ни разу не позвали.
+2) `fetch_announcement` источника ни разу не позвали.
 """
 
 from __future__ import annotations
@@ -33,6 +33,28 @@ def _hit(lot_id: int) -> ListingHit:
     )
 
 
+class _FakeSource:
+    def __init__(self, hits):
+        self.hits = hits
+        self.fetch_calls: list[int] = []
+
+    def iter_listing(self, params, max_pages=None):
+        return iter(self.hits)
+
+    def fetch_announcement(self, anno_id):
+        self.fetch_calls.append(anno_id)
+        raise RuntimeError("стопаем — нам нужен только сам факт вызова")
+
+    def fetch_modal_files(self, anno_id, file_type_id):
+        return []
+
+    def fetch_enstru_code(self, trd_buy_id, lot_id):
+        return None
+
+    def download(self, anno_id, url, suggested_name=None):
+        raise AssertionError("download не должен вызываться в этих тестах")
+
+
 @pytest.fixture
 def db_session():
     init_db()
@@ -42,32 +64,18 @@ def db_session():
         yield s
 
 
-def test_listing_only_skips_phase2(db_session, monkeypatch):
-    hits = [_hit(1), _hit(2), _hit(3)]
-    monkeypatch.setattr(rp, "iter_listing", lambda params, session=None, **kw: iter(hits))
-
-    fetch_calls = []
-
-    def _fake_fetch(*args, **kwargs):
-        fetch_calls.append((args, kwargs))
-        raise AssertionError("fetch_announcement не должен вызываться при listing_only=True")
-
-    monkeypatch.setattr(rp, "fetch_announcement", _fake_fetch)
+def test_listing_only_skips_phase2(db_session):
+    source = _FakeSource([_hit(1), _hit(2), _hit(3)])
 
     params = SearchParams(kato="", amount_from=0, status_codes=[])
-    stats = rp.execute_search(
-        db_session,
-        http=None,  # iter_listing мы тоже подменили — http не понадобится
-        params=params,
-        listing_only=True,
-    )
+    stats = rp.execute_search(db_session, source, params=params, listing_only=True)
 
     assert stats.listing_count == 3
     assert stats.new_lots == 3
     assert stats.details_fetched == 0
     assert stats.new_documents == 0
     assert stats.llm_analyzed == 0
-    assert not fetch_calls, "phase 2 не должна была запуститься"
+    assert not source.fetch_calls, "phase 2 не должна была запуститься"
 
     # Лоты-stub'ы реально в БД — это даёт UI возможность их сразу показать.
     db_session.expire_all()
@@ -75,23 +83,14 @@ def test_listing_only_skips_phase2(db_session, monkeypatch):
     assert {lt.id for lt in lots} >= {1, 2, 3}
 
 
-def test_default_runs_phase2(db_session, monkeypatch):
+def test_default_runs_phase2(db_session):
     """Sanity: без listing_only детальная фаза действительно идёт."""
-    monkeypatch.setattr(rp, "iter_listing", lambda *a, **kw: iter([_hit(10)]))
-    fetch_calls = []
-
-    def _fake_fetch(anno_id, session=None):
-        fetch_calls.append(anno_id)
-        raise RuntimeError("стопаем — нам нужен только сам факт вызова")
-
-    monkeypatch.setattr(rp, "fetch_announcement", _fake_fetch)
+    source = _FakeSource([_hit(10)])
 
     params = SearchParams(kato="", amount_from=0, status_codes=[])
-    stats = rp.execute_search(
-        db_session, http=None, params=params, listing_only=False
-    )
+    stats = rp.execute_search(db_session, source, params=params, listing_only=False)
 
     # Phase 2 стартовала: fetch_announcement позвали. Ошибка внутри отрабатывает
     # через except в execute_search — поэтому stats.errors == 1.
-    assert fetch_calls == [1010]
+    assert source.fetch_calls == [1010]
     assert stats.errors >= 1

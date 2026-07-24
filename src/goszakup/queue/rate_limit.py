@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
+from threading import Lock
 
 import requests
 
@@ -30,40 +31,78 @@ from ..scraper.http import ThrottledSession, build_goszakup_session
 
 log = logging.getLogger(__name__)
 
-# Один ключ на весь проект. Если когда-то понадобится несколько источников
-# с независимыми лимитами — параметризуем именем.
+# Ключ HTML-скрейпера. У API-клиента (api/client.py) свой ключ и свой delay —
+# лимиты источников независимы.
 LIMIT_KEY = "goszakup:rate_limit"
 
 
-class RedisThrottledSession:
-    """Drop-in замена ThrottledSession, координирующая worker'ов через Redis."""
+class RedisSlotLimiter:
+    """Distributed mutex «1 запрос в delay секунд» на Redis-ключе."""
 
-    def __init__(self, redis_client, delay: float = CRAWL_DELAY) -> None:
+    def __init__(self, redis_client, delay: float, key: str = LIMIT_KEY) -> None:
         self.redis = redis_client
         self.delay = delay
-        self.session = build_goszakup_session()
+        self.key = key
 
-    def _wait_for_slot(self, hold_ttl: int | None = None) -> None:
+    def acquire(self, hold_ttl: int | None = None) -> None:
         # Цикл: пытаемся занять слот; если занят — спим оставшийся TTL.
         # PTTL даёт миллисекунды, точнее чем TTL. На случай гонки берём
         # max(0.05, ...) — иначе можем закрутиться в spin при ttl=0.
         if hold_ttl is None:
             hold_ttl = max(1, int(self.delay))
         while True:
-            if self.redis.set(LIMIT_KEY, "1", nx=True, ex=hold_ttl):
+            if self.redis.set(self.key, "1", nx=True, ex=hold_ttl):
                 return
-            ttl_ms = self.redis.pttl(LIMIT_KEY)
+            ttl_ms = self.redis.pttl(self.key)
             sleep_s = max(0.05, (ttl_ms or 100) / 1000)
             time.sleep(sleep_s)
 
-    def _open_next_slot(self) -> None:
+    def release(self) -> None:
         # После запроса выставляем окно до следующего слота = delay (перекрывая
         # длинный hold-TTL). Best-effort: если Redis отвалился — пайплайн и так
         # падает, отдельно не обрабатываем.
         try:
-            self.redis.set(LIMIT_KEY, "1", ex=max(1, int(self.delay)))
+            self.redis.set(self.key, "1", ex=max(1, int(self.delay)))
         except Exception:  # noqa: BLE001
             pass
+
+
+class LocalSlotLimiter:
+    """In-process аналог RedisSlotLimiter (unit-тесты, CLI без Redis)."""
+
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self._last_at = 0.0
+        self._lock = Lock()
+
+    def acquire(self, hold_ttl: int | None = None) -> None:
+        with self._lock:
+            elapsed = time.monotonic() - self._last_at
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
+            self._last_at = time.monotonic()
+
+    def release(self) -> None:
+        pass
+
+
+class RedisThrottledSession:
+    """Drop-in замена ThrottledSession, координирующая worker'ов через Redis."""
+
+    def __init__(
+        self, redis_client, delay: float = CRAWL_DELAY, limit_key: str = LIMIT_KEY
+    ) -> None:
+        self.redis = redis_client
+        self.delay = delay
+        self._limiter = RedisSlotLimiter(redis_client, delay, limit_key)
+        self.session = build_goszakup_session()
+
+    # Старые имена оставлены — их зовут тесты и, потенциально, чужой код.
+    def _wait_for_slot(self, hold_ttl: int | None = None) -> None:
+        self._limiter.acquire(hold_ttl)
+
+    def _open_next_slot(self) -> None:
+        self._limiter.release()
 
     def get(self, url: str, **kwargs) -> requests.Response:
         kwargs.setdefault("timeout", 30)

@@ -455,8 +455,37 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     НЕ признак сбоя: rule-based идёт до LLM и экономит вызов при
     `confidence >= 0.85`.
 
+21. **Источник данных — официальный API OWS с HTML-фолбэком, через
+    абстракцию `DataSource`.** С 2026-07-24 листинг/детали/файлы идут через
+    ows.goszakup.gov.kz (Bearer `GZ_OWS_TOKEN`, выдан ЦЭФ на год): GraphQL v3
+    отдаёт объявление+лоты+файлы одним запросом вместо 6-8 HTML-страниц ×
+    Crawl-delay 5с. Пайплайн работает с `sources.make_source(redis)`:
+    токен есть → `FallbackSource(ApiSource, HtmlSource)`, нет → `HtmlSource`
+    (прежний путь бит-в-бит). НЕ вызывать `iter_listing`/`fetch_announcement`/
+    `download_document` из scraper/* напрямую в пайплайне — только через
+    source. Ключевые факты (recon в `tests/fixtures/api/NOTES.md`): rate-limit
+    API свой (`GZ_API_DELAY`=1с, Redis-ключ `goszakup:api_rate_limit`) и
+    НЕЗАВИСИМ от Crawl-delay HTML; OWS доступен без KZ-туннеля (API-клиент
+    ходит напрямую, `GZ_OWS_USE_PROXY=1` — закладка); даты API — алматинское
+    время UTC+5; невалидный/истёкший токен = **404 «Invalid Route»**, не 401
+    (ловится `OwsAuthError`); серверные фильтры — статусы/`amount:[от]`/
+    customerBin, регион фильтруется клиентски по префиксу КАТО (2 цифры);
+    ЕНС ТРУ-имя = `Lots.nameRu`, код — из `Plans[].RefEnstru` (у свежих ЗЦП
+    плана нет → код добирает HTML-запрос subpriceoffer для IT-лотов). Каждый
+    уход на фолбэк пишет WARNING + Redis-флаг `goszakup:api_degraded` — его
+    видит health-check (плюс живой пинг OWS и предупреждение об истечении
+    токена по `GZ_OWS_TOKEN_EXPIRES`). Откат: закомментировать `GZ_OWS_TOKEN`
+    в `.env` + рестарт worker/web.
+
 ## Где что лежит
 
+- `sources.py` — абстракция DataSource (правило #21): `HtmlSource` (обёртка
+  над scraper/*), `ApiSource` (OWS), `FallbackSource`, `make_source`.
+- `api/` — клиент официального API OWS: `client.py` (OwsClient: Bearer, свой
+  rate-limit, GraphQL с курсорной пагинацией, `OwsAuthError` для 404-токена),
+  `queries.py` (LISTING_QUERY/DETAIL_QUERY), `mapping.py` (JSON → dataclasses,
+  таймзона UTC+5, КАТО-префиксы), `refs.py` (кэш справочников /v3/refs/*).
+  Recon-факты и фикстуры — `tests/fixtures/api/NOTES.md`.
 - `scraper/search.py` — listing-парсер, основа табличной выдачи. Не путать с
   `scraper/announce.py`, который тянет детали.
 - `scraper/announce.py` — 4 таба: general / lots / documents / contracts. Парсит

@@ -71,6 +71,7 @@ from ..jobs.ingest import (
 )
 from ..jobs.org_report import build_org_report, related_org_ids, render_markdown
 from ..jobs.run_preset import _save_announcement, _save_documents
+from ..sources import make_source
 from ..jobs.scan import (
     ALL_MODES,
     MODE_FULL,
@@ -81,8 +82,6 @@ from ..jobs.scan import (
 )
 from ..observability import setup_sentry
 from ..scope import lot_in_scope, scope_conditions
-from ..scraper.announce import fetch_announcement
-from ..scraper.http import ThrottledSession
 from ..scraper.katos import BY_CODE, REGIONS, region_name
 from ..scraper.statuses import (
     ACTUAL_STATUSES,
@@ -759,16 +758,16 @@ def lot_fetch_documents(
         return RedirectResponse(
             f"/lot/{lot_id}?fetch_error=no_announcement", status_code=303
         )
-    # Свежая ThrottledSession на запрос: Crawl-delay внутри инстанса, на пару
-    # секунд параллельная нагрузка превысит лимит — приемлемо для ручной
-    # кнопки. Не нажимать одновременно с запущенным `daily`.
-    http = ThrottledSession()
+    # Свежий источник на запрос: при HTML-фолбэке Crawl-delay живёт внутри
+    # инстанса, на пару секунд параллельная нагрузка превысит лимит —
+    # приемлемо для ручной кнопки. Не нажимать одновременно с `daily`.
+    source = make_source()
     try:
         # `_save_announcement` создаст запись Announcement, если её ещё нет
         # (типичный кейс для stub-лота из листинга без фазы details).
-        detail = fetch_announcement(lot.announcement_id, session=http)
+        detail = source.fetch_announcement(lot.announcement_id)
         anno = _save_announcement(db, detail)
-        new_count = _save_documents(db, anno, detail, http)
+        new_count = _save_documents(db, anno, detail, source)
         db.commit()
     except Exception as e:
         db.rollback()

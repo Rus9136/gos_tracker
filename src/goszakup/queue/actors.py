@@ -48,8 +48,8 @@ from ..jobs.run_preset import (
     _save_documents,
     _upsert_lot_from_listing,
 )
-from ..scraper.announce import fetch_announcement
-from ..scraper.search import SearchParams, iter_listing
+from ..scraper.search import SearchParams
+from ..sources import make_source
 
 # Импорты ниже регистрируют actor'ы в брокере (воркер грузит именно этот модуль).
 # Без них actor не зарегистрирован, и его задачи молча копятся в Redis независимо
@@ -58,7 +58,6 @@ from .autosubmit import autosubmit_dispatch_actor  # noqa: E402,F401
 from .broker import REDIS_URL, broker  # noqa: F401 — импорт broker до actor'ов обязателен
 from .matching import enqueue_matches_for_lot  # noqa: E402 — fan-out хелпер для analyze_actor
 from .notify import notify_actor  # noqa: E402,F401
-from .rate_limit import make_http_session
 
 log = logging.getLogger(__name__)
 
@@ -206,7 +205,7 @@ def reconcile_actor() -> None:
 def listing_actor(preset_id: int) -> None:
     """Walk listing одного preset'а, enqueue detail-актёры для новых/changed."""
     r = _redis_client()
-    http = make_http_session(r)
+    source = make_source(r)
 
     with SessionLocal() as session:
         preset = session.get(Preset, preset_id)
@@ -232,7 +231,7 @@ def listing_actor(preset_id: int) -> None:
         listing_count = 0
 
         try:
-            for hit in iter_listing(params, session=http):
+            for hit in source.iter_listing(params):
                 listing_count += 1
                 # Проект только про IT: не-IT лоты не храним и не парсим вообще.
                 cat = classify(hit.enstru, hit.lot_name)
@@ -320,24 +319,24 @@ def detail_actor(
             _decrement_pending_and_maybe_close(r, run_id)
             return
 
-    http = make_http_session(r)
+    source = make_source(r)
 
     it_lot_ids: list[int] = []
     try:
         with SessionLocal() as session:
-            detail = fetch_announcement(anno_id, session=http)
+            detail = source.fetch_announcement(anno_id)
             anno = _save_announcement(session, detail)
             lots = session.scalars(
                 select(Lot).where(Lot.announcement_id == anno.id)
             ).all()
             for lot in lots:
                 _apply_details(session, lot, detail)
-                _apply_enstru_code(session, lot, http)
+                _apply_enstru_code(session, lot, source)
             lots_by_number = {lt.number: lt for lt in lots if lt.number}
             _save_contracts(session, lots_by_number, detail)
             new_docs = 0
             if with_docs:
-                new_docs = _save_documents(session, anno, detail, http)
+                new_docs = _save_documents(session, anno, detail, source)
             session.commit()
             _increment_run(
                 session, run_id, details_fetched=1, new_documents=new_docs
@@ -417,7 +416,7 @@ def ingest_actor(
     from ..scraper.search import SearchParams
 
     r = _redis_client()
-    http = make_http_session(r)
+    source = make_source(r)
     status_codes = list(status_codes or [])
     targets: set[int] = set()
 
@@ -432,7 +431,7 @@ def ingest_actor(
                     amount_to=amount_to,
                     year=year,
                 )
-                year_targets = _walk_listing(session, http, params, run_id)
+                year_targets = _walk_listing(session, source, params, run_id)
                 targets |= year_targets
                 log.info(
                     "ingest run #%d year=%d: %d new targets",
@@ -487,7 +486,7 @@ def scan_actor(
     from ..scraper.search import SearchParams
 
     r = _redis_client()
-    http = make_http_session(r)
+    source = make_source(r)
     status_codes = list(status_codes or [])
     it_categories = list(it_categories or [])
 
@@ -504,7 +503,7 @@ def scan_actor(
 
     with SessionLocal() as session:
         try:
-            for hit in iter_listing(params, session=http):
+            for hit in source.iter_listing(params):
                 listing_count += 1
                 if it_categories:
                     cat = classify(hit.enstru, hit.lot_name)
@@ -553,7 +552,7 @@ def scan_actor(
 
 
 def _walk_listing(
-    session, http, params, run_id: int,
+    session, source, params, run_id: int,
 ) -> set[int]:
     """Helper для ingest_actor: один проход по году. Возвращает уникальные anno_id."""
     new_hits: list = []
@@ -561,7 +560,7 @@ def _walk_listing(
     targets: set[int] = set()
     listing_count = 0
     try:
-        for hit in iter_listing(params, session=http):
+        for hit in source.iter_listing(params):
             listing_count += 1
             _upsert_lot_from_listing(
                 session, hit, kato=params.kato or "",

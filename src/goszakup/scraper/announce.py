@@ -107,6 +107,10 @@ class LotDetail:
     amount_y2: float | None
     amount_y3: float | None
     status_name: str
+    # Цифровой «Код ТРУ». HTML-парсер его не знает (он живёт на отдельной
+    # карточке subpriceoffer, см. fetch_lot_enstru_code); API-источник
+    # заполняет сразу — экономит +1 запрос на IT-лот.
+    enstru_code: str | None = None
 
 
 @dataclass

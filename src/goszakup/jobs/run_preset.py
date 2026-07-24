@@ -24,16 +24,11 @@ from ..db.models import (
     Preset,
     ScrapeRun,
 )
-from ..scraper.announce import (
-    AnnouncementDetail,
-    fetch_announcement,
-    fetch_lot_enstru_code,
-)
-from ..scraper.documents import download_document
-from ..scraper.http import ThrottledSession
-from ..scraper.modal_files import fetch_modal_files, is_tz_like_name
-from ..scraper.search import ListingHit, SearchParams, iter_listing
+from ..scraper.announce import AnnouncementDetail
+from ..scraper.modal_files import is_tz_like_name
+from ..scraper.search import ListingHit, SearchParams
 from ..scraper.statuses import is_actual
+from ..sources import DataSource, make_source
 
 log = logging.getLogger(__name__)
 
@@ -219,6 +214,7 @@ def _apply_details(session: Session, lot: Lot, detail: AnnouncementDetail) -> No
         if cust:
             lot.customer_id = cust.id
     lot.extra = matched.extra or lot.extra
+    lot.enstru_code = matched.enstru_code or lot.enstru_code
     lot.price_per_unit = matched.price_per_unit or lot.price_per_unit
     lot.quantity = matched.quantity if matched.quantity is not None else lot.quantity
     lot.unit = matched.unit or lot.unit
@@ -233,14 +229,16 @@ def _apply_details(session: Session, lot: Lot, detail: AnnouncementDetail) -> No
     session.flush()
 
 
-def _apply_enstru_code(session: Session, lot: Lot, http: ThrottledSession) -> None:
-    """Цифровой «Код ТРУ» доступен только на карточке лота — +1 запрос/лот.
-    Тянем поэтому лишь для IT-лотов (как и LLM-шаг) и только если ещё нет.
-    Сбой не должен ронять прогон объявления — деградируем тихо (правило #7)."""
+def _apply_enstru_code(session: Session, lot: Lot, source: DataSource) -> None:
+    """Цифровой «Код ТРУ» на HTML-пути доступен только на карточке лота —
+    +1 запрос/лот. Тянем поэтому лишь для IT-лотов (как и LLM-шаг) и только
+    если ещё нет (API-источник обычно приносит код прямо в детали, см.
+    _apply_details). Сбой не должен ронять прогон объявления — деградируем
+    тихо (правило #7)."""
     if not lot.it_category or lot.enstru_code:
         return
     try:
-        code = fetch_lot_enstru_code(lot.announcement_id, lot.id, session=http)
+        code = source.fetch_enstru_code(lot.announcement_id, lot.id)
     except Exception as e:
         log.warning("enstru_code fetch failed for lot=%s: %s", lot.id, e)
         return
@@ -253,13 +251,13 @@ def _save_documents(
     session: Session,
     announcement: Announcement,
     detail: AnnouncementDetail,
-    http: ThrottledSession,
+    source: DataSource,
 ) -> int:
     new_count = 0
     for d in detail.documents:
         if d.direct_url:
             if _save_one_document(
-                session, announcement, d.name, d.attribute, d.direct_url, http
+                session, announcement, d.name, d.attribute, d.direct_url, source
             ):
                 new_count += 1
             continue
@@ -271,9 +269,7 @@ def _save_documents(
         if not is_tz_like_name(f"{d.name or ''} {d.attribute or ''}"):
             continue
         try:
-            modal_files = fetch_modal_files(
-                announcement.id, d.file_type_id, session=http
-            )
+            modal_files = source.fetch_modal_files(announcement.id, d.file_type_id)
         except Exception as e:  # на случай неожиданного формата ответа
             log.warning(
                 "modal failed for anno=%s type=%s: %s",
@@ -288,7 +284,7 @@ def _save_documents(
                 f"{d.name} · {mf.name}" if len(modal_files) > 1 else d.name
             )
             if _save_one_document(
-                session, announcement, display_name, d.attribute, mf.url, http,
+                session, announcement, display_name, d.attribute, mf.url, source,
                 suggested_name=mf.name,
             ):
                 new_count += 1
@@ -301,7 +297,7 @@ def _save_one_document(
     name: str,
     attribute: str | None,
     url: str,
-    http: ThrottledSession,
+    source: DataSource,
     *,
     suggested_name: str | None = None,
 ) -> bool:
@@ -326,9 +322,7 @@ def _save_one_document(
         )
         session.add(doc)
         session.flush()
-    res = download_document(
-        announcement.id, url, session=http, suggested_name=suggested_name
-    )
+    res = source.download(announcement.id, url, suggested_name=suggested_name)
     if res.ok:
         doc.local_path = res.local_path
         doc.sha256 = res.sha256
@@ -426,7 +420,7 @@ class RunStats:
 
 def execute_search(
     session: Session,
-    http: ThrottledSession,
+    source: DataSource,
     params: SearchParams,
     *,
     it_categories: list[str] | None = None,
@@ -448,7 +442,7 @@ def execute_search(
 
     # Phase 1: listing + upsert lot stubs
     try:
-        for hit in iter_listing(params, session=http, max_pages=max_pages):
+        for hit in source.iter_listing(params, max_pages=max_pages):
             stats.listing_count += 1
             # Проект только про IT: не-IT лоты не храним и не парсим вообще.
             cat = classify(hit.enstru, hit.lot_name)
@@ -484,7 +478,7 @@ def execute_search(
 
     for anno_id in list(targets.keys()):
         try:
-            detail = fetch_announcement(anno_id, session=http)
+            detail = source.fetch_announcement(anno_id)
             stats.details_fetched += 1
             anno = _save_announcement(session, detail)
 
@@ -494,11 +488,11 @@ def execute_search(
             lots_by_number = {lt.number: lt for lt in lots if lt.number}
             for lot in lots:
                 _apply_details(session, lot, detail)
-                _apply_enstru_code(session, lot, http)
+                _apply_enstru_code(session, lot, source)
             _save_contracts(session, lots_by_number, detail)
 
             if download_docs:
-                stats.new_documents += _save_documents(session, anno, detail, http)
+                stats.new_documents += _save_documents(session, anno, detail, source)
             session.commit()
 
             if run_llm:
@@ -556,7 +550,7 @@ def run_preset(
     if it_categories is None and preset is not None:
         it_categories = list(preset.it_categories or [])
 
-    http = ThrottledSession()
+    source = make_source()
 
     with SessionLocal() as session:
         run = ScrapeRun(preset_id=preset.id if preset else None)
@@ -565,7 +559,7 @@ def run_preset(
         run_id = run.id
 
         stats = execute_search(
-            session, http, params,
+            session, source, params,
             it_categories=it_categories,
             download_docs=download_docs,
             run_llm=run_llm,

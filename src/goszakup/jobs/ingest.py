@@ -19,9 +19,9 @@ from sqlalchemy.orm import Session
 
 from ..db.engine import SessionLocal, init_db
 from ..db.models import ScrapeRun
-from ..scraper.http import ThrottledSession
 from ..scraper.search import SearchParams
 from ..scraper.statuses import STATUS_NAMES
+from ..sources import make_source
 from .run_preset import RunStats, execute_search
 
 log = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ def execute_ingest_run(
     в состоянии «в работе».
     """
     init_db()
-    http = ThrottledSession()
+    source = make_source()
     total = RunStats()
     status_codes = list(status_codes or [])
 
@@ -180,7 +180,7 @@ def execute_ingest_run(
                     year=year,
                 )
                 stats = execute_search(
-                    session, http, params,
+                    session, source, params,
                     it_categories=None,
                     download_docs=False,
                     run_llm=False,
