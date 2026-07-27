@@ -183,6 +183,7 @@ def detail_from_trd_buy(tb: dict) -> AnnouncementDetail:
         total_amount=float(tb["totalSum"]) if tb.get("totalSum") is not None else None,
         attributes="",
         publish_date=_parse_dt(tb.get("publishDate")),
+        application_start=almaty_to_utc(tb.get("startDate")),
         application_end=almaty_to_utc(tb.get("endDate")),
         lots=[_lot_detail_from_lot(lot) for lot in tb.get("Lots") or []],
         documents=[_document_row(f) for f in tb.get("Files") or []],

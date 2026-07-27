@@ -64,6 +64,7 @@ query($f: TrdBuyFiltersInput) {
     orgBin
     orgNameRu
     publishDate
+    startDate
     endDate
     refBuyStatusId
     RefTradeMethods { nameRu }

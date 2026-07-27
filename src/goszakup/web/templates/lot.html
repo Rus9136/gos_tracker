@@ -95,6 +95,15 @@
           <dt>Сумма 1/2/3 год</dt><dd class="mono">{{ lot.amount_y1|n }} / {{ lot.amount_y2|n }} / {{ lot.amount_y3|n }}</dd>
           <dt>Способ закупки</dt><dd>{{ lot.method or '—' }}</dd>
           <dt>Регион (КАТО)</dt><dd>{% if lot.kato %}{{ region_name(lot.kato) or '—' }} <span class="mono dimer">{{ lot.kato }}</span>{% else %}<span class="dim">—</span>{% endif %}</dd>
+          {% set anno = lot.announcement %}
+          <dt>Приём заявок</dt>
+          <dd class="mono">
+            {% if anno and (anno.application_start or anno.application_end) %}
+              {{ anno.application_start|dt if anno.application_start else '—' }}
+              <span class="dim">→</span>
+              {{ anno.application_end|dt if anno.application_end else '—' }}
+            {% else %}<span class="dim">—</span>{% endif %}
+          </dd>
         </dl>
       </div>
     </div>

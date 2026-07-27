@@ -93,6 +93,8 @@ def _save_announcement(
     anno.attributes = detail.attributes or anno.attributes
     if detail.publish_date:
         anno.publish_date = detail.publish_date
+    if detail.application_start:
+        anno.application_start = detail.application_start
     if detail.application_end:
         anno.application_end = detail.application_end
     anno.contact_name = detail.contact_name or anno.contact_name

@@ -74,6 +74,9 @@ def test_detail_from_fixture():
     assert d.url.endswith(f"/ru/announce/index/{tb['id']}")
     assert d.number == tb["numberAnno"]
     assert d.application_end is not None and d.application_end.tzinfo is not None
+    # startDate — момент разблокировки «Подать» (open_at автоподачи, правило #19).
+    assert d.application_start is not None and d.application_start.tzinfo is not None
+    assert d.application_start < d.application_end
     assert d.lots and d.lots[0].number == tb["Lots"][0]["lotNumber"]
     # descriptionRu — «доп. характеристика» лота.
     assert d.lots[0].extra == tb["Lots"][0]["descriptionRu"]

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from goszakup.db.models import Announcement, Lot
 from goszakup.jobs.expire import expire_actual_lots
-from goszakup.scraper.announce import _find_deadline, _parse_deadline
+from goszakup.scraper.announce import _find_deadline, _find_start, _parse_deadline
 
 
 def test_parse_deadline_localizes_almaty_to_utc():
@@ -22,6 +22,16 @@ def test_find_deadline_matches_label_variants():
     assert _find_deadline({"Дата окончания приема ценовых предложений": "10.06.2026 09:30"})
     # начало приёма — НЕ дедлайн
     assert _find_deadline({"Дата начала приема заявок": "01.06.2026 09:00"}) is None
+
+
+def test_find_start_matches_label_variants():
+    assert _find_start({"Дата и время начала приёма заявок": "01.06.2026 09:00"})
+    assert _find_start({"Срок начала приема заявок": "01.06.2026 09:00"})
+    assert _find_start({"Дата начала приема ценовых предложений": "01.06.2026 09:30"})
+    # окончание приёма — НЕ начало
+    assert _find_start({"Дата окончания приема заявок": "10.06.2026 18:00"}) is None
+    # «Дата публикации» рядом не должна пролезть
+    assert _find_start({"Дата публикации объявления": "01.06.2026 09:00"}) is None
 
 
 def _mk_lot(db_session, lot_id, anno_id, *, application_end, is_actual=True):

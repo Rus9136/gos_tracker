@@ -74,21 +74,29 @@ def _parse_deadline(s: str) -> datetime | None:
     return d.replace(tzinfo=_ALMATY_TZ).astimezone(timezone.utc)
 
 
-def _find_deadline(kv: dict[str, str]) -> datetime | None:
-    """Ищет в kv-таблице «Общих сведений» строку окончания приёма заявок.
+def _find_period_date(kv: dict[str, str], marker: str) -> datetime | None:
+    """Ищет в kv-таблице «Общих сведений» границу срока приёма заявок.
 
     Точное название поля у goszakup плавает по способу закупки («Дата и время
     окончания приёма заявок», «Срок окончания приёма заявок», для аукциона —
     «…приёма ценовых предложений»), поэтому матчим по подстроке, а не по
-    фиксированному ключу.
+    фиксированному ключу. `marker` — «начал» или «окончан».
     """
     for key, value in kv.items():
         low = key.lower().replace("ё", "е")
-        if "окончан" in low and ("заяв" in low or "ценов" in low):
+        if marker in low and ("заяв" in low or "ценов" in low):
             d = _parse_deadline(value)
             if d:
                 return d
     return None
+
+
+def _find_deadline(kv: dict[str, str]) -> datetime | None:
+    return _find_period_date(kv, "окончан")
+
+
+def _find_start(kv: dict[str, str]) -> datetime | None:
+    return _find_period_date(kv, "начал")
 
 
 @dataclass
@@ -166,6 +174,7 @@ class AnnouncementDetail:
     total_amount: float | None = None
     attributes: str = ""
     publish_date: datetime | None = None
+    application_start: datetime | None = None  # начало приёма заявок, UTC
     application_end: datetime | None = None  # окончание приёма заявок, UTC
     contact_name: str = ""
     contact_role: str = ""
@@ -221,6 +230,7 @@ def _parse_general(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
     # Срок окончания/начала приёма и дата публикации — в форме-шапке (input value).
     form = _form_pairs(soup)
     if form:
+        detail.application_start = _find_start(form)
         detail.application_end = _find_deadline(form)
         for date_key in ("Дата публикации объявления", "Дата публикации"):
             if date_key in form:
@@ -255,6 +265,7 @@ def _parse_general(soup: BeautifulSoup, detail: AnnouncementDetail) -> None:
                             detail.publish_date = d
                             break
             # не затираем значение, уже взятое из формы-шапки
+            detail.application_start = detail.application_start or _find_start(kv)
             detail.application_end = detail.application_end or _find_deadline(kv)
         elif "ФИО представителя" in kv:
             detail.contact_name = kv.get("ФИО представителя", "")

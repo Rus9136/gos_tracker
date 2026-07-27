@@ -496,6 +496,16 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     статус договора — name_ru из `/v3/refs/ref_contract_status`. Ручной
     бэкофилл: `cli contracts-sync --days N [--sync]`. Уникальность
     `contracts (lot_id, contract_number)` — миграция 366463c4707d.
+    **Начало приёма заявок** — `TrdBuy.startDate` → `Announcement.
+    application_start` (UTC, индекс; миграция cb03d00c8075). Это `open_at`
+    автоподачи (правило #19): момент разблокировки кнопки «Подать», раньше
+    его негде было взять — `plan-submission` требовал ручной `--open-at`,
+    теперь берёт отсюда. HTML-путь парсит парно с дедлайном
+    (`announce._find_start`/`_find_deadline` поверх общего `_find_period_date`,
+    матч по подстроке «начал…заяв/ценов»). Бэкофилл — `scripts/
+    backfill_start_dates.py` (bulk по `TrdBuy.id: [...]`, 200 объявлений на
+    запрос; только API — HTML-путь на таком объёме неприемлем).
+    Документация OWS и интроспекция GraphQL-схемы сохранены в `docs/ows/`.
 
 ## Где что лежит
 
@@ -656,6 +666,12 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   переанализа после смены `ANALYZER_VERSION`. Идёт по всем актуальным
   IT-лотам, у которых нет анализа с текущей версией; 1.5с pacing между
   запросами, чтобы держать Cerebras под лимитом.
+- `scripts/backfill_start_dates.py` — бэкофилл `Announcement.application_start`
+  пачками по 200 (`TrdBuy.id` принимает массив). По умолчанию только
+  объявления с актуальными лотами, `--all` — вообще все.
+- `docs/ows/` — снимок официальной документации OWS v3 (+v2) и живая
+  интроспекция GraphQL-схемы (`graphql_schema.json`, 117 типов, 18 корневых
+  запросов). Разбор «что уже берём / что доступно» — `docs/ows/README.md`.
 
 ## Соглашения
 

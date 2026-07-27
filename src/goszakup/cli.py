@@ -478,19 +478,23 @@ def plan_submission_cmd(
     credential_id: int,
     anno_id: int,
     open_at: str = typer.Option(
-        ..., help="ISO8601 момента открытия приёма, напр. 2026-07-01T05:00:00+00:00"
+        None,
+        help="ISO8601 момента открытия приёма. По умолчанию — application_start "
+        "объявления (TrdBuy.startDate из OWS)",
     ),
     lot: list[str] = typer.Option(
         ..., "--lot", help="lot_id:price (можно несколько --lot)"
     ),
-    close_at: str = typer.Option(None, help="ISO8601 дедлайна приёма (опц.)"),
+    close_at: str = typer.Option(
+        None, help="ISO8601 дедлайна приёма. По умолчанию — application_end объявления"
+    ),
     anno_number: str = typer.Option(None, help="Человекочитаемый номер объявления"),
 ) -> None:
     """Запланировать автоподачу: лоты+цены (цена шифруется — sealed-bid), open_at."""
     import json
     from datetime import datetime
 
-    from .db.models import Submission
+    from .db.models import Announcement, Submission
     from .vault.crypto import encrypt_str
 
     bids, lot_ids = [], []
@@ -502,20 +506,35 @@ def plan_submission_cmd(
 
     init_db()
     with SessionLocal() as session:
+        anno = session.get(Announcement, anno_id)
+        open_dt = datetime.fromisoformat(open_at) if open_at else (
+            anno.application_start if anno else None
+        )
+        if open_dt is None:
+            # Без open_at гонка бессмысленна: агент не знает, когда стрелять.
+            raise typer.BadParameter(
+                f"у объявления {anno_id} пуст application_start — укажите --open-at "
+                "явно (или обновите деталь объявления)"
+            )
+        close_dt = datetime.fromisoformat(close_at) if close_at else (
+            anno.application_end if anno else None
+        )
         sub = Submission(
             credential_id=credential_id,
             anno_id=anno_id,
-            anno_number=anno_number,
+            anno_number=anno_number or (anno.number if anno else None),
             lot_ids=lot_ids,
             bid_enc=bid_enc,
             bid_nonce=bid_nonce,
-            open_at=datetime.fromisoformat(open_at),
-            close_at=datetime.fromisoformat(close_at) if close_at else None,
+            open_at=open_dt,
+            close_at=close_dt,
         )
         session.add(sub)
         session.commit()
         typer.echo(
-            f"подача #{sub.id} запланирована: anno={anno_id}, лотов={len(lot_ids)}, open_at={open_at}"
+            f"подача #{sub.id} запланирована: anno={anno_id}, лотов={len(lot_ids)}, "
+            f"open_at={open_dt.isoformat()}"
+            f"{'' if open_at else ' (из объявления)'}"
         )
 
 

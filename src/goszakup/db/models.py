@@ -157,6 +157,11 @@ class Announcement(Base):
     total_amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
     attributes: Mapped[str | None] = mapped_column(Text)  # «Признаки»
     publish_date: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    # Дата и время начала приёма заявок (UTC) — момент, когда на goszakup
+    # разблокируется кнопка «Подать». Это `open_at` автоподачи (правило #19):
+    # пред-стейдж невозможен, весь визард идёт в гонке после этой отметки.
+    # index — для выборки «что открывается в ближайшие N минут» диспетчером.
+    application_start: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
     # Дата и время окончания приёма заявок (UTC). По нему крон снимает лоты
     # с «актуальных» (is_actual=False), когда срок прошёл, даже если goszakup
     # ещё не сменил статус. См. jobs/expire.py. index — для дешёвого
