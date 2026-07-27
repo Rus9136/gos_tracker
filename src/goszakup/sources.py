@@ -16,7 +16,13 @@ from collections.abc import Iterator
 from typing import Protocol
 
 from .api.client import OwsApiError, OwsClient
-from .api.mapping import detail_from_trd_buy, kato_in_region, listing_hit_from_lot
+from .api.mapping import (
+    detail_from_trd_buy,
+    kato_in_region,
+    listing_hit_from_lot,
+    region_from_kato_list,
+    utc_to_almaty_str,
+)
 from .api.queries import DETAIL_QUERY, LISTING_QUERY
 from .config import OWS_TOKEN
 from .queue.rate_limit import make_http_session
@@ -33,6 +39,18 @@ log = logging.getLogger(__name__)
 
 API_DEGRADED_KEY = "goszakup:api_degraded"
 _DEGRADED_TTL = 6 * 3600
+
+
+def mark_api_degraded(redis_client, op: str, exc: Exception) -> None:
+    """Флаг деградации для health-check (правило #20): API отвалился,
+    работаем медленнее/неполно. Best-effort — без Redis просто лог."""
+    log.warning("OWS %s: %s — деградация", op, exc)
+    if redis_client is None:
+        return
+    try:
+        redis_client.set(API_DEGRADED_KEY, f"{op}: {exc}", ex=_DEGRADED_TTL)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class DataSource(Protocol):
@@ -138,6 +156,43 @@ class ApiSource:
                     continue
             yield listing_hit_from_lot(lot)
 
+    def iter_updated_lots(
+        self,
+        *,
+        dt_from,
+        dt_to,
+        status_codes: list[int],
+        amount_from: int,
+        max_pages: int | None = None,
+    ):
+        """(ListingHit, код региона | '') для лотов, обновлённых в окне.
+
+        Инкрементальный проход по всему РК (api_daily_actor): смена статуса
+        бампает lastUpdateDate (recon NOTES.md), так что окно ловит и новые
+        лоты, и переходы статусов. Кэш страниц не используется — окно
+        уникально для каждого запуска, делить нечего. Метод API-специфичен
+        и в протокол DataSource не входит.
+        """
+        f: dict = {
+            "lastUpdateDate": [utc_to_almaty_str(dt_from), utc_to_almaty_str(dt_to)]
+        }
+        if status_codes:
+            f["refLotStatusId"] = list(status_codes)
+        if amount_from:
+            f["amount"] = [amount_from]
+        seen: set[int] = set()
+        for lot in self.client.iter_graphql(
+            LISTING_QUERY, {"f": f}, root="Lots", limit=200, max_pages=max_pages
+        ):
+            if lot["id"] in seen:
+                continue
+            seen.add(lot["id"])
+            tb = lot.get("TrdBuy") or {}
+            region = region_from_kato_list(
+                lot.get("plnPointKatoList"), tb.get("kato")
+            )
+            yield listing_hit_from_lot(lot), region
+
     def fetch_announcement(self, anno_id: int) -> AnnouncementDetail:
         data, _ = self.client.graphql(DETAIL_QUERY, {"f": {"id": int(anno_id)}})
         items = data.get("TrdBuy") or []
@@ -170,12 +225,7 @@ class FallbackSource:
         self.redis = redis_client
 
     def _degraded(self, op: str, exc: Exception) -> None:
-        log.warning("OWS %s: %s — фолбэк на HTML-скрейпинг", op, exc)
-        if self.redis is not None:
-            try:
-                self.redis.set(API_DEGRADED_KEY, f"{op}: {exc}", ex=_DEGRADED_TTL)
-            except Exception:  # noqa: BLE001
-                pass
+        mark_api_degraded(self.redis, op, exc)
 
     def iter_listing(self, params, max_pages=None):
         try:

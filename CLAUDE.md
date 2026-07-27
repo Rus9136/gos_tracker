@@ -476,6 +476,26 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     видит health-check (плюс живой пинг OWS и предупреждение об истечении
     токена по `GZ_OWS_TOKEN_EXPIRES`). Откат: закомментировать `GZ_OWS_TOKEN`
     в `.env` + рестарт worker/web.
+    **Daily с токеном — инкрементальный** (фаза 5, 2026-07-27): вместо 20
+    региональных listing_actor'ов `daily_actor` шлёт `api_daily_actor` (один
+    проход `Lots` по окну `lastUpdateDate`; статусы/мин.сумма — объединение
+    активных preset'ов, `jobs/incremental.daily_scan_params`; регион лота —
+    из точки поставки, `api/mapping.region_from_kato_list`) и
+    `contracts_sync_actor` (см. ниже). Водяной знак — started_at последнего
+    успешного прогона с note-тегом `api-daily`/`contracts-sync` минус 1ч
+    (`jobs/incremental.sync_window`); потолок окна 7 дней — при простое
+    дольше окно обрезается с WARNING, дозаполнять ручным прогоном preset'ов.
+    Фолбэк: OwsApiError в api_daily → авто-fan-out прежних 20 listing_actor.
+    Preset'ы остаются конфигурацией покрытия и ручным путём (/presets →
+    «Запустить сейчас»). `_upsert_lot_from_listing` НЕ затирает `Lot.kato`
+    пустым (persona-scope, правило #15). **Договоры/победители** приезжают
+    из `contracts_sync_actor` (GraphQL `Contract`+`ContractUnits.lotId`,
+    только для уже известных лотов, ВКЛЮЧАЯ закрытые — это закрывает пробел
+    правила #5 и регрессию API-пути, где HTML-табы winners/contracts не
+    читаются). `lot.winner_*` из договора не затирает добытое HTML-ом;
+    статус договора — name_ru из `/v3/refs/ref_contract_status`. Ручной
+    бэкофилл: `cli contracts-sync --days N [--sync]`. Уникальность
+    `contracts (lot_id, contract_number)` — миграция 366463c4707d.
 
 ## Где что лежит
 

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from ..config import announcement_url
 from ..scraper.announce import AnnouncementDetail, DocumentRow, LotDetail
+from ..scraper.katos import REGIONS
 from ..scraper.modal_files import is_tz_like_name
 from ..scraper.search import ListingHit
 from ..scraper.statuses import STATUS_NAMES
@@ -44,8 +45,36 @@ def almaty_to_utc(s: str | None) -> datetime | None:
     return d.replace(tzinfo=_ALMATY_TZ).astimezone(timezone.utc)
 
 
+def utc_to_almaty_str(dt: datetime) -> str:
+    """UTC → строка фильтра OWS (lastUpdateDate и пр. — алматинское время)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_ALMATY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def region_prefix(region_code: str) -> str:
     return region_code[:2]
+
+
+# 2-значные префиксы всех 20 регионов уникальны (см. test_api_mapping).
+_REGION_BY_PREFIX: dict[str, str] = {r.code[:2]: r.code for r in REGIONS}
+
+
+def region_from_kato_list(
+    kato_list: list[str] | None, anno_kato_list: list[str] | None = None
+) -> str:
+    """КАТО точек поставки → код региона katos.REGIONS.
+
+    Лотовый список приоритетнее объявленческого (у ~9% лотов он пуст в
+    индексе — NOTES.md). Несколько регионов → первый совпавший
+    (детерминированно). Не резолвится → '' — тогда апсерт не затирает
+    прежний регион (см. _upsert_lot_from_listing).
+    """
+    for k in [*(kato_list or []), *(anno_kato_list or [])]:
+        code = _REGION_BY_PREFIX.get((k or "")[:2])
+        if code:
+            return code
+    return ""
 
 
 def kato_in_region(kato_list: list[str] | None, region_code: str) -> bool:

@@ -11,6 +11,8 @@ from goszakup.api.mapping import (
     detail_from_trd_buy,
     kato_in_region,
     listing_hit_from_lot,
+    region_from_kato_list,
+    utc_to_almaty_str,
 )
 from goszakup.jobs.run_preset import _status_code_from_name
 
@@ -32,6 +34,28 @@ def test_almaty_to_utc():
     )
     assert almaty_to_utc(None) is None
     assert almaty_to_utc("мусор") is None
+
+
+def test_region_from_kato_list():
+    assert region_from_kato_list(["791010000"]) == "790000000"  # Шымкент
+    assert region_from_kato_list(["334851100"]) == "330000000"  # Жетысуская
+    # Лотовый список пуст → фолбэк на КАТО объявления.
+    assert region_from_kato_list([], ["551010000"]) == "550000000"
+    assert region_from_kato_list([""], ["551010000"]) == "550000000"
+    # Не резолвится → '' (апсерт не затрёт прежний регион).
+    assert region_from_kato_list(None, None) == ""
+    assert region_from_kato_list(["999999999"]) == ""
+    # Мультирегиональный — первый совпавший, детерминированно.
+    assert region_from_kato_list(["311010000", "751410000"]) == "310000000"
+
+
+def test_utc_to_almaty_roundtrip():
+    from datetime import UTC, datetime
+
+    dt = datetime(2026, 7, 28, 14, 59, 23, tzinfo=UTC)
+    s = utc_to_almaty_str(dt)
+    assert s == "2026-07-28 19:59:23"
+    assert almaty_to_utc(s) == dt
 
 
 def test_kato_in_region_prefix():

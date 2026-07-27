@@ -31,8 +31,28 @@ query($f: LotsFiltersInput, $limit: Int, $after: Int) {
 }
 """
 
+# Договоры за окно lastUpdateDate — для contracts_sync_actor. ContractUnits
+# несёт lotId (прямая привязка к нашим lots.id; lotId=0 бывает — фильтровать).
+CONTRACTS_QUERY = """
+query($f: ContractFiltersInput, $limit: Int, $after: Int) {
+  Contract(filter: $f, limit: $limit, after: $after) {
+    id
+    trdBuyId
+    contractNumber
+    contractNumberSys
+    refContractStatusId
+    supplierBiin
+    supplierFio
+    contractSum
+    faktSum
+    ContractUnits { lotId itemPrice quantity totalSum refContractStatusId }
+  }
+}
+"""
+
 # Деталь объявления — эквивалент 5 HTML-табов одним запросом (winners и
-# contracts в API-источнике не заполняются, их дотягивает HTML-фолбэк).
+# contracts в API-источнике не заполняются: их синкает contracts_sync_actor
+# по окну lastUpdateDate, а HTML-фолбэк дотягивает при деградации API).
 DETAIL_QUERY = """
 query($f: TrdBuyFiltersInput) {
   TrdBuy(filter: $f, limit: 1) {

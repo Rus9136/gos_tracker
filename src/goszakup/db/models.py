@@ -291,6 +291,11 @@ class Contract(Base):
     """Договор, привязанный к лоту (появляется на финальных стадиях)."""
 
     __tablename__ = "contracts"
+    # Идемпотентность двух писателей (HTML detail-фаза и contracts-sync из
+    # API) — на уровне БД, а не только read-then-write.
+    __table_args__ = (
+        UniqueConstraint("lot_id", "contract_number", name="uq_contract_lot_number"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lot_id: Mapped[int] = mapped_column(ForeignKey("lots.id"), index=True)

@@ -1,0 +1,140 @@
+[
+ {
+  "id": 25610081,
+  "trdBuyId": 17359331,
+  "contractNumber": "970140002674/260023/00",
+  "contractNumberSys": "970140002674/260023/00",
+  "refContractStatusId": 190,
+  "supplierBiin": "801109300250",
+  "supplierFio": "Ажибаев Асхат Сайранбекович",
+  "contractSum": 215000,
+  "faktSum": 0,
+  "signDate": "2026-07-27 06:12:40",
+  "crdate": "2026-07-27 05:50:31",
+  "lastUpdateDate": "2026-07-27 06:12:41",
+  "ContractUnits": [
+   {
+    "lotId": 42654530,
+    "itemPrice": 2150,
+    "quantity": 100,
+    "totalSum": 215000,
+    "refContractStatusId": 190
+   }
+  ]
+ },
+ {
+  "id": 25609906,
+  "trdBuyId": 16610770,
+  "contractNumber": "021140004001/260032/01",
+  "contractNumberSys": "021140004001/260032/01",
+  "refContractStatusId": 190,
+  "supplierBiin": "240240016507",
+  "supplierFio": "Кусаинова Асель Сериковна",
+  "contractSum": 44400,
+  "faktSum": 0,
+  "signDate": "2026-07-26 21:45:46",
+  "crdate": "2026-07-26 21:25:53",
+  "lastUpdateDate": "2026-07-26 21:45:47",
+  "ContractUnits": [
+   {
+    "lotId": 40791632,
+    "itemPrice": 444,
+    "quantity": 100,
+    "totalSum": 44400,
+    "refContractStatusId": 190
+   }
+  ]
+ },
+ {
+  "id": 25609834,
+  "trdBuyId": 0,
+  "contractNumber": "001040002068/260063/00",
+  "contractNumberSys": "001040002068/260063/00",
+  "refContractStatusId": 190,
+  "supplierBiin": "890128350650",
+  "supplierFio": "Рахимов Раниль Рафаэльевич",
+  "contractSum": 1980000,
+  "faktSum": 0,
+  "signDate": "2026-07-26 19:22:21",
+  "crdate": "2026-07-26 18:58:17",
+  "lastUpdateDate": "2026-07-26 19:22:22",
+  "ContractUnits": [
+   {
+    "lotId": 0,
+    "itemPrice": 1980000,
+    "quantity": 1,
+    "totalSum": 1980000,
+    "refContractStatusId": 190
+   }
+  ]
+ },
+ {
+  "id": 25609766,
+  "trdBuyId": 0,
+  "contractNumber": "001040002068/260061/00",
+  "contractNumberSys": "001040002068/260061/00",
+  "refContractStatusId": 190,
+  "supplierBiin": "901005350597",
+  "supplierFio": "Салимов Асет Жаксылыкович",
+  "contractSum": 780000,
+  "faktSum": 0,
+  "signDate": "2026-07-26 19:18:43",
+  "crdate": "2026-07-26 15:39:40",
+  "lastUpdateDate": "2026-07-26 19:18:44",
+  "ContractUnits": [
+   {
+    "lotId": 0,
+    "itemPrice": 780000,
+    "quantity": 1,
+    "totalSum": 780000,
+    "refContractStatusId": 190
+   }
+  ]
+ },
+ {
+  "id": 25609756,
+  "trdBuyId": 0,
+  "contractNumber": "001040002068/260057/00",
+  "contractNumberSys": "001040002068/260057/00",
+  "refContractStatusId": 190,
+  "supplierBiin": "900627450911",
+  "supplierFio": "Салимова Аида Темирболатовна",
+  "contractSum": 1960000,
+  "faktSum": 0,
+  "signDate": "2026-07-26 19:15:47",
+  "crdate": "2026-07-26 15:03:56",
+  "lastUpdateDate": "2026-07-26 19:15:49",
+  "ContractUnits": [
+   {
+    "lotId": 0,
+    "itemPrice": 1960000,
+    "quantity": 1,
+    "totalSum": 1960000,
+    "refContractStatusId": 190
+   }
+  ]
+ },
+ {
+  "id": 25609752,
+  "trdBuyId": 0,
+  "contractNumber": "001040002068/260056/00",
+  "contractNumberSys": "001040002068/260056/00",
+  "refContractStatusId": 190,
+  "supplierBiin": "600703301312",
+  "supplierFio": "Мамбетов Булат Хайрушевич",
+  "contractSum": 1500000,
+  "faktSum": 0,
+  "signDate": "2026-07-26 19:28:36",
+  "crdate": "2026-07-26 14:56:27",
+  "lastUpdateDate": "2026-07-26 19:28:38",
+  "ContractUnits": [
+   {
+    "lotId": 0,
+    "itemPrice": 1500000,
+    "quantity": 1,
+    "totalSum": 1500000,
+    "refContractStatusId": 190
+   }
+  ]
+ }
+]

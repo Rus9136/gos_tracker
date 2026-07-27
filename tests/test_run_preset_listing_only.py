@@ -83,6 +83,25 @@ def test_listing_only_skips_phase2(db_session):
     assert {lt.id for lt in lots} >= {1, 2, 3}
 
 
+def test_empty_kato_does_not_clobber_region(db_session):
+    """Общереспубликанский проход (api-daily, /scan «весь РК») идёт с kato=''
+    — он не должен затирать регион, от которого зависит persona-scope."""
+    from goszakup.db.models import Lot
+
+    source = _FakeSource([_hit(50)])
+    rp.execute_search(
+        db_session, source, params=SearchParams(kato="790000000", amount_from=0),
+        listing_only=True,
+    )
+    source2 = _FakeSource([_hit(50)])
+    rp.execute_search(
+        db_session, source2, params=SearchParams(kato="", amount_from=0),
+        listing_only=True,
+    )
+    db_session.expire_all()
+    assert db_session.get(Lot, 50).kato == "790000000"
+
+
 def test_default_runs_phase2(db_session):
     """Sanity: без listing_only детальная фаза действительно идёт."""
     source = _FakeSource([_hit(10)])

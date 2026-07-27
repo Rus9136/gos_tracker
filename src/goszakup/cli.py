@@ -144,6 +144,45 @@ def daily(
     typer.echo(f"enqueued daily_actor (message_id={msg.message_id})")
 
 
+@app.command("contracts-sync")
+def contracts_sync(
+    days: int = typer.Option(
+        ..., "--days", help="Окно бэкофилла: договоры за N последних дней."
+    ),
+    sync: bool = typer.Option(
+        False, "--sync", help="Прогнать в этом процессе, без очереди."
+    ),
+) -> None:
+    """Синк договоров/победителей из API OWS за произвольное окно.
+
+    Штатно contracts_sync_actor запускается из daily по водяному знаку;
+    команда — для ручного бэкофилла (например, за период регрессии).
+    """
+    _setup_logging(verbose=True)
+    if sync:
+        from datetime import UTC, datetime, timedelta
+
+        from .api.client import OwsClient
+        from .jobs.contracts import sync_contracts
+
+        init_db()
+        dt_to = datetime.now(UTC)
+        with SessionLocal() as s:
+            stats = sync_contracts(
+                s, OwsClient(), dt_from=dt_to - timedelta(days=days), dt_to=dt_to
+            )
+        typer.echo(
+            f"scanned={stats.scanned} matched={stats.matched} "
+            f"created={stats.created} updated={stats.updated} "
+            f"winners={stats.winners_filled}"
+        )
+        return
+    from .queue.actors import contracts_sync_actor
+
+    msg = contracts_sync_actor.send(days)
+    typer.echo(f"enqueued contracts_sync_actor (message_id={msg.message_id})")
+
+
 @app.command()
 def expire(
     sync: bool = typer.Option(

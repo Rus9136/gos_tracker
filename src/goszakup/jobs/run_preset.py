@@ -177,7 +177,10 @@ def _upsert_lot_from_listing(
     lot.status_name = new_status_name
     lot.is_actual = is_actual(new_status_code)
     lot.method = hit.method or lot.method
-    lot.kato = kato
+    # Пустой kato не затирает регион: общереспубликанские проходы (api-daily,
+    # /scan «весь РК») идут без региона, а Lot.kato держит persona-scope —
+    # лот без региона невидим пользователям с регионами.
+    lot.kato = kato or lot.kato
     lot.url = hit.announcement_url or lot.url
     if not lot.it_category:
         lot.it_category = classify(lot.enstru, lot.name)

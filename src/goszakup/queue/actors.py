@@ -25,15 +25,16 @@ fire-and-forget относительно run-жизненного цикла, п
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import dramatiq
 import redis
 from sqlalchemy import select, update
 
+from ..api.client import OwsApiError, OwsClient
 from ..classify.it import classify
 from ..classify.llm import analyze_and_save
-from ..config import MIN_AMOUNT
+from ..config import MIN_AMOUNT, OWS_TOKEN
 from ..db.engine import SessionLocal
 from ..db.models import Lot, Preset, ScrapeRun
 from ..jobs.expire import expire_actual_lots
@@ -49,7 +50,7 @@ from ..jobs.run_preset import (
     _upsert_lot_from_listing,
 )
 from ..scraper.search import SearchParams
-from ..sources import make_source
+from ..sources import ApiSource, make_source, mark_api_degraded
 
 # Импорты ниже регистрируют actor'ы в брокере (воркер грузит именно этот модуль).
 # Без них actor не зарегистрирован, и его задачи молча копятся в Redis независимо
@@ -135,21 +136,186 @@ def _close_run(session, run_id: int) -> None:
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
 def daily_actor() -> None:
-    """Ежедневный триггер: enqueue listing-задачу на каждый активный preset."""
-    with SessionLocal() as session:
-        ids = [
-            p.id
-            for p in session.scalars(
-                select(Preset).where(Preset.active.is_(True)).order_by(Preset.id)
-            )
-        ]
-    log.info("daily_actor: enqueue listing_actor x %d", len(ids))
-    for pid in ids:
-        listing_actor.send(pid)
+    """Ежедневный триггер: инкрементальный API-проход, либо обход preset'ов.
+
+    С токеном OWS вместо 20 региональных сканов — один проход по
+    lastUpdateDate (api_daily_actor) + синк договоров. Без токена —
+    прежний fan-out listing_actor по активным preset'ам, бит-в-бит.
+    """
+    if OWS_TOKEN:
+        log.info("daily_actor: инкрементальный API-путь")
+        api_daily_actor.send()
+        contracts_sync_actor.send()
+    else:
+        with SessionLocal() as session:
+            ids = [
+                p.id
+                for p in session.scalars(
+                    select(Preset).where(Preset.active.is_(True)).order_by(Preset.id)
+                )
+            ]
+        log.info("daily_actor: enqueue listing_actor x %d", len(ids))
+        for pid in ids:
+            listing_actor.send(pid)
     # Перед обходом гасим уже истёкшие — дёшево (локальный UPDATE по БД),
     # отдельно от ежечасного expire_actor, чтобы daily всегда оставлял
     # консистентную выдачу даже если таймер expire почему-то не сработал.
     expire_actor.send()
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=30 * 60 * 1000)
+def contracts_sync_actor(days_back: int | None = None) -> None:
+    """Синк договоров/победителей из GraphQL Contract по окну lastUpdateDate.
+
+    Обновляет только лоты, уже существующие в БД, — включая закрытые
+    (закрывает пробел правила #5: закрытые не пересканируются, но договор
+    к ним теперь приезжает отсюда). days_back — ручной override окна для
+    бэкофилла с CLI. max_retries=0: следующий daily сам доберёт окно от
+    старого водяного знака, ретрай дал бы дубль ScrapeRun.
+    """
+    if not OWS_TOKEN:
+        return
+    from ..jobs.contracts import sync_contracts
+    from ..jobs.incremental import NOTE_PREFIX_CONTRACTS, sync_window
+
+    r = _redis_client()
+    with SessionLocal() as session:
+        if days_back is not None:
+            dt_to = datetime.now(UTC)
+            dt_from = dt_to - timedelta(days=days_back)
+            clamped = False
+        else:
+            dt_from, dt_to, clamped = sync_window(session, NOTE_PREFIX_CONTRACTS)
+        if clamped:
+            log.warning(
+                "contracts-sync: окно обрезано потолком %s — часть изменений "
+                "источника потеряна", dt_from,
+            )
+        run = ScrapeRun(
+            preset_id=None,
+            note=f"{NOTE_PREFIX_CONTRACTS}: {dt_from:%Y-%m-%d %H:%M}—{dt_to:%H:%M} UTC",
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        client = OwsClient(redis_client=r)
+        try:
+            stats = sync_contracts(
+                session, client, dt_from=dt_from, dt_to=dt_to,
+                on_progress=lambda s: _touch_run(session, run_id),
+            )
+        except OwsApiError as e:
+            # Фолбэка в HTML здесь нет и не нужно: HTML-путь договоров живёт
+            # в detail-фазе; окно доберёт следующий daily.
+            log.warning("contracts-sync: OWS недоступен (%s) — окно доберём позже", e)
+            _increment_run(session, run_id, errors=1)
+            _close_run(session, run_id)
+            return
+        _update_run(
+            session, run_id,
+            listing_count=stats.scanned,
+            new_lots=stats.created,
+            updated_lots=stats.updated,
+        )
+        _close_run(session, run_id)
+        log.info(
+            "contracts-sync: scanned=%d matched=%d created=%d updated=%d winners=%d",
+            stats.scanned, stats.matched, stats.created, stats.updated,
+            stats.winners_filled,
+        )
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=30 * 60 * 1000)
+def api_daily_actor() -> None:
+    """Один инкрементальный проход Lots по lastUpdateDate вместо 20 сканов.
+
+    Статусы/минимальная сумма — объединение активных preset'ов (они остаются
+    конфигурацией покрытия); регион лота — из точки поставки (клиентского
+    kato-фильтра нет, проход общереспубликанский). Дальше — тот же конвейер,
+    что у listing_actor: IT-фильтр, upsert, detail_actor c pending-счётчиком.
+    max_retries=0: при ошибке фолбэк на preset-обход внутри, ретрай дал бы
+    двойной fan-out.
+    """
+    from ..jobs.incremental import NOTE_PREFIX_DAILY, daily_scan_params, sync_window
+
+    r = _redis_client()
+    with SessionLocal() as session:
+        dt_from, dt_to, clamped = sync_window(session, NOTE_PREFIX_DAILY)
+        if clamped:
+            log.warning(
+                "api-daily: окно обрезано потолком %s (простой >7 дней) — "
+                "рекомендуется ручной прогон preset'ов", dt_from,
+            )
+        status_codes, amount_from = daily_scan_params(session)
+
+        run = ScrapeRun(
+            preset_id=None,
+            note=f"{NOTE_PREFIX_DAILY}: {dt_from:%Y-%m-%d %H:%M}—{dt_to:%H:%M} UTC",
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        source = ApiSource(redis_client=r)
+        new_hits: list = []
+        status_changes: list = []
+        listing_count = 0
+        try:
+            for hit, region in source.iter_updated_lots(
+                dt_from=dt_from, dt_to=dt_to,
+                status_codes=status_codes, amount_from=amount_from,
+            ):
+                listing_count += 1
+                # Проект только про IT: не-IT лоты не храним и не парсим вообще.
+                cat = classify(hit.enstru, hit.lot_name)
+                if cat is None:
+                    continue
+                _upsert_lot_from_listing(
+                    session, hit, kato=region,
+                    on_new=new_hits, on_status_change=status_changes,
+                )
+                if listing_count % 100 == 0:
+                    session.commit()
+                    _touch_run(session, run_id)
+            session.commit()
+        except OwsApiError as e:
+            session.rollback()
+            log.warning(
+                "api-daily: OWS недоступен (%s) — фолбэк на preset-обход", e
+            )
+            mark_api_degraded(r, "api-daily", e)
+            _increment_run(session, run_id, errors=1)
+            _close_run(session, run_id)
+            preset_ids = session.scalars(
+                select(Preset.id).where(Preset.active.is_(True)).order_by(Preset.id)
+            ).all()
+            for pid in preset_ids:
+                listing_actor.send(pid)
+            return
+        except Exception:
+            log.exception("api-daily failed")
+            session.rollback()
+            _increment_run(session, run_id, errors=1)
+            _close_run(session, run_id)
+            raise
+
+        targets = {h.announcement_id for h in new_hits}
+        for h, _prev in status_changes:
+            targets.add(h.announcement_id)
+
+        _update_run(
+            session, run_id,
+            listing_count=listing_count,
+            new_lots=len(new_hits),
+            updated_lots=len(status_changes),
+        )
+        if not targets:
+            _close_run(session, run_id)
+            return
+        _set_pending(r, run_id, len(targets))
+        for anno_id in targets:
+            detail_actor.send(anno_id, run_id)
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
