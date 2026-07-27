@@ -3,6 +3,21 @@
 Скопировать на сервер и активировать. Пути в юнитах под реальную раскладку
 прода (`/home/rus/projects/gos_tracker`, юзер `rus`).
 
+## Daily-юниты (главный триггер конвейера)
+
+`goszakup-daily.timer` + `goszakup-daily.service` — 06:00 ежедневно,
+`cli daily` → enqueue `daily_actor`. Шаблон чище live-юнита на сервере:
+из него убран мёртвый lock-артефакт (`ConditionPathExists` +
+`ExecStartPre`/`ExecStopPost` вокруг `data/.daily.lock` — был нужен до
+Phase 3, когда daily работал синхронно). Live-юнит продолжает работать со
+старым текстом; при следующем изменении просто накатить шаблон:
+
+```bash
+sudo cp scripts/systemd/goszakup-daily.* /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl list-timers goszakup-daily.timer
+```
+
 ## Установка backup-юнитов
 
 ```bash

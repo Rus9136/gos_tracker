@@ -1,0 +1,11 @@
+[Unit]
+Description=Goszakup Tracker — таймер для daily
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=goszakup-daily.service
+
+[Install]
+WantedBy=timers.target

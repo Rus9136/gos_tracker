@@ -1,0 +1,18 @@
+[Unit]
+Description=Goszakup Tracker — ежедневный обход всех preset'ов
+
+[Service]
+Type=oneshot
+User=rus
+Group=rus
+WorkingDirectory=/home/rus/projects/gos_tracker
+ExecStart=/home/rus/projects/gos_tracker/.venv/bin/python -m goszakup.cli daily
+
+# 4ч — на случай отката в синхронный режим (cli daily --sync);
+# штатный enqueue-режим завершается за миллисекунды.
+TimeoutStartSec=4h
+
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=/home/rus/projects/gos_tracker/data

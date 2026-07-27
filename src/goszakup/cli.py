@@ -584,7 +584,10 @@ def plan_submission_cmd(
 @app.command("autosubmit-dispatch")
 def autosubmit_dispatch_cmd(
     sync: bool = typer.Option(
-        True, "--sync/--enqueue", help="Считать здесь (--sync) или поставить актора"
+        True,
+        "--sync/--enqueue",
+        help="Дефолт --sync (единственная команда: остальные по умолчанию "
+        "enqueue). systemd-таймер передаёт --enqueue явно.",
     ),
 ) -> None:
     """Разослать агенту PLANNED-подачи, открывающиеся в ближайший warmup-lead."""

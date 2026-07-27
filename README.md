@@ -1,16 +1,23 @@
 # Goszakup Tracker
 
-Трекер тендеров с [goszakup.gov.kz](https://goszakup.gov.kz): ежедневный
-скрейпинг по preset'ам, история статусов, загрузка документов, веб-интерфейс
-с фильтрами и отчёты по заказчикам. Развёрнут на
-<https://gost.salemsoft.kz> (production); работает и под macOS как
-single-user-инструмент.
+Трекер IT-тендеров с [goszakup.gov.kz](https://goszakup.gov.kz): ежедневный
+инжест через официальный API OWS (с HTML-фолбэком), история статусов,
+LLM-анализ техзаданий, семантический подбор лотов под запросы пользователей
+с Telegram-уведомлениями, multi-user веб-интерфейс и отчёты по заказчикам.
+Развёрнут на <https://gost.salemsoft.kz> (production).
+
+Карта проекта — фичи и их связи, конвейер задач, модель данных, матрица
+возможностей OWS API — в [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Возможности
 
+- Источник данных — официальный API OWS (GraphQL + REST, Bearer-токен) с
+  автоматическим фолбэком на HTML-скрейпинг; с токеном daily идёт одним
+  инкрементальным проходом по `lastUpdateDate` вместо 20 региональных обходов.
 - 20 preset'ов из коробки — по одному на каждый регион Казахстана. Минимальная
   сумма лота 500 000 ₸ (зашита в `config.py`).
-- Парсер уважает `Crawl-delay: 5s` из robots.txt goszakup.
+- HTML-парсер уважает `Crawl-delay: 5s` из robots.txt goszakup; у API свой
+  независимый rate-limit.
 - Парсинг 4 табов карточки объявления: общие сведения, лоты, документы, договоры.
 - Загрузка документов: прямые `<a href>` + разворот кнопки «Перейти» через
   ajax-эндпоинт (`actionAjaxModalShowFiles`). Качаются только кандидаты
@@ -25,12 +32,18 @@ single-user-инструмент.
     поддержка / инфра / железо / не-разработка), стек, краткое summary,
     признак «справится один разработчик», `vendor_lock_risk`. Дефолтная
     модель — `gpt-oss-120b` (Cerebras Inference).
-- Веб-интерфейс: дашборд, актуальные / прошедшие тендеры с фильтрами (включая
-  тип разработки и риск заточки), карточка лота со скачиванием документов и
-  блоком LLM-анализа, отчёт по заказчикам/организаторам, журнал прогонов.
-- Ежедневный запуск по расписанию в 06:00: systemd-timer на сервере
-  ([DEPLOY.md](DEPLOY.md), [CLAUDE.md](CLAUDE.md) → раздел «Продакшн»);
-  launchd-вариант для macOS оставлен в `scripts/` как опция.
+- Семантический подбор: пользователь описывает словами «какие лоты хочу»,
+  LLM матчит запрос против summary ТЗ, новые матчи прилетают в Telegram
+  (с кнопкой «Подробнее» — объяснение лота простым языком).
+- Ретроспектива цен: заявки участников с ценами, скидками и статусами
+  (Победитель/Отклонено/…) подтягиваются из API после дедлайна.
+- Multi-user веб-интерфейс: дашборд, актуальные / прошедшие тендеры с
+  фильтрами (включая тип разработки и риск заточки), карточка лота со
+  скачиванием документов, LLM-анализом и чатом по ТЗ, отчёты по
+  заказчикам/организаторам, журнал прогонов. У каждого пользователя свой
+  scope на чтение (регионы / категории / мин. сумма).
+- Ежедневный запуск по расписанию в 06:00 (systemd-timer) + Dramatiq-воркер
+  с Redis-очередями ([CLAUDE.md](CLAUDE.md) → раздел «Продакшн»).
 
 ## Требования
 
@@ -54,7 +67,7 @@ docker compose exec web python -m goszakup.cli seed-presets
 Поднимает Postgres 16 + uvicorn в контейнере. Прогнать daily вручную:
 `docker compose run --rm web python -m goszakup.cli daily`.
 
-### Вариант B — venv + SQLite (legacy, текущий прод)
+### Вариант B — venv (без Docker; без `GZ_DATABASE_URL` — SQLite)
 
 ```bash
 cd <путь-к-репозиторию>
@@ -65,8 +78,8 @@ python3 -m venv .venv
 ```
 
 Боевой деплой под Linux+nginx+systemd описан в [DEPLOY.md](DEPLOY.md);
-фактическая раскладка продакшна (пока на SQLite, миграция на Postgres
-запланирована Phase 2) — в [CLAUDE.md](CLAUDE.md), раздел
+фактическая раскладка продакшна (Postgres 15, Dramatiq-воркер с выделенным
+Redis, systemd-таймеры) — в [CLAUDE.md](CLAUDE.md), раздел
 «Продакшн: gost.salemsoft.kz».
 
 ### Миграция данных из SQLite в Postgres
@@ -119,13 +132,14 @@ GZ_DEST_DATABASE_URL='postgresql+psycopg://goszakup:goszakup_dev@localhost:5433/
 ```bash
 # Без авторизации (только для дев-машины — на проде НЕ выставлять)
 GZ_NO_AUTH=1 .venv/bin/python -m uvicorn goszakup.web.app:app --port 8765
-
-# С HTTP Basic auth (как на проде)
-GZ_USER=admin GZ_PASSWORD=секрет \
-    .venv/bin/python -m uvicorn goszakup.web.app:app --port 8765
 ```
 
 Открыть [http://127.0.0.1:8765](http://127.0.0.1:8765).
+
+Аутентификация — форма `/login` и таблица `users` (bcrypt + cookie-сессия,
+на проде обязателен `GZ_SECRET_KEY`). `GZ_USER`/`GZ_PASSWORD` — только сид
+первого админа при пустой таблице; дальше пользователи заводятся через UI
+`/users` или `cli create-user --admin`.
 
 Маршруты:
 
@@ -134,12 +148,22 @@ GZ_USER=admin GZ_PASSWORD=секрет \
 | `/` | Дашборд: счётчики, сводка по регионам и категориям, последние прогоны |
 | `/actual` | Актуальные тендеры с фильтрами (регион, IT-категория, **тип разработки**, **риск заточки**, диапазон суммы) |
 | `/past` | Прошедшие тендеры (Состоялась/Не состоялась/Отменён/Отказ) с теми же фильтрами |
-| `/lot/{id}` | Карточка лота: поля, **LLM-анализ ТЗ**, история статусов, документы (скачивание), договор |
+| `/starred` | Избранные лоты |
+| `/matched` | Лоты, подобранные под семантические запросы пользователя |
+| `/queries` | Семантические запросы: создание, правка, ручной пересчёт |
+| `/lot/{id}` | Карточка лота: поля, **LLM-анализ ТЗ**, чат по ТЗ, история статусов, документы, договоры, заявки конкурентов с ценами |
 | `/organizations` | Заказчики/организаторы с агрегатами (кол-во лотов, сумма) |
-| `/organization/{id}` | Все лоты конкретной организации |
-| `/presets` | Список preset'ов, кнопка toggle active |
-| `/runs` | Журнал прогонов парсера |
+| `/organization/{id}` | Все лоты конкретной организации (+ отчёт по закупкам, admin) |
+| `/settings` | Telegram-уведомления своего профиля |
+| `/presets` | Список preset'ов, кнопка toggle active (admin) |
+| `/scan`, `/ingest` | Ad-hoc прогоны: по фильтрам / по БИН заказчика (admin) |
+| `/runs` | Журнал прогонов парсера (admin) |
+| `/users` | Управление пользователями и их scope (admin) |
+| `/expenses` | Расход LLM-токенов по дням/неделям/месяцам (admin) |
+| `/submissions` | Статусы автоподач заявок (admin) |
 | `/document/{id}/download` | Отдаёт локально сохранённый файл |
+
+Полная таблица (42 роута с ролями) — [ARCHITECTURE.md](ARCHITECTURE.md), § 4.
 
 ### Ежедневный запуск по расписанию
 
@@ -162,58 +186,42 @@ GZ_USER=admin GZ_PASSWORD=секрет \
 ```
 goszakup/
 ├── src/goszakup/
-│   ├── config.py            # пути, MIN_AMOUNT, CRAWL_DELAY
+│   ├── config.py            # пути, MIN_AMOUNT, env-переменные
 │   ├── cli.py               # точка входа Typer
-│   ├── db/
-│   │   ├── models.py        # SQLAlchemy 2.0 модели
-│   │   └── engine.py        # engine + SessionLocal + init_db
-│   ├── scraper/
-│   │   ├── http.py          # ThrottledSession (5s delay)
-│   │   ├── search.py        # iter_listing(SearchParams) — табличная выдача
-│   │   ├── announce.py      # детальная карточка объявления (4 таба)
-│   │   ├── documents.py     # загрузка файлов с sha256-дедупом
-│   │   ├── modal_files.py   # разворот «Перейти» через ajax + is_tz_like_name
-│   │   ├── katos.py         # 20 регионов РК
-│   │   └── statuses.py      # 25 кодов статусов, группы ACTUAL/PAST
-│   ├── classify/
-│   │   ├── it.py            # IT pre-filter (enstru exact + keyword)
-│   │   └── llm.py           # LLM-классификация ТЗ (Claude tool use)
-│   ├── jobs/
-│   │   ├── seed.py          # дефолтные preset'ы по регионам
-│   │   ├── run_preset.py    # пайплайн listing → diff → details → upsert
-│   │   └── daily.py         # обход всех активных preset'ов
-│   └── web/
-│       ├── app.py           # FastAPI с роутами
-│       ├── auth.py          # HTTP Basic (одна учётка)
-│       ├── deps.py          # get_db, форматтеры
-│       └── templates/       # Jinja2 (_layout, index, lots, lot, ...)
-├── data/
-│   ├── goszakup.sqlite      # БД
-│   ├── docs/{anno_id}/...   # скачанные документы
-│   └── logs/                # логи прогонов (только для macOS/launchd; на проде вывод идёт в journal)
-├── scripts/
-│   ├── run_daily.sh
-│   ├── com.user.goszakup.daily.plist
-│   └── install_launchd.sh
+│   ├── sources.py           # DataSource: ApiSource (OWS) + HtmlSource + фолбэк
+│   ├── scope.py             # multi-user scope на чтение
+│   ├── api/                 # клиент официального API OWS (GraphQL + REST)
+│   ├── scraper/             # HTML-путь: ThrottledSession, листинг, карточка, файлы
+│   ├── classify/            # IT pre-filter, LLM-анализ ТЗ, матчер запросов, учёт токенов
+│   ├── jobs/                # пайплайн: run_preset, daily, incremental, contracts, bids, expire, health, ...
+│   ├── queue/               # Dramatiq-акторы и очереди (broker, actors, matching, notify, autosubmit)
+│   ├── notify/              # Telegram-уведомления
+│   ├── vault/               # KeyVault автоподачи (AES-256-GCM)
+│   ├── autosubmit/          # ядро автоподачи: тайминг, диспетчер, RPC к агенту
+│   ├── db/                  # SQLAlchemy-модели (16 таблиц) + engine
+│   └── web/                 # FastAPI: роуты, auth, Jinja2-шаблоны
+├── agent/                   # Windows submit-agent (отдельный деплой, не часть пакета)
+├── migrations/              # Alembic
+├── docs/ows/                # снимок документации OWS + интроспекция GraphQL-схемы
+├── scripts/                 # systemd-юниты, бэкофиллы, миграция SQLite→PG
+├── data/                    # БД (dev-SQLite), скачанные документы
 └── pyproject.toml
 ```
 
+Подробная карта — модули, акторы, связи фич — в
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Модель данных
 
-- **organizations** — заказчики, организаторы и поставщики в одной таблице.
-  Уникальность по БИН, если он есть; иначе по названию.
-- **announcements** — объявления (anno_id с сайта как pk).
-- **lots** — лоты внутри объявления (lot_id с сайта как pk).
-- **lot_status_history** — запись на каждое изменение `status_code`.
-- **documents** — скачанные файлы (sha256, локальный путь). Уникальность по
-  паре `(announcement_id, url)`.
-- **contracts** — договоры по лоту (появляются на финальных стадиях).
-- **lot_analyses** — LLM-классификация лота 1:1: `dev_category`, `tech_stack`,
-  `tz_summary`, `solo_feasible`, `vendor_lock_risk`, `analysis_confidence`,
-  `analyzer_version`, `tz_sha256`. Идемпотентность: пара
-  (analyzer_version, tz_sha256) — пропуск переанализа.
-- **presets** — именованные наборы фильтров.
-- **scrape_runs** — журнал прогонов парсера (вкл. счётчик `llm_analyzed`).
+16 таблиц; ER-диаграмма и группировка — [ARCHITECTURE.md](ARCHITECTURE.md), § 3.
+Ядро: `organizations` (заказчик/организатор/поставщик — одно лицо),
+`announcements` → `lots` (id с сайта как PK) → `lot_status_history`,
+`documents`, `contracts`, `lot_bids` (заявки участников с ценами).
+LLM: `lot_analyses` (1:1 к лоту, идемпотентность по паре
+`(analyzer_version, tz_sha256)`), `llm_calls` (учёт токенов).
+Пользователи: `users` (scope), `user_queries` → `user_lot_matches` (кеш
+семантического подбора). Операционные: `presets`, `scrape_runs`.
+Автоподача: `client_credentials`, `submissions` (секреты и цены шифруются).
 
 ## Ограничения и known issues
 
@@ -232,7 +240,7 @@ goszakup/
    договор может остаться непроставленным. Можно включить отдельным preset'ом
    с `status_codes=[360, 370, 410, 430]`.
 5. **LLM-анализ обычно `confidence='high'`** — ТЗ скачивается, текст
-   уходит в Claude. `low` остаётся только для пограничных случаев: у
+   уходит в LLM. `low` остаётся только для пограничных случаев: у
    объявления нет файла «техническая спецификация / конкурсная
    документация», формат `.doc` (legacy, не парсим), битый PDF без
    текстового слоя. Тогда модель классифицирует по названию + ENSTRU.
@@ -241,11 +249,18 @@ goszakup/
 
 | Переменная | Значение по умолчанию | Назначение |
 |---|---|---|
-| `GZ_NO_AUTH` | (не задано) | Если `1` — отключает HTTP Basic в веб-интерфейсе |
-| `GZ_USER` | `admin` | Логин для HTTP Basic |
-| `GZ_PASSWORD` | `admin` | Пароль для HTTP Basic |
+| `GZ_NO_AUTH` | (не задано) | Если `1` — выключает логин, работа под синтетическим админом (только dev) |
+| `GZ_USER` / `GZ_PASSWORD` | `admin` / `admin` | Сид первого админа при пустой таблице `users` (не Basic Auth) |
+| `GZ_SECRET_KEY` | (не задано) | Подпись cookie-сессии; на проде обязателен |
+| `GZ_DATABASE_URL` | (не задано → SQLite) | `postgresql+psycopg://...` для Postgres |
+| `GZ_OWS_TOKEN` | (не задано → HTML-путь) | Bearer-токен официального API OWS |
+| `GZ_REDIS_URL` | `redis://localhost:6379/0` | Redis для Dramatiq-очередей и rate-limit |
 | `CEREBRAS_API_KEY` | (не задано) | Включает LLM-классификацию ТЗ через Cerebras Inference. Без ключа — пайплайн работает, просто без LLM-шага. |
 | `GZ_LLM_MODEL` | `gpt-oss-120b` | ID модели у Cerebras. Дефолт — open-weights gpt-oss-120b с tool calling + constrained decoding. |
+| `GZ_TELEGRAM_BOT_TOKEN` | (не задано) | Бот уведомлений о новых матчах; без него уведомления тихо выключены |
+
+Полный список (Telegram-вебхук, health-check, автоподача) — в
+[CLAUDE.md](CLAUDE.md), раздел «Окружение».
 
 ## Лицензия и этика скрейпинга
 
