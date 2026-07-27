@@ -124,6 +124,27 @@ def test_iter_graphql_stops_on_stuck_cursor():
     assert c.session.request.call_count == 2
 
 
+def test_graphql_page_cache(fake_redis):
+    """Повторный тот же запрос с cache_ttl отдаётся из Redis без HTTP.
+
+    Критично для daily: 20 региональных preset'ов ходят по идентичным
+    страницам листинга — без кэша они душат друг друга под общим rate-limit.
+    """
+    c = _client(redis_client=fake_redis)
+    c.session.request = MagicMock(return_value=_gql_page([{"id": 1}], last_id=1, has_next=False))
+    v = {"f": {"refLotStatusId": [210]}, "limit": 200, "after": None}
+    first = c.graphql("q", v, cache_ttl=900)
+    second = c.graphql("q", v, cache_ttl=900)
+    assert first == second
+    assert c.session.request.call_count == 1
+    # Другие variables — другой ключ, новый запрос.
+    c.graphql("q", {**v, "after": 1}, cache_ttl=900)
+    assert c.session.request.call_count == 2
+    # Без cache_ttl кэш не трогаем.
+    c.graphql("q", v)
+    assert c.session.request.call_count == 3
+
+
 def test_graphql_errors_raise():
     c = _client()
     c.session.request = MagicMock(

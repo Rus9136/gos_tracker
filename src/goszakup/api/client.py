@@ -7,6 +7,8 @@ Rate-limit независим от HTML-скрейпера: у того конт
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Iterator
@@ -55,6 +57,7 @@ class OwsClient:
         self.session.headers["Authorization"] = f"Bearer {self.token}"
         if OWS_USE_PROXY and GZ_PROXY_URL:
             self.session.proxies = {"http": GZ_PROXY_URL, "https": GZ_PROXY_URL}
+        self._redis = redis_client
         if redis_client is not None:
             self._limiter = RedisSlotLimiter(redis_client, delay, API_LIMIT_KEY)
         else:
@@ -121,7 +124,30 @@ class OwsClient:
 
     # -- GraphQL -------------------------------------------------------------
 
-    def graphql(self, query: str, variables: dict | None = None) -> tuple[dict, dict]:
+    def graphql(
+        self, query: str, variables: dict | None = None, *, cache_ttl: int | None = None
+    ) -> tuple[dict, dict]:
+        """cache_ttl — короткий Redis-кэш ответа страницы.
+
+        Нужен листингу daily: 20 preset'ов различаются только регионом,
+        который фильтруется клиентски, поэтому все 20 акторов ходят по
+        ИДЕНТИЧНОЙ последовательности страниц — без кэша это 20×74 запросов
+        под общим rate-limit (акторы душат друг друга до TimeLimit),
+        с кэшем — 74.
+        """
+        cache_key = None
+        if cache_ttl and self._redis is not None:
+            digest = hashlib.sha256(
+                json.dumps([query, variables], sort_keys=True, ensure_ascii=False).encode()
+            ).hexdigest()
+            cache_key = f"goszakup:api:cache:{digest}"
+            try:
+                cached = self._redis.get(cache_key)
+            except Exception:  # noqa: BLE001 — кэш best-effort
+                cached = None
+            if cached:
+                payload = json.loads(cached)
+                return payload["data"], payload["pageInfo"]
         r = self._request(
             "POST",
             f"{self.base_url}/v3/graphql",
@@ -133,7 +159,17 @@ class OwsClient:
         if payload.get("errors"):
             raise OwsApiError(f"OWS graphql: {payload['errors'][0].get('message')}")
         page_info = (payload.get("extensions") or {}).get("pageInfo") or {}
-        return payload.get("data") or {}, page_info
+        data = payload.get("data") or {}
+        if cache_key is not None:
+            try:
+                self._redis.set(
+                    cache_key,
+                    json.dumps({"data": data, "pageInfo": page_info}, ensure_ascii=False),
+                    ex=cache_ttl,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return data, page_info
 
     def iter_graphql(
         self,
@@ -143,6 +179,7 @@ class OwsClient:
         root: str,
         limit: int = 200,
         max_pages: int | None = None,
+        cache_ttl: int | None = None,
     ) -> Iterator[dict]:
         """Курсорная пагинация: у query обязан быть аргумент `$after: Int`.
 
@@ -155,7 +192,7 @@ class OwsClient:
         pages = 0
         while True:
             variables["after"] = after
-            data, page_info = self.graphql(query, variables)
+            data, page_info = self.graphql(query, variables, cache_ttl=cache_ttl)
             items = data.get(root) or []
             yield from items
             pages += 1

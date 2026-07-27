@@ -95,8 +95,12 @@ class ApiSource:
         # Регион, год и вид предмета закупок на сервере не фильтруются
         # (kato — только точные коды) — отсеиваем клиентски ниже.
         seen: set[int] = set()
+        # Кэш страниц на 15 мин: региональные preset'ы отличаются только kato
+        # (клиентский фильтр), их листинг-страницы идентичны — при daily 20
+        # акторов проходят по одному и тому же кэшу вместо 20 обходов API.
         for lot in self.client.iter_graphql(
-            LISTING_QUERY, {"f": f}, root="Lots", limit=200, max_pages=max_pages
+            LISTING_QUERY, {"f": f}, root="Lots", limit=200, max_pages=max_pages,
+            cache_ttl=900,
         ):
             if lot["id"] in seen:
                 continue
