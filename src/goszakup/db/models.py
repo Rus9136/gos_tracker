@@ -167,6 +167,12 @@ class Announcement(Base):
     # ещё не сменил статус. См. jobs/expire.py. index — для дешёвого
     # bulk-UPDATE по `application_end < now()`.
     application_end: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
+    # Когда объявление последний раз опрашивали на заявки (jobs/bids.py).
+    # Без этой отметки объявления, у которых итогов так и не будет («не
+    # состоялась»), навсегда занимали бы верх выборки и заслоняли остальные:
+    # у них нет ни одной строки в lot_bids, то есть по самим заявкам факт
+    # опроса не восстановить.
+    bids_synced_at: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
     contact_name: Mapped[str | None] = mapped_column(String(300))
     contact_role: Mapped[str | None] = mapped_column(String(200))
     contact_email: Mapped[str | None] = mapped_column(String(200))
@@ -246,6 +252,9 @@ class Lot(Base):
         back_populates="lot", cascade="all, delete-orphan"
     )
     contracts: Mapped[list[Contract]] = relationship(back_populates="lot")
+    bids: Mapped[list[LotBid]] = relationship(
+        back_populates="lot", cascade="all, delete-orphan"
+    )
     analysis: Mapped[LotAnalysis | None] = relationship(
         back_populates="lot",
         uselist=False,
@@ -316,6 +325,44 @@ class Contract(Base):
     last_synced: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 
     lot: Mapped[Lot] = relationship(back_populates="contracts")
+    supplier: Mapped[Organization | None] = relationship(foreign_keys=[supplier_id])
+
+
+class LotBid(Base):
+    """Заявка поставщика по лоту с ценой (GraphQL TrdApp → AppLots).
+
+    Sealed-bid: до окончания приёма OWS не отдаёт по лоту ни одной заявки —
+    ни факта подачи, ни цены (проверено на выборке: у лотов с открытым приёмом
+    TrdApp пуст, после дедлайна заполняется). Поэтому это ретроспектива —
+    «по какой цене реально берут и кто конкуренты», — а не подглядывание в
+    чужие ставки во время гонки. Синк — jobs/bids.py.
+    """
+
+    __tablename__ = "lot_bids"
+
+    # id строки «заявка × лот» из API (TrdAppLots.id) — естественный ключ:
+    # повторный синк того же лота обновляет строку, а не плодит дубли.
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    app_id: Mapped[int | None] = mapped_column(BigInteger, index=True)  # TrdApp.id
+    lot_id: Mapped[int] = mapped_column(ForeignKey("lots.id"), index=True)
+    supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), index=True
+    )
+    # БИН у ИП в API бывает пустым — храним и сырое имя, иначе заявку не
+    # атрибутировать вообще.
+    supplier_bin: Mapped[str | None] = mapped_column(String(20), index=True)
+    supplier_name: Mapped[str | None] = mapped_column(String(500))
+    price: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)  # за единицу
+    amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)  # сумма заявки
+    discount_value: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    discount_price: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    # name_ru из RefAppStatus: «Подано», «Допущено», «Победитель»,
+    # «Второй победитель», «Отклонено». Хранится как пришло (соглашение репо).
+    status: Mapped[str | None] = mapped_column(String(100), index=True)
+    date_apply: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    last_synced: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
+
+    lot: Mapped[Lot] = relationship(back_populates="bids")
     supplier: Mapped[Organization | None] = relationship(foreign_keys=[supplier_id])
 
 

@@ -1,0 +1,123 @@
+[
+ {
+  "id": 72141138,
+  "supplierBinIin": "890314450410",
+  "dateApply": "2026-07-24 15:30:24.884000",
+  "Supplier": {
+   "bin": "",
+   "nameRu": "ИП Майорова СМ"
+  },
+  "AppLots": [
+   {
+    "id": 86535919,
+    "lotId": 42667205,
+    "price": 44000,
+    "amount": 88000,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Победитель"
+    }
+   },
+   {
+    "id": 86535918,
+    "lotId": 42667204,
+    "price": 145000,
+    "amount": 290000,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Второй победитель"
+    }
+   }
+  ]
+ },
+ {
+  "id": 72140931,
+  "supplierBinIin": "641001401967",
+  "dateApply": "2026-07-24 15:36:32.836000",
+  "Supplier": {
+   "bin": "",
+   "nameRu": "ИП СОФИ"
+  },
+  "AppLots": [
+   {
+    "id": 86535665,
+    "lotId": 42667205,
+    "price": 62600,
+    "amount": 125200,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Подано"
+    }
+   },
+   {
+    "id": 86535664,
+    "lotId": 42667204,
+    "price": 178660,
+    "amount": 357320,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Подано"
+    }
+   }
+  ]
+ },
+ {
+  "id": 72139073,
+  "supplierBinIin": "900723451753",
+  "dateApply": "2026-07-24 14:17:27.666000",
+  "Supplier": {
+   "bin": "",
+   "nameRu": "ИП Береке"
+  },
+  "AppLots": [
+   {
+    "id": 86533169,
+    "lotId": 42667205,
+    "price": 84555,
+    "amount": 169110,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Подано"
+    }
+   },
+   {
+    "id": 86533168,
+    "lotId": 42667204,
+    "price": 174555,
+    "amount": 349110,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Подано"
+    }
+   }
+  ]
+ },
+ {
+  "id": 72119517,
+  "supplierBinIin": "850609450575",
+  "dateApply": "2026-07-24 17:24:08.930000",
+  "Supplier": {
+   "bin": "",
+   "nameRu": "ИП Үміт"
+  },
+  "AppLots": [
+   {
+    "id": 86509112,
+    "lotId": 42667204,
+    "price": 142000,
+    "amount": 284000,
+    "discountValue": 0,
+    "discountPrice": 0,
+    "RefAppStatus": {
+     "nameRu": "Победитель"
+    }
+   }
+  ]
+ }
+]

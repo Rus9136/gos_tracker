@@ -194,6 +194,52 @@
     </div>
     {% endif %}
 
+    {% if bids %}
+    {% set best = bids|selectattr('price')|list|first %}
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Заявки и цены <span class="dim">({{ bids|length }})</span></div>
+          <div class="card-sub">
+            Публикуется только после окончания приёма — во время подачи цены закрыты
+            {%- if best and lot.plan_amount and best.price %}
+            • лучшая цена ниже плановой на
+            {{ ((lot.plan_amount - best.price) / lot.plan_amount * 100)|round(1) }}%
+            {%- endif %}
+          </div>
+        </div>
+      </div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Поставщик</th>
+            <th class="num">Цена за ед.</th>
+            <th class="num">Сумма</th>
+            <th class="num">Со скидкой</th>
+            <th>Статус</th>
+            <th>Подал</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in bids %}
+          <tr>
+            <td>
+              {% if b.supplier %}<a href="/organization/{{ b.supplier.id }}">{{ b.supplier.name }}</a>
+              {% else %}{{ b.supplier_name or '—' }}{% endif %}
+              {% if b.supplier_bin %}<div class="mono dim" style="font-size:11px">{{ b.supplier_bin }}</div>{% endif %}
+            </td>
+            <td class="num mono {{ 'strong' if b.status == 'Победитель' else '' }}">{{ b.price|n }}</td>
+            <td class="num mono">{{ b.amount|n }}</td>
+            <td class="num mono">{{ b.discount_price|n }}</td>
+            <td>{{ b.status or '—' }}</td>
+            <td class="mono dim" style="font-size:11.5px">{{ b.date_apply|dt if b.date_apply else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
     {% if lot.winner_name or lot.winner_bin %}
     <div class="card">
       <div class="card-head"><div class="card-title">Победитель</div></div>

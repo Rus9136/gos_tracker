@@ -146,6 +146,7 @@ def daily_actor() -> None:
         log.info("daily_actor: инкрементальный API-путь")
         api_daily_actor.send()
         contracts_sync_actor.send()
+        bids_sync_actor.send()
     else:
         with SessionLocal() as session:
             ids = [
@@ -223,6 +224,57 @@ def contracts_sync_actor(days_back: int | None = None) -> None:
             "contracts-sync: scanned=%d matched=%d created=%d updated=%d winners=%d",
             stats.scanned, stats.matched, stats.created, stats.updated,
             stats.winners_filled,
+        )
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=60 * 60 * 1000)
+def bids_sync_actor(limit: int = 500, horizon_days: int | None = None) -> None:
+    """Синк заявок поставщиков с ценами (jobs/bids.py).
+
+    Опрашивает объявления с прошедшим дедлайном, по которым победитель ещё
+    не известен: заявки sealed-bid и до дедлайна их не видно, поэтому окно
+    по дате подачи здесь не работает (подробнее — в модуле jobs/bids).
+    Запрос — на объявление (TrdApp.buyId не берёт массив), отсюда time_limit
+    вдвое больше, чем у остальных синков: 500 объявлений при 1 rps — минуты,
+    но с ретраями API запас нужен.
+    """
+    if not OWS_TOKEN:
+        return
+    from ..jobs.bids import RETRY_HORIZON_DAYS, sync_bids
+
+    r = _redis_client()
+    horizon = horizon_days if horizon_days is not None else RETRY_HORIZON_DAYS
+    with SessionLocal() as session:
+        run = ScrapeRun(
+            preset_id=None, note=f"bids-sync: горизонт {horizon}д, лимит {limit}"
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        client = OwsClient(redis_client=r)
+        try:
+            stats = sync_bids(
+                session, client, horizon_days=horizon, limit=limit,
+                on_progress=lambda s: _touch_run(session, run_id),
+            )
+        except OwsApiError as e:
+            log.warning("bids-sync: OWS недоступен (%s) — доберём следующим daily", e)
+            _increment_run(session, run_id, errors=1)
+            _close_run(session, run_id)
+            return
+        _update_run(
+            session, run_id,
+            listing_count=stats.bids_seen,
+            new_lots=stats.created,
+            updated_lots=stats.updated,
+            errors=stats.errors,
+        )
+        _close_run(session, run_id)
+        log.info(
+            "bids-sync: объявлений=%d заявок=%d created=%d updated=%d winners=%d errors=%d",
+            stats.announcements, stats.bids_seen, stats.created, stats.updated,
+            stats.winners_filled, stats.errors,
         )
 
 

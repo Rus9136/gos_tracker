@@ -55,6 +55,7 @@ from ..db.models import (
     LlmCall,
     Lot,
     LotAnalysis,
+    LotBid,
     LotStatusHistory,
     Organization,
     Preset,
@@ -678,6 +679,14 @@ def lot_detail(
         .where(Contract.lot_id == lot_id)
         .options(selectinload(Contract.supplier))
     ).all()
+    # Заявки конкурентов — по возрастанию цены: первым идёт самый дешёвый,
+    # так карточка сразу читается как «кто и насколько дал ниже».
+    bids = db.scalars(
+        select(LotBid)
+        .where(LotBid.lot_id == lot_id)
+        .options(selectinload(LotBid.supplier))
+        .order_by(LotBid.price.nulls_last(), LotBid.date_apply)
+    ).all()
     has_downloaded_doc = any(d.local_path for d in documents)
     analyze_status = request.query_params.get("analyzed")
     fetched_docs = request.query_params.get("docs")
@@ -691,6 +700,7 @@ def lot_detail(
             "history": history,
             "documents": documents,
             "contracts": contracts,
+            "bids": bids,
             "has_downloaded_doc": has_downloaded_doc,
             "analyze_status": analyze_status,
             "fetched_docs": fetched_docs,

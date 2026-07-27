@@ -50,6 +50,30 @@ query($f: ContractFiltersInput, $limit: Int, $after: Int) {
 }
 """
 
+# Заявки поставщиков по одному объявлению (bids_sync_actor). Фильтр TrdApp
+# принимает только скалярный buyId (массив, в отличие от TrdBuy.id, не берёт),
+# поэтому запрос — на объявление. Цены живут в AppLots: price за единицу,
+# amount — сумма, discountPrice — цена с условной скидкой (у ЗЦП обычно 0).
+BIDS_QUERY = """
+query($f: TrdAppFiltersInput, $limit: Int, $after: Int) {
+  TrdApp(filter: $f, limit: $limit, after: $after) {
+    id
+    supplierBinIin
+    dateApply
+    Supplier { bin nameRu }
+    AppLots {
+      id
+      lotId
+      price
+      amount
+      discountValue
+      discountPrice
+      RefAppStatus { nameRu }
+    }
+  }
+}
+"""
+
 # Деталь объявления — эквивалент 5 HTML-табов одним запросом (winners и
 # contracts в API-источнике не заполняются: их синкает contracts_sync_actor
 # по окну lastUpdateDate, а HTML-фолбэк дотягивает при деградации API).

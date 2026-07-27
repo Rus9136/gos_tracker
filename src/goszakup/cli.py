@@ -183,6 +183,49 @@ def contracts_sync(
     typer.echo(f"enqueued contracts_sync_actor (message_id={msg.message_id})")
 
 
+@app.command("bids-sync")
+def bids_sync_cmd(
+    limit: int = typer.Option(
+        500, "--limit", help="Сколько объявлений опросить за прогон."
+    ),
+    horizon: int = typer.Option(
+        None, "--horizon", help="Глубина отбора в днях от дедлайна (дефолт 45)."
+    ),
+    sync: bool = typer.Option(
+        False, "--sync", help="Прогнать в этом процессе, без очереди."
+    ),
+) -> None:
+    """Синк заявок поставщиков с ценами (кто подал, почём, кто победил).
+
+    Штатно bids_sync_actor запускается из daily. Команда — для ручного
+    бэкофилла: `--horizon 400 --limit 3000` пройдёт по всей накопленной
+    истории (запрос на объявление, ~1 rps — считайте время заранее).
+    """
+    _setup_logging(verbose=True)
+    if sync:
+        from .api.client import OwsClient
+        from .jobs.bids import RETRY_HORIZON_DAYS, sync_bids
+
+        init_db()
+        with SessionLocal() as s:
+            stats = sync_bids(
+                s,
+                OwsClient(),
+                horizon_days=horizon if horizon is not None else RETRY_HORIZON_DAYS,
+                limit=limit,
+            )
+        typer.echo(
+            f"объявлений={stats.announcements} заявок={stats.bids_seen} "
+            f"created={stats.created} updated={stats.updated} "
+            f"winners={stats.winners_filled} errors={stats.errors}"
+        )
+        return
+    from .queue.actors import bids_sync_actor
+
+    msg = bids_sync_actor.send(limit, horizon)
+    typer.echo(f"enqueued bids_sync_actor (message_id={msg.message_id})")
+
+
 @app.command()
 def expire(
     sync: bool = typer.Option(
