@@ -145,6 +145,37 @@ def test_graphql_page_cache(fake_redis):
     assert c.session.request.call_count == 3
 
 
+def test_graphql_cache_follower_waits_for_leader(fake_redis, monkeypatch):
+    """Второй клиент (фолловер) не дублирует запрос, а ждёт страницу лидера."""
+    leader = _client(redis_client=fake_redis)
+    follower = _client(redis_client=fake_redis)
+    v = {"limit": 200, "after": None}
+
+    # Лидер прошёл: страница в кэше, лок снят.
+    leader.session.request = MagicMock(return_value=_gql_page([{"id": 1}], last_id=1, has_next=False))
+    leader.graphql("q", v, cache_ttl=900)
+
+    # Фолловер попадает в кэш и вообще не делает HTTP.
+    follower.session.request = MagicMock(side_effect=AssertionError("не должен ходить в API"))
+    data, _ = follower.graphql("q", v, cache_ttl=900)
+    assert data == {"TrdBuy": [{"id": 1}]}
+
+    # Гонка: лок держит «мёртвый» лидер, кэша нет — фолловер ждёт, затем
+    # перехватывает лок по истечении и качает сам.
+    fake_redis.flushall()
+    fake_redis.set("goszakup:api:cache:" + __import__("hashlib").sha256(
+        json.dumps(["q", v], sort_keys=True, ensure_ascii=False).encode()).hexdigest() + ":lock", "1", ex=1)
+    sleeps = []
+    def fake_sleep(s):
+        sleeps.append(s)
+        fake_redis.delete(*[k for k in fake_redis.keys("*:lock")]) if len(sleeps) > 2 else None
+    monkeypatch.setattr("goszakup.api.client.time.sleep", fake_sleep)
+    follower.session.request = MagicMock(return_value=_gql_page([{"id": 2}], last_id=2, has_next=False))
+    data, _ = follower.graphql("q", v, cache_ttl=900)
+    assert data == {"TrdBuy": [{"id": 2}]}
+    assert follower.session.request.call_count == 1
+
+
 def test_graphql_errors_raise():
     c = _client()
     c.session.request = MagicMock(

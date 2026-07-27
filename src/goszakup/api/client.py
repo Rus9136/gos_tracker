@@ -141,13 +141,9 @@ class OwsClient:
                 json.dumps([query, variables], sort_keys=True, ensure_ascii=False).encode()
             ).hexdigest()
             cache_key = f"goszakup:api:cache:{digest}"
-            try:
-                cached = self._redis.get(cache_key)
-            except Exception:  # noqa: BLE001 — кэш best-effort
-                cached = None
-            if cached:
-                payload = json.loads(cached)
-                return payload["data"], payload["pageInfo"]
+            cached = self._cached_or_wait(cache_key)
+            if cached is not None:
+                return cached["data"], cached["pageInfo"]
         r = self._request(
             "POST",
             f"{self.base_url}/v3/graphql",
@@ -167,9 +163,36 @@ class OwsClient:
                     json.dumps({"data": data, "pageInfo": page_info}, ensure_ascii=False),
                     ex=cache_ttl,
                 )
+                self._redis.delete(cache_key + ":lock")
             except Exception:  # noqa: BLE001
                 pass
         return data, page_info
+
+    def _cached_or_wait(self, cache_key: str) -> dict | None:
+        """Кэш-хит, либо ожидание страницы, которую уже качает другой актор.
+
+        Конкурентные листинги идут по страницам в ногу (курсор N+1 известен
+        только после страницы N): без fetch-лока все акторы промахиваются
+        мимо кэша одновременно и дублируют запрос до 8×. Лидер берёт лок и
+        качает, фолловеры ждут появления записи в кэше; не дождались (лидер
+        умер, лок истёк по TTL) — качают сами.
+        """
+        try:
+            cached = self._redis.get(cache_key)
+            if cached:
+                return json.loads(cached)
+            if self._redis.set(cache_key + ":lock", "1", nx=True, ex=90):
+                return None  # мы лидер — качаем сами
+            for _ in range(120):
+                time.sleep(0.5)
+                cached = self._redis.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+                if self._redis.set(cache_key + ":lock", "1", nx=True, ex=90):
+                    return None  # лок истёк — лидер умер, качаем сами
+        except Exception:  # noqa: BLE001 — кэш best-effort, идём в API
+            pass
+        return None
 
     def iter_graphql(
         self,
