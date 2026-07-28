@@ -1,0 +1,112 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Поставщики — Goszakup Tracker{% endblock %}
+{% block content %}
+
+{% set qs = 'enstru_code=' ~ (f.enstru_code|urlencode) ~ '&enstru=' ~ (f.enstru|urlencode) ~ '&it=' ~ (f.it_category|urlencode) ~ '&year=' ~ f.year %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Поставщики</span></div>
+    <h1 class="page-title">Кто выигрывает и проигрывает</h1>
+    <div class="page-sub">{{ rows|length }} поставщиков по фильтру
+      • контакты есть у {{ with_contacts }}</div>
+  </div>
+  <div class="flex gap-2 items-center">
+    <a class="btn" href="?{{ qs }}&format=csv">{{ icon("download") }} Экспорт CSV</a>
+  </div>
+</div>
+
+<form method="get" class="card mb-3">
+  <div class="card-body" style="display:grid; grid-template-columns: 1fr 2fr 1fr 1fr auto; gap:10px; align-items:end; padding:14px">
+    <div class="field">
+      <label>Код ЕНС ТРУ (префикс)</label>
+      <input class="input w-full" type="text" name="enstru_code" value="{{ f.enstru_code }}"
+             placeholder="напр. 262013">
+    </div>
+    <div class="field">
+      <label>Название ЕНС ТРУ содержит</label>
+      <input class="input w-full" type="search" name="enstru" value="{{ f.enstru }}"
+             placeholder="компьютер, интернет, сопровождение…">
+    </div>
+    <div class="field">
+      <label>IT-категория</label>
+      <select class="select" name="it">
+        <option value="">— любая —</option>
+        {% for cat in it_categories %}
+        <option value="{{ cat }}" {% if f.it_category == cat %}selected{% endif %}>{{ cat }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Год публикации</label>
+      <select class="select" name="year">
+        <option value="0">— все —</option>
+        {% for y in years %}
+        <option value="{{ y }}" {% if f.year == y %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn primary" type="submit">Применить</button>
+  </div>
+</form>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:36px">#</th>
+        <th>Поставщик</th>
+        <th class="num" style="width:80px">Побед</th>
+        <th class="num" style="width:150px">Сумма побед ₸</th>
+        <th class="num" style="width:90px" title="Статус «Второй победитель» в заявках">2-е место</th>
+        <th class="num" style="width:80px" title="Всего заявок в lot_bids (есть только у объявлений, опрошенных после дедлайна)">Заявок</th>
+        <th style="width:260px">Контакты</th>
+        <th style="width:40px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr {% if r.org_id %}onclick="window.location='/organization/{{ r.org_id }}'"{% endif %}>
+        <td class="dim mono" style="font-size:12px">{{ "%02d"|format(loop.index) }}</td>
+        <td>
+          <div class="strong clamp-2" style="font-size:13.5px; max-width:420px">{{ r.name or '—' }}</div>
+          <span class="mono" style="color: var(--accent-hi); font-size:12px">{{ r.bin }}</span>
+        </td>
+        <td class="num mono strong">{{ r.wins or '—' }}</td>
+        <td class="num mono">{{ r.won_total|n if r.won_total else '—' }}</td>
+        <td class="num mono">{{ r.seconds or '—' }}</td>
+        <td class="num mono">{{ r.bids or '—' }}</td>
+        <td onclick="event.stopPropagation()">
+          {% if r.phone or r.email or r.website %}
+          <div style="font-size:12.5px; line-height:1.5">
+            {% if r.phone %}<div class="mono">{{ r.phone }}</div>{% endif %}
+            {% if r.email %}<div><a href="mailto:{{ r.email }}">{{ r.email }}</a></div>{% endif %}
+            {% if r.website %}<div class="dim">{{ r.website }}</div>{% endif %}
+          </div>
+          {% else %}<span class="dimer">—</span>{% endif %}
+        </td>
+        <td onclick="event.stopPropagation()">
+          {% if r.org_id %}
+          <a class="icon-btn" href="/organization/{{ r.org_id }}" title="Открыть">{{ icon("chevronRight", 13) }}</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="dim" style="text-align:center; padding:32px">Ничего не найдено — уточните фильтры</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot">
+    <span class="dim" style="font-size:12px">
+      Победы — из карточек лотов и договоров; «2-е место» и «Заявок» — из
+      синка заявок (есть только у объявлений, опрошенных после дедлайна, —
+      прочерк не значит «не участвовал»). Контакты — реестр участников OWS,
+      обновление: <span class="mono">cli supplier-contacts-sync</span>.
+    </span>
+  </div>
+</div>
+
+{% endblock %}

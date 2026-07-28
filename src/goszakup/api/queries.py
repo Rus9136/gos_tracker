@@ -74,6 +74,24 @@ query($f: TrdAppFiltersInput, $limit: Int, $after: Int) {
 }
 """
 
+# Карточка участника из реестра (jobs/contacts.py): контакты поставщика.
+# ЮЛ ищутся по bin, ИП — только по iin (12-значный идентификатор ИП — это
+# ИИН, фильтр bin его не находит; проверено вживую 2026-07-28). Покрытие
+# неполное — часть ИП в реестре отсутствует вовсе.
+SUBJECT_QUERY = """
+query($f: SubjectFiltersInput) {
+  Subjects(filter: $f) {
+    bin
+    iin
+    nameRu
+    email
+    phone
+    website
+    Address { addressType address phone }
+  }
+}
+"""
+
 # Деталь объявления — эквивалент 5 HTML-табов одним запросом (winners и
 # contracts в API-источнике не заполняются: их синкает contracts_sync_actor
 # по окну lastUpdateDate, а HTML-фолбэк дотягивает при деградации API).

@@ -226,6 +226,39 @@ def bids_sync_cmd(
     typer.echo(f"enqueued bids_sync_actor (message_id={msg.message_id})")
 
 
+@app.command("supplier-contacts-sync")
+def supplier_contacts_sync_cmd(
+    limit: int = typer.Option(
+        500, "--limit", help="Сколько организаций опросить за прогон."
+    ),
+    refresh_days: int = typer.Option(
+        None, "--refresh-days", help="Обновлять контакты старше N дней (дефолт 180)."
+    ),
+) -> None:
+    """Контакты поставщиков (email/телефон/сайт) из реестра участников OWS.
+
+    Ad-hoc команда для лидогенерации (/suppliers): до 2 запросов на
+    организацию (bin, затем iin) при ~1 rps — 500 организаций займут
+    до ~15 минут. Очередь не используется.
+    """
+    _setup_logging(verbose=True)
+    from .api.client import OwsClient
+    from .jobs.supplier_contacts import REFRESH_DAYS, sync_supplier_contacts
+
+    init_db()
+    with SessionLocal() as s:
+        stats = sync_supplier_contacts(
+            s,
+            OwsClient(),
+            refresh_days=refresh_days if refresh_days is not None else REFRESH_DAYS,
+            limit=limit,
+        )
+    typer.echo(
+        f"processed={stats.processed} found={stats.found} "
+        f"not_found={stats.not_found} errors={stats.errors}"
+    )
+
+
 @app.command()
 def expire(
     sync: bool = typer.Option(

@@ -71,6 +71,11 @@ from ..jobs.ingest import (
     find_active_run,
 )
 from ..jobs.org_report import build_org_report, related_org_ids, render_markdown
+from ..jobs.supplier_report import (
+    SupplierFilters,
+    build_supplier_report,
+    render_csv as render_suppliers_csv,
+)
 from ..jobs.run_preset import _save_announcement, _save_documents
 from ..sources import make_source
 from ..jobs.scan import (
@@ -146,6 +151,8 @@ def _nav_active(request: Request) -> str:
         return "actual"
     if path.startswith("/organization"):
         return "customers"
+    if path.startswith("/suppliers"):
+        return "suppliers"
     if path.startswith("/matched"):
         return "matched"
     if path.startswith("/queries"):
@@ -1038,6 +1045,59 @@ def organization_report(
         request,
         "org_report.html",
         {**_base_ctx(request, db, user), **report},
+    )
+
+
+@app.get("/suppliers", response_class=HTMLResponse)
+def suppliers_report(
+    request: Request,
+    enstru_code: str = "",
+    enstru: str = "",
+    it: str = "",
+    year: int = 0,
+    format: str = "",
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Отчёт по поставщикам для лидогенерации: кто выигрывает/проигрывает
+    по кодам ЕНС ТРУ + контакты из реестра участников (правило #22,
+    jobs/supplier_report.py). Чистый SQL по БД, admin-only — контакты и
+    агрегаты без persona-scope."""
+    f = SupplierFilters(
+        enstru_code=enstru_code.strip(),
+        enstru=enstru.strip(),
+        it_category=it.strip(),
+        year=year,
+    )
+    rows = build_supplier_report(db, f)
+    if format == "csv":
+        # BOM — чтобы Excel открывал UTF-8 без кракозябр.
+        return PlainTextResponse(
+            "\ufeff" + render_suppliers_csv(rows),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="suppliers.csv"'},
+        )
+    years = [
+        int(y)
+        for y in db.scalars(
+            select(func.extract("year", Announcement.publish_date))
+            .where(Announcement.publish_date.is_not(None))
+            .distinct()
+            .order_by(func.extract("year", Announcement.publish_date).desc())
+        )
+    ]
+    with_contacts = sum(1 for r in rows if r.phone or r.email)
+    return templates.TemplateResponse(
+        request,
+        "suppliers.html",
+        {
+            **_base_ctx(request, db, user),
+            "rows": rows,
+            "f": f,
+            "it_categories": IT_CATEGORIES,
+            "years": years,
+            "with_contacts": with_contacts,
+        },
     )
 
 

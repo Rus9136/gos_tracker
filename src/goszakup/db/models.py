@@ -127,6 +127,11 @@ class Organization(Base):
     address: Mapped[str | None] = mapped_column(Text)
     phone: Mapped[str | None] = mapped_column(String(100))
     email: Mapped[str | None] = mapped_column(String(200))
+    website: Mapped[str | None] = mapped_column(String(300))
+    # Когда контакты последний раз тянули из OWS Subjects (jobs/contacts.py).
+    # Ставится и при пустом ответе — реестр покрывает не всех (особенно ИП),
+    # без отметки такие организации вечно занимали бы верх выборки синка.
+    contacts_synced_at: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
     first_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
     last_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
 

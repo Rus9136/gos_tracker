@@ -91,6 +91,10 @@
         <span class="nav-ic">{{ icon("send", 15) }}</span>
         <span class="nav-label">Автоподачи</span>
       </a>
+      <a href="/suppliers"    class="{{ 'active' if _active == 'suppliers' else '' }}">
+        <span class="nav-ic">{{ icon("sparkle", 15) }}</span>
+        <span class="nav-label">Поставщики</span>
+      </a>
       <a href="/users"        class="{{ 'active' if _active == 'users' else '' }}">
         <span class="nav-ic">{{ icon("list", 15) }}</span>
         <span class="nav-label">Пользователи</span>

@@ -186,6 +186,7 @@ erDiagram
 | Карточка лота | `/lot/{id}` + POST `chat`, `star`; `/document/{id}/download` | user |
 | Действия с goszakup | POST `/lot/{id}/analyze`, `/lot/{id}/fetch_documents` (правило #9) | admin |
 | Организации | `/organizations`, `/organization/{id}`; `/organization/{id}/report` (admin) | user/admin |
+| Поставщики | `/suppliers` (+`?format=csv`) — кто выигрывает/проигрывает по ЕНС ТРУ, контакты для лидогенерации (правило #23) | admin |
 | Семантические запросы | `/queries` + CRUD/rematch/toggle (чужой запрос → 404) | user |
 | Прогоны и ad-hoc | `/runs`, `/runs/{id}`, `/scan`, `/ingest`, `/presets`, `/expenses` | admin |
 | Автоподача | `/submissions` (admin); `POST /autosubmit/result` — машинный токен `X-Autosubmit-Token` | admin/машина |
@@ -208,7 +209,7 @@ WARNING + Redis-флаг `goszakup:api_degraded`, который видит heal
 | `Contract` + `ContractUnits` | ✅ используем | договоры и победители, включая закрытые лоты |
 | `TrdApp` + `AppLots` | ✅ используем | заявки поставщиков с ценами после дедлайна (правило #22) |
 | `Plans` | ⚙️ частично | сейчас — только код ЕНС ТРУ. **Потенциал: раннее предупреждение** — пункт годового плана публикуется за недели/месяцы до объявления; для автоподачи это знание о тендере до старта гонки |
-| `Subjects` | ❌ | обогащение `organizations`: резолв БИН по имени, склейка дублей customer-без-БИН (known issue #1 README) |
+| `Subjects` | ⚙️ частично | контакты поставщиков (email/телефон/сайт/адрес) для `/suppliers` — `jobs/supplier_contacts.py` (правило #23). Потенциал: резолв БИН по имени, склейка дублей customer-без-БИН (known issue #1 README) |
 | `Rnu` | ❌ | реестр недобросовестных: флаг на карточке организации, проверка конкурентов |
 | `qualifiedSuppliers` | ❌ | ландшафт конкурентов по нашим категориям |
 | `ComplaintAppeal` | ❌ | жалобы/апелляции по объявлению — сигнал риска задержки или отмены итогов |
@@ -242,6 +243,7 @@ recon-факты клиента — `tests/fixtures/api/NOTES.md`.
 | `daily [--sync]` | ежедневный цикл (enqueue `daily_actor`) |
 | `run-preset` / `run-once` | синхронный прогон мимо очереди |
 | `contracts-sync`, `bids-sync`, `expire` | ручные синки (enqueue, `--sync` — в процессе) |
+| `supplier-contacts-sync` | контакты поставщиков из реестра участников OWS (всегда в процессе) |
 | `reanalyze` | LLM-бэкофилл по скачанным лотам |
 | `match-backfill` | пересчёт матчей запроса |
 | `health-check` | сторож LLM/OWS, exit 1 при проблеме |
