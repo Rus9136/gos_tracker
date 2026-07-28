@@ -60,7 +60,7 @@
    истёк. Проверить фактический срок и выставить `GZ_TUMAR_LICENSE_EXPIRES`
    (или продлить лицензию). При сконфигурированной автоподаче health сразу
    зальёт алерт.
-5. **Таймер `goszakup-autosubmit.timer` НЕ включать** — Windows submit-agent
+5. **Таймер `goszakup-autosubmit.timer` НЕ включать** — submit-agent
    (визард/Tumar/NCALayer) ещё `TODO(recon)`, автоподача не готова к бою.
 6. **`GZ_AUTOSUBMIT_AGENT_URL`** должен быть `https://` либо хост в
    `GZ_AUTOSUBMIT_AGENT_ALLOW_HTTP` — иначе диспетчер откажется слать секреты.

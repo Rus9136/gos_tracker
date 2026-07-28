@@ -200,7 +200,7 @@ goszakup/
 │   ├── autosubmit/          # ядро автоподачи: тайминг, диспетчер, RPC к агенту
 │   ├── db/                  # SQLAlchemy-модели (16 таблиц) + engine
 │   └── web/                 # FastAPI: роуты, auth, Jinja2-шаблоны
-├── agent/                   # Windows submit-agent (отдельный деплой, не часть пакета)
+├── agent/                   # submit-agent автоподачи (отдельный деплой на macOS-узле)
 ├── migrations/              # Alembic
 ├── docs/ows/                # снимок документации OWS + интроспекция GraphQL-схемы
 ├── scripts/                 # systemd-юниты, бэкофиллы, миграция SQLite→PG

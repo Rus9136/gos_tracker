@@ -1,8 +1,17 @@
 # Recon: что снять на живом конкурсе (чтобы я доделал робота)
 
 Цель — собрать данные, которые видны только на реальном проходе подачи. По ним я
-заполню места `TODO(recon)` в `wizard.py` / `tumar.py`. Снимать на **Windows-узле**
-(там стоят NCALayer + Tumar), будучи **залогиненным** на v3bl.goszakup.gov.kz.
+заполню места `TODO(recon)` в `wizard.py` / `tumar.py`. Снимать на узле, где
+стоят NCALayer + Tumar (**с 2026-07-28 это macOS**, см. гайд §6.3), будучи
+**залогиненным** на v3bl.goszakup.gov.kz.
+
+> Команды ниже даны для Windows. На macOS всё то же самое, кроме частей C и D:
+> `recon_dump` использует `pywinauto` и там не работает. Дерево окна Tumar на
+> маке снимается штатным **Accessibility Inspector** (входит в Xcode: Xcode →
+> Open Developer Tool → Accessibility Inspector; навести на поле цены и кнопки,
+> прислать скриншот панели со свойствами). Ожидаемые контролы известны из
+> символов плагина: `priceInput`, `okButton`, `cancelButton` и действие
+> `cryptButtonClicked`. Аналогично для окна NCALayer.
 
 ## Что мне нужно (5 пунктов)
 

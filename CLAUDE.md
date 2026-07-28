@@ -73,13 +73,13 @@ API. При добавлении актора, таблицы или фичи о
   повторными алертами, дефолт 21600 = 6ч). Автоподача заявок (правило #19,
   `TENDER_AUTOSUBMIT_PLAN.md`): **`GZ_VAULT_MASTER_KEY`** (base64 от 32 байт —
   мастер-ключ KeyVault для чужих .p12/паролей/PIN; без него обращение к Vault
-  падает), `GZ_AUTOSUBMIT_AGENT_URL` (адрес Windows submit-agent по приватной
+  падает), `GZ_AUTOSUBMIT_AGENT_URL` (адрес submit-agent по приватной
   сети; без него диспетчер автоподачи выключен), `GZ_AUTOSUBMIT_WARMUP_LEAD`
   (за сколько секунд до open_at слать агенту задачу на прогрев, дефолт 300),
   `GZ_AUTOSUBMIT_INGEST_TOKEN` (общий токен для `POST /autosubmit/result` —
   агент шлёт сюда RunResult; машинная авторизация, без него ingest выключен),
   `GZ_AUTOSUBMIT_AGENT_TOKEN` (токен Linux→agent для `POST /run`, заголовок
-  `X-Agent-Token`; должен совпасть с `GZ_AGENT_TOKEN` на Windows-узле).
+  `X-Agent-Token`; должен совпасть с `GZ_AGENT_TOKEN` на узле агента).
 - **Очередь задач (Phase 3)**: Dramatiq + Redis. Пайплайн разбит на 3
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
@@ -146,9 +146,9 @@ API. При добавлении актора, таблицы или фичи о
   - **`goszakup-autosubmit.timer` + `goszakup-autosubmit.service`**
     (правило #19, шаблоны в `scripts/systemd/`) — `OnCalendar=minutely`, oneshot.
     Делает `cli autosubmit-dispatch --enqueue` → `autosubmit_dispatch_actor`
-    (очередь `goszakup_autosubmit`) шлёт Windows submit-agent'у PLANNED-подачи,
+    (очередь `goszakup_autosubmit`) шлёт submit-agent'у PLANNED-подачи,
     открывающиеся в ближайший warmup-lead. Без `GZ_AUTOSUBMIT_AGENT_URL` актор
-    тихо выходит. Включать только когда Windows-agent (Phase 2) готов.
+    тихо выходит. Включать только когда submit-agent (Phase 2) готов.
   - **`goszakup-worker.service`** (Phase 3, задеплоен 2026-05-20) —
     `dramatiq goszakup.queue.actors -p 2 -t 4`. Подключается к выделенному
     Redis-контейнеру `goszakup-redis` на `127.0.0.1:6380`. `ProtectHome=true`
@@ -442,19 +442,32 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     выигрывает»). Установлено разведкой по HAR: (а) **пред-стейдж невозможен** —
     кнопка «Подать» гейтится до `time_open`, весь визард идёт в гонке после
     старта; (б) цена не подписывается, а **ГОСТ-шифруется** (sealed-bid конверт на
-    сертификат тендера) нативным **Tumar CSP** — поле `sign` считается внутри
-    закрытого CSP и оффлайн не реверсится. Поэтому крипто берём у эталонного
-    Tumar на **Windows submit-agent** (path A′), а не реализуем headless. Linux-
+    сертификат тендера) нативным **Tumar CSP** — поле `sign` считает вендорский
+    код, оффлайн не воспроизведено. Поэтому крипто берём у эталонного Tumar на
+    **submit-agent** (path A′), а не реализуем headless. Linux-
     часть (`autosubmit/`, `vault/`, `queue/autosubmit.py`) — provider-agnostic:
     KeyVault (AES-256-GCM) для чужих `.p12`/паролей/PIN, диспетчер задач агенту к
     `open_at`, статус-машина `Submission`, «выстрел» финального POST на httpx.
     **Цена в БД ШИФРУЕТСЯ** (`Submission.bid_enc`) — sealed-bid секретность.
-    Windows submit-agent (Phase 2) — **каркас в `agent/`** (отдельный деплой,
+    Submit-agent (Phase 2) — **каркас в `agent/`** (отдельный деплой,
     httpx+playwright+pywinauto, НЕ тащит пакет goszakup): сервер `POST /run`,
     оркестрация прогрев→ожидание→визард→отчёт. «Сантехника» рабочая; UI-селекторы
     визарда / окно Tumar / NCALayer-логин помечены `TODO(recon)` — заполняются по
     живому конкурсу (`agent/RECON.md` + `agent/recon_dump.py`). Очередь
     `goszakup_autosubmit` обязана быть в `--queues` воркера.
+    **Ревизия 2026-07-28 (гайд §6.3): узел — macOS, не Windows.** Разбор
+    официального `CryptoSocketInstaller.zip` (копия в `data/vendor/`,
+    гитигнор): есть актуальная macOS-сборка (`CryptoSocketVersion` 1.0.13.2287
+    — новее серверного гейта 1.0.13.2286), а `EncryptOfferPrice` вместе с
+    окном ввода цены и тегом `sign` лежит в **отдельном плагине**
+    `libEFCAPI.dylib`, который зовёт ядро CSP штатными `CPEncrypt`/`CPSignHash`
+    — то есть headless-путь больше не упирается в закрытое сертифицированное
+    ядро и не требует ответа Gamma. Ядро ТУМАР-CSP официально есть и под Linux,
+    плагина под Linux нет. `agent/tumar.py` (pywinauto) — единственная
+    Windows-специфичная часть, под macOS нужен двойник на Accessibility API
+    (контролы окна известны: `priceInput`, `okButton`, `cryptButtonClicked`).
+    Через официальный API OWS подача невозможна — там только GET-эндпоинты и
+    ни одной GraphQL-мутации.
 
 20. **Отказ LLM молчалив — его ловит только активный сторож.** Правило #7
     намеренно гасит ошибки LLM (пайплайн не должен падать из-за провайдера),
@@ -703,13 +716,14 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   `credentials.py` — `create_credential`/`decrypt_credential` поверх crypto.
 - `autosubmit/` — provider-agnostic ядро автоподачи (правило #19). `timing.py`
   (NTP-упреждение + busy-wait к `open_at`), `fire.py` (httpx-«выстрел» финального
-  POST `ajax_public_application`), `rpc.py` (контракт Linux↔Windows agent),
+  POST `ajax_public_application`), `rpc.py` (контракт Linux↔submit-agent),
   `agent_client.py` (HTTP к agent'у), `scheduler.py` (`dispatch_due_submissions`
   к `open_at` → ARMED; `apply_result` ← `RunResult`).
 - `queue/autosubmit.py` — `autosubmit_dispatch_actor` (очередь
   `goszakup_autosubmit`): таймер-диспетчер задач submit-agent'у.
-- `agent/` (корень репо, НЕ часть пакета goszakup) — Windows submit-agent
-  (правило #19, Phase 2). Отдельный деплой на Windows-узле. `server.py` (HTTP
+- `agent/` (корень репо, НЕ часть пакета goszakup) — submit-agent
+  (правило #19, Phase 2). Отдельный деплой на узле с Tumar (целевая платформа
+  — macOS, см. ревизию в правиле #19). `server.py` (HTTP
   `POST /run`/`GET /health`), `runner.py` (оркестрация), `wizard.py` (Playwright,
   `TODO(recon)`), `tumar.py` (pywinauto окно цены, `TODO(recon)`), `report.py`
   (отчёт на Linux), `protocol.py`/`timing.py` (зеркало `autosubmit/`), `RECON.md`

@@ -24,7 +24,7 @@ flowchart TD
     MATCH --> TG[Telegram-уведомления<br/>правило 18]
     LLM --> CHAT[Чат и объяснение лота]
     INGEST --> AUTOSUBMIT[Автоподача заявок<br/>правило 19]
-    AUTOSUBMIT --> AGENT[Windows submit-agent<br/>Tumar CSP]
+    AUTOSUBMIT --> AGENT[submit-agent macOS<br/>Tumar CSP]
     BIDS --> REPORTS[Отчёты по организациям]
     CONTRACTS --> REPORTS
     HEALTH[Сторож health-check<br/>правило 20] -.наблюдает.-> LLM
@@ -90,7 +90,7 @@ flowchart LR
     EXP --> TGOUT
 
     TA --> ASD[autosubmit_dispatch_actor]
-    ASD --> WAG[Windows submit-agent]
+    ASD --> WAG[submit-agent macOS]
     WAG -->|RunResult| AIN[POST /autosubmit/result]
 
     TH --> HC[cli health-check]
@@ -110,7 +110,7 @@ flowchart LR
 | `goszakup_llm` | `analyze_actor` | LLM-анализ одного лота |
 | `goszakup_matching` | `match_actor` | матч пары (запрос × лот) |
 | `goszakup_notify` | `notify_actor`, `explain_actor` | Telegram: уведомление о матче, объяснение лота |
-| `goszakup_autosubmit` | `autosubmit_dispatch_actor` | диспетчер задач Windows submit-agent'у |
+| `goszakup_autosubmit` | `autosubmit_dispatch_actor` | диспетчер задач submit-agent'у |
 
 Закрытие `ScrapeRun` — двухконтурное: Redis-счётчик
 `goszakup:run:<id>:pending` (DECR в `detail_actor`, ноль = закрыть) плюс

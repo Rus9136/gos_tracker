@@ -28,6 +28,9 @@ data/org_runs/
 data/backups/
 data/reports/
 data/*.lock
+# Дистрибутивы вендорских крипто-клиентов (CryptoSocket/Tumar) — десятки МБ
+# бинарей, в репозиторий не тащим.
+data/vendor/
 
 # Логи и одноразовые CSV-выгрузки в корне
 *.log

@@ -13,14 +13,14 @@
 `jobs/` → `classify/` + `scraper/` → `db/`. `scope.py` — общий read-time фильтр
 для web и matcher-fan-out. Автоподача — отдельный контур: `queue/autosubmit.py`
 (таймер) → `autosubmit/scheduler.py` → `autosubmit/agent_client.py` →
-Windows submit-agent (`agent/`, отдельный деплой) → `POST /autosubmit/result`.
+Submit-agent (`agent/`, отдельный деплой на macOS-узле) → `POST /autosubmit/result`.
 
 **Пайплайн:** Dramatiq `daily → listing → detail → analyze → match → notify`
 (7 очередей `goszakup_*`), Redis неперсистентный (broker + rate-limit +
 pending-счётчик прогона). БД: Postgres 15 прод / SQLite WAL dev.
 
 **Внешние интеграции:** goszakup.gov.kz (+ v3bl через SOCKS), Cerebras (LLM),
-Telegram Bot API, NCALayer/Tumar (только Windows-агент), Redis, Sentry (опц.).
+Telegram Bot API, NCALayer/Tumar (только на узле submit-agent), Redis, Sentry (опц.).
 
 ---
 

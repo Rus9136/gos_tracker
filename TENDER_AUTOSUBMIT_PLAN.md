@@ -2,8 +2,16 @@
 
 > Продолжение `TENDER_ECP_SIGNING_GUIDE.md`. Решение по разделу 6.2 принято:
 > **строим сами, архитектура A′ (золотой клиент с реальным Tumar)** — `sign`
-> не реверсим (он внутри закрытого Tumar; оффлайн невосстановим), а получаем от
-> эталонного провайдера. Gamma не привлекаем.
+> не реверсим, а получаем от эталонного провайдера. Gamma не привлекаем.
+>
+> **Ревизия 2026-07-28 (гайд §6.3): узел golden-client — macOS, не Windows.**
+> Разбор официального `CryptoSocketInstaller.zip` показал актуальную
+> macOS-сборку (`CryptoSocketVersion` 1.0.13.2287 — новее той, что слал
+> Windows-клиент в HAR), так что отдельный Windows-VPS не нужен. Кроме того,
+> `EncryptOfferPrice` вместе с `sign` живёт в **отдельном плагине**
+> `libEFCAPI.dylib`, а не в закрытом ядре CSP, — поэтому headless-путь C
+> перестал зависеть от ответа Gamma. Всё, что ниже написано про «Windows-узел»,
+> читать как «узел golden-client»; платформенные различия — в §2 и приложении.
 
 ## 0. Продуктовое требование (от заказчика)
 
@@ -50,25 +58,30 @@ public_app=Y&agree_price=true&agree_contract_project=true&agree_covid19=false
 - **Узкое место критпути — шаг шифрования цены реальным Tumar** (нативное окно
   ~1–3 с). Это главный источник проигрыша гонки.
 - **Headless-крипто (path C) тут даёт решающее преимущество** (~50 мс вместо
-  секунд, без GUI), но блокировано на `sign`. Единственный оставшийся путь к нему
-  — **RE нативного бинаря Tumar/CryptoSocket** (это «строим сами», не Gamma).
-  Решение: строим racer на реальном Tumar сейчас; `sign`-RE — moat на потом.
+  секунд, без GUI), но блокировано на `sign`. Путь к нему — разбор **плагина
+  `libEFCAPI`** (Mach-O с символами из macOS-бандла; §6.3 гайда), а не всего
+  Tumar, и делается он на Linux. Решение прежнее: строим racer на реальном
+  Tumar сейчас; `sign` — moat на потом.
 
 ## 2. Архитектура
 
 ```
-Linux (наш репо, есть Dramatiq/Redis/Postgres)        Windows-узел (организуем)
+Linux (наш репо, есть Dramatiq/Redis/Postgres)        macOS-узел (golden-client)
 ┌───────────────────────────────────────┐            ┌──────────────────────────┐
 │ Модели: Tender / ClientKey / Submission│  HTTP-RPC  │ submit-agent (Python)     │
 │ prestage-планировщик (заранее)         │ ─────────▶ │  Playwright: логин+визард │
-│ fire-планировщик (NTP, к time_open)    │            │  pywinauto: окно цены     │
+│ fire-планировщик (NTP, к time_open)    │            │  AX/интерпозер: окно цены │
 │ статус-машина, ретраи, алерты (sentry) │            │  реальный Tumar CSP + .p12│
 │ FIRE = сырой httpx POST по session-jar │ ◀───────── │  отдаёт session-cookie    │
 └───────────────────────────────────────┘ cookie+app │  +annoId/appId после      │
                                                        │  пред-стейджа             │
                                                        └──────────────────────────┘
 ```
-- **Pre-stage** (Windows-agent, заранее): логин по ЭЦП (NCALayer) + пароль портала,
+Платформа узла — **macOS** (ревизия §6.3 гайда). Windows остаётся равноценным
+запасным вариантом: протокол и код агента одинаковы, различается только слой
+автоматизации окна цены (`agent/tumar.py` на pywinauto — Windows-специфичен и
+нуждается в macOS-двойнике на Accessibility API).
+- **Pre-stage** (submit-agent, заранее): логин по ЭЦП (NCALayer) + пароль портала,
   пройти визард до preview, зашифровать цену реальным Tumar (→ корректный `sign`),
   вернуть на Linux `{annoId, appId, session_cookies}`.
 - **Fire** (Linux, к `time_open`): держать cookie-jar тёплым, выстрелить
@@ -106,14 +119,17 @@ Linux (наш репо, есть Dramatiq/Redis/Postgres)        Windows-узе�
   (ingest по токену). Всё провалидировано (E2E статус-машины, ingest через
   TestClient, 124 теста). Осталось по Linux: авто-прогрев eligibility-справок,
   алерты (Phase 4).
-- **Phase 2 — Windows submit-agent — 🟡 КАРКАС ГОТОВ (`agent/`):** самодостаточный
+- **Phase 2 — submit-agent — 🟡 КАРКАС ГОТОВ (`agent/`):** самодостаточный
   деплой (httpx+playwright+pywinauto, без пакета goszakup). Рабочее: HTTP-сервер
   (`POST /run`/`GET /health`, токен X-Agent-Token), тайминг «выстрела», отчёт на
   Linux (`/autosubmit/result`), оркестрация прогрев→ожидание→визард→отчёт,
   обработка ошибок (любой сбой → FAILED+отчёт), финальный POST через тёплую
   сессию браузера. Осталось заполнить из **live recon** (метки `TODO(recon)`):
-  UI-селекторы визарда, заголовок окна Tumar, автоматизация NCALayer-логина,
+  UI-селекторы визарда, окно Tumar, автоматизация NCALayer-логина,
   проверка reCAPTCHA. См. `agent/README.md`.
+  **После ревизии §6.3 целевая платформа — macOS**, поэтому добавляется задача:
+  macOS-двойник `tumar.py` (Accessibility API вместо pywinauto; контролы окна
+  известны из символов плагина — `priceInput`, `okButton`, `cryptButtonClicked`).
 - **Phase 3 — капча (если enforced):** пред-solve (2captcha/anti-captcha) с
   таймингом под `time_open`.
 - **Phase 4 — масштаб/надёжность:** мультиклиент, мониторинг, алерты, проверка
@@ -128,52 +144,76 @@ Linux (наш репо, есть Dramatiq/Redis/Postgres)        Windows-узе�
    cookie-jar + 4 поля; с ретраями и замером латентности.
 4. NTP-выверенный планировщик «выстрел к `time_open`» (Dramatiq
    `send_with_options(delay=...)`, мс; + busy-wait последние ~200 мс для точности).
-5. Контракт RPC к Windows-agent (`/prestage`, `/status`, `/handoff_session`).
+5. Контракт RPC к submit-agent (`/prestage`, `/status`, `/handoff_session`).
 
 ## 6. Риски
 
 - **Pre-staging может быть невозможен** (recon-1) → тогда гонка = скорость
-  прохождения всего визарда на Windows-agent, и Tumar/капча попадают в критпуть.
+  прохождения всего визарда на submit-agent, и Tumar/капча попадают в критпуть.
   План Б: максимально распараллелить и держать предзалогиненную тёплую сессию.
-- **GUI-хрупкость** окна цены Tumar (pywinauto) — единственное «ручное» место;
-  стабилизировать по заголовку окна/контролам, мониторить.
-- **Лицензия Tumar `apiKey`** истекает 2026-07-01 (из HAR) + версионный гейт
-  `1.0.13.2286` — учесть продление/обновление.
+- **GUI-хрупкость** окна цены Tumar — единственное «ручное» место; стабилизировать
+  по контролам окна, мониторить. На macOS риск ниже: контролы именованные
+  (`priceInput`, `okButton`), а при удачном интерпозере GUI уходит из критпути
+  совсем.
+- **Лицензия Tumar `apiKey`** истекала 2026-07-01 (из HAR) + версионный гейт
+  `1.0.13.2286`. По состоянию на 2026-07-28 портал раздаёт свежий бандл
+  (лицензии плагинов и бинари датированы 2026-07-01, версия клиента
+  1.0.13.2287) — то есть лицензия продлена вендором централизованно, но
+  проверять перед каждым сезоном.
 - **Юр.основа** (гайд §8.1): согласие клиента на хранение ключа и подпись от его
   имени, scope, audit-log — обязательно до боевых ключей.
 - **reCAPTCHA-латентность**, если enforced — пред-solve обязателен, иначе теряем
   гонку.
 
-## Приложение: организация Windows-узла с Tumar
+## Приложение: организация узла golden-client с Tumar
+
+Платформа по умолчанию — **macOS** (ревизия гайда §6.3). Windows-вариант
+сохранён ниже как запасной: отличается только слоем GUI и системными мелочами.
 
 **Где (критерий №1 — RTT до goszakup, KZ-IP):**
-- Рекомендуется **Windows-VPS в KZ-облаке** (низкий RTT, KZ-IP — наш Linux-сервер
-  ловил 403 на статике goszakup, вероятно WAF/гео). Альтернативы: Windows-VM на
-  этом VPS (нужна nested-virt + лицензия + тот же IP), физический мини-ПК у клиента.
-- Измерить RTT с кандидатов до `v3bl.goszakup.gov.kz`. Возможное упрощение: если
-  узел в KZ и быстрый — **стрелять финальный POST прямо с него** (та же тёплая
-  сессия, без cookie-handoff на Linux).
+- KZ-IP обязателен: наш Linux-сервер ловил 403 на статике goszakup (WAF/гео),
+  весь скрейпинг ходит через KZ-туннель. Для mac-узла вне KZ — тот же туннель
+  (WireGuard/SOCKS на KZ-выход) либо физическое размещение в KZ.
+- Измерить RTT до `v3bl.goszakup.gov.kz` с узла. Возможное упрощение: если узел
+  быстрый — **стрелять финальный POST прямо с него** (та же тёплая сессия, без
+  cookie-handoff на Linux).
 
-**Софт (Windows 10/11 или Server+Desktop Experience):**
-1. **CryptoSocket+Tumar CSP** — офиц. бандл goszakup, URL из HAR:
-   `v3bl.goszakup.gov.kz/uploads/crypto/SetupCryptoSocket_KzYes_CspYes_LngRu_*.exe`
-   → слушает `wss://127.0.0.1:6127`, версия гейтится сервером (была `1.0.13.2286`).
-2. **NCALayer** (pki.gov.kz) → `wss://127.0.0.1:13579` (логин + CMS-подпись цены).
-3. **Python 3.12 + Playwright + pywinauto + httpx** (`playwright install chromium`)
-   — это submit-agent.
+**Софт (macOS 12+):**
+1. **CryptoSocket + ТУМАР-CSP** — офиц. бандл площадки:
+   `https://v3bl.goszakup.gov.kz/uploads/crypto/CryptoSocketInstaller.zip`
+   (копия — `data/vendor/`) → слушает `wss://127.0.0.1:6127`. Версия клиента в
+   бандле — `1.0.13.2287`, серверный гейт (`1.0.13.2286`) проходит. Ставится
+   через `.app`-инсталлятор; при отказе Gatekeeper — разрешить запуск в
+   «Безопасность и конфиденциальность» (инструкция вендора советует
+   `spctl --master-disable`; на боевом узле лучше точечное разрешение).
+2. **NCALayer** (pki.gov.kz, есть сборка под macOS) → `wss://127.0.0.1:13579`
+   (логин + CMS-подпись шифртекста цены).
+3. **Python 3.12 + Playwright + httpx** (`playwright install chromium`) — это
+   submit-agent. Вместо `pywinauto` — Accessibility API (`pyobjc`
+   `ApplicationServices`/`AXUIElement`) или AppleScript; контролы окна цены
+   известны из символов плагина: `priceInput`, `okButton`, `cryptButtonClicked`.
 
 **Ключи клиента:** `.p12` signing (`RSA*`/`GOST*`) + AUTH (`AUTH_*`), пароль учётки
 портала, PIN — через KeyVault (§8), расшифровка только при использовании.
 
-**Связь:** Tailscale/WireGuard Linux↔Windows; agent слушает RPC только на tailnet.
+**Связь:** Tailscale/WireGuard Linux↔mac; agent слушает RPC только на tailnet.
 
-**Интерактивный десктоп (критично для pywinauto/GUI):** Autologon (Sysinternals),
-отключить блокировку/сон; RDP отстёгивает консольную сессию → настроить `tscon`
-возврат на консоль, иначе GUI-автоматизация слепнет.
+**Интерактивный десктоп (критично для GUI-автоматизации):** автологин, отключить
+сон и хранитель экрана (`caffeinate`), не давать экрану блокироваться. Агенту
+выдать права **Accessibility** и **Automation** в «Конфиденциальности и
+безопасности» — без них AX-вызовы молча возвращают ошибку. VNC/Screen Sharing
+консольную сессию не отстёгивает (в отличие от RDP на Windows) — это плюс mac.
 
-**Безопасность:** BitLocker, firewall только из tailnet, без публичных служб,
+**Безопасность:** FileVault, firewall только из tailnet, без публичных служб,
 audit факта подписи (не ключей). Юр.согласие клиента (§8.1) до боевых ключей.
 
-**Smoke-тест:** (1) `netstat -an | findstr "6127 13579"` — оба слушают; (2) вход на
-v3bl по ЭЦП руками; (3) дойти до шага цены, поймать заголовок окна Tumar (для
-pywinauto); (4) с фактического fire-узла проверить, что нет 403 на v3bl.
+**Smoke-тест:** (1) `lsof -nP -iTCP:6127 -iTCP:13579 | grep LISTEN` — оба слушают;
+(2) вход на v3bl по ЭЦП руками; (3) дойти до шага цены, снять дерево AX окна
+Tumar; (4) с фактического fire-узла проверить, что нет 403 на v3bl.
+
+**Запасной вариант — Windows 10/11 (или Server + Desktop Experience):** бандл
+`uploads/crypto/SetupCryptoSocket_KzYes_CspYes_LngRu_*.exe`, NCALayer, Python +
+Playwright + **pywinauto**; Autologon (Sysinternals), отключить блокировку/сон;
+RDP отстёгивает консольную сессию → `tscon` возврат на консоль, иначе
+GUI-автоматизация слепнет; BitLocker вместо FileVault. Smoke-тест —
+`netstat -an | findstr "6127 13579"`.

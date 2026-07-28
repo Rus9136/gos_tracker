@@ -79,7 +79,7 @@ sudo journalctl -u goszakup-worker.service -f
 
 ## Установка autosubmit-юнитов (правило #19, Phase 2+)
 
-Диспетчер автоподачи. Включать **только когда готов Windows submit-agent** и в
+Диспетчер автоподачи. Включать **только когда готов submit-agent** и в
 `.env` заданы `GZ_AUTOSUBMIT_AGENT_URL` (+ `GZ_VAULT_MASTER_KEY`,
 `GZ_AUTOSUBMIT_INGEST_TOKEN`). Без `GZ_AUTOSUBMIT_AGENT_URL` актор тихо выходит —
 безопасно держать таймер выключенным до готовности agent'а.
