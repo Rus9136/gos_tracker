@@ -26,6 +26,9 @@ def test_code_prefix_medicine_not_furniture():
     # съедаться другими короткими префиксами.
     assert classify_vertical("325013.900.000010", None, None) == "medicine"
     assert classify_vertical("211011.200.000000", "Препарат", None) == "medicine"
+    # 26.6 — электромедицинское: длиннее «26»-IT, уходит в медицину.
+    assert classify_vertical("266012.900.000005", "Литотриптер", None) == "medicine"
+    assert classify_vertical("262013.000.000000", "Компьютер", None) == "it"
 
 
 def test_code_prefix_other_verticals():
