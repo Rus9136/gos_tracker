@@ -192,7 +192,7 @@ erDiagram
 | Организации | `/organizations`, `/organization/{id}`; `/organization/{id}/report` (admin) | user/admin |
 | Поставщики | `/suppliers` (+`?format=csv`) — кто выигрывает/проигрывает по ЕНС ТРУ, контакты для лидогенерации (правило #23) | admin |
 | Семантические запросы | `/queries` + CRUD/rematch/toggle (чужой запрос → 404) | user |
-| Прогоны и ad-hoc | `/runs`, `/runs/{id}`, `/scan`, `/ingest`, `/presets`, `/expenses` | admin |
+| Прогоны и ad-hoc | `/runs`, `/runs/{id}`, `/scan`, `/presets`, `/expenses` (admin); `/ingest` — admin или роль с ключом `ingest` | admin/роль |
 | Автоподача | `/submissions` (admin); `POST /autosubmit/result` — машинный токен `X-Autosubmit-Token` | admin/машина |
 | Telegram | `POST /telegram/webhook` — машинный секрет заголовка | машина |
 | Auth и профиль | `/login`, `/logout`, `/settings` (+test), `/users` CRUD (admin), `/roles` CRUD (admin — видимость вкладок для не-админов) | публичный/user/admin |

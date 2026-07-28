@@ -28,23 +28,37 @@ PAGES: list[tuple[str, str, str]] = [
 ]
 PAGE_KEYS = {key for key, _, _ in PAGES}
 
+# Системные вкладки, которые МОЖНО выдать ролью не-админу. В отличие от
+# PAGES они НЕ входят в дефолт «пользователь без роли» — только явная
+# галочка в роли (или is_admin). Управление доступом (/users, /roles) и
+# остальной системный раздел сюда не выносить.
+SYSTEM_PAGES: list[tuple[str, str, str]] = [
+    ("ingest", "Догрузка по БИН", "/ingest"),
+]
+SYSTEM_KEYS = {key for key, _, _ in SYSTEM_PAGES}
+
+ALL_PAGES = PAGES + SYSTEM_PAGES
+ALL_KEYS = PAGE_KEYS | SYSTEM_KEYS
+
 
 def allowed_pages(user: User | None) -> set[str]:
-    if user is None or user.is_admin or user.role is None:
+    if user is None or user.is_admin:
+        return set(ALL_KEYS)
+    if user.role is None:
         return set(PAGE_KEYS)
-    return PAGE_KEYS & set(user.role.pages or [])
+    return ALL_KEYS & set(user.role.pages or [])
 
 
 def first_allowed_path(user: User | None) -> str | None:
     perms = allowed_pages(user)
-    for key, _, path in PAGES:
+    for key, _, path in ALL_PAGES:
         if key in perms:
             return path
     return None
 
 
 def require_page(key: str):
-    if key not in PAGE_KEYS:  # опечатка в ключе — ошибка программиста
+    if key not in ALL_KEYS:  # опечатка в ключе — ошибка программиста
         raise ValueError(f"неизвестная вкладка: {key}")
 
     def dep(user: User = Depends(require_user)) -> User:

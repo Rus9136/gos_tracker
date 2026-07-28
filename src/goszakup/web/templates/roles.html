@@ -16,6 +16,18 @@
       {% endfor %}
     </div>
   </div>
+  <div class="field" style="grid-column: 1 / -1">
+    <label>Системные вкладки (запускают загрузку с goszakup — выдавать осознанно)</label>
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px">
+      {% for key, label, path in system_pages %}
+      <label class="flex items-start gap-2" style="font-size:12px; cursor:pointer">
+        <input type="checkbox" name="pages" value="{{ key }}"
+               {% if role and role.pages and key in role.pages %}checked{% endif %}>
+        <span>{{ label }} <span class="dim mono">{{ path }}</span></span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
 {% endmacro %}
 
 <div class="page-head">
@@ -24,8 +36,9 @@
     <h1 class="page-title">Роли <span class="dim">({{ roles|length }})</span></h1>
     <div class="page-sub">
       Роль ограничивает видимость вкладок для не-админов. Пользователь без
-      роли видит все пользовательские вкладки; системный раздел — только у
-      админов и ролями не раздаётся. Назначение роли — на странице
+      роли видит все пользовательские вкладки (но не системные). Из
+      системного раздела ролью можно выдать только вынесенные ниже вкладки;
+      остальное — только у админов. Назначение роли — на странице
       «Пользователи».
     </div>
   </div>
@@ -88,7 +101,7 @@
     <tbody>
       {% for r in roles %}
       {% set labels = [] %}
-      {% for key, label, path in pages %}{% if r.pages and key in r.pages %}{% set _ = labels.append(label) %}{% endif %}{% endfor %}
+      {% for key, label, path in pages + system_pages %}{% if r.pages and key in r.pages %}{% set _ = labels.append(label) %}{% endif %}{% endfor %}
       <tr>
         <td class="mono dim">{{ r.id }}</td>
         <td class="strong">{{ r.name }}</td>

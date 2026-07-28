@@ -125,6 +125,30 @@ def test_role_gates_queries_posts_too(client):
     assert r.status_code == 403
 
 
+def test_system_page_not_granted_without_role(client):
+    # ingest — системная вкладка: в дефолт «без роли» не входит
+    _mk_user("bob", "secret123")
+    _login(client, "bob", "secret123")
+    assert client.get("/ingest").status_code == 403
+
+
+def test_role_can_grant_ingest(client):
+    rid = _mk_role("Оператор догрузки", ["actual", "ingest"])
+    _mk_user("bob", "secret123", role_id=rid)
+    _login(client, "bob", "secret123")
+    assert client.get("/ingest").status_code == 200
+    body = client.get("/actual").text
+    assert 'href="/ingest"' in body        # пункт «Система → Догрузка» виден
+    assert 'href="/scan"' not in body      # остальной системный раздел — нет
+    assert 'href="/users"' not in body
+
+
+def test_admin_still_has_ingest(client):
+    _mk_user("root", "secret123", is_admin=True)
+    _login(client, "root", "secret123")
+    assert client.get("/ingest").status_code == 200
+
+
 def test_roles_page_admin_only(client):
     _mk_user("bob", "secret123")
     _mk_user("root", "secret123", is_admin=True)

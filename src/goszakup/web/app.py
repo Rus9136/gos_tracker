@@ -106,7 +106,15 @@ from .auth import (
     seed_admin_from_env,
 )
 from .deps import format_amount, format_compact, format_dt, format_iso, get_db
-from .pages import PAGE_KEYS, PAGES, allowed_pages, first_allowed_path, require_page
+from .pages import (
+    ALL_KEYS,
+    ALL_PAGES,
+    PAGES,
+    SYSTEM_PAGES,
+    allowed_pages,
+    first_allowed_path,
+    require_page,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -1693,7 +1701,7 @@ _TRADE_TYPES = [
 def ingest_form(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_page("ingest")),
     customer_bin: str = "",
     error: str = "",
 ):
@@ -1727,7 +1735,7 @@ def ingest_start(
     status: list[int] = Form(default=[]),
     amount_from: int = Form(0),
     amount_to: str = Form(""),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_page("ingest")),
 ):
     customer_bin = customer_bin.strip()
     if not customer_bin.isdigit() or len(customer_bin) != 12:
@@ -2117,7 +2125,7 @@ def _parse_role_form(name: str, pages: list[str]) -> tuple[str, list[str]] | Non
     if not name:
         return None
     # Сохраняем в порядке реестра — чтобы список в UI был стабильным.
-    keys = [key for key, _, _ in PAGES if key in set(pages) & PAGE_KEYS]
+    keys = [key for key, _, _ in ALL_PAGES if key in set(pages) & ALL_KEYS]
     return name, keys
 
 
@@ -2145,6 +2153,7 @@ def roles_list(
             "roles": roles,
             "user_counts": user_counts,
             "pages": PAGES,
+            "system_pages": SYSTEM_PAGES,
             "error": error,
             "ok": ok,
         },

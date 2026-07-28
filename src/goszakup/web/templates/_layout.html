@@ -88,8 +88,9 @@
       </a>
       {% endif %}
 
-      {% if user and user.is_admin %}
+      {% if (user and user.is_admin) or 'ingest' in perms %}
       <div class="nav-group-label">Система</div>
+      {% if user and user.is_admin %}
       <a href="/presets"      class="{{ 'active' if _active == 'presets' else '' }}">
         <span class="nav-ic">{{ icon("star", 15) }}</span>
         <span class="nav-label">Preset'ы</span>
@@ -103,10 +104,14 @@
         <span class="nav-ic">{{ icon("play", 15) }}</span>
         <span class="nav-label">Сканировать</span>
       </a>
+      {% endif %}
+      {% if 'ingest' in perms %}
       <a href="/ingest"       class="{{ 'active' if _active == 'ingest' else '' }}">
         <span class="nav-ic">{{ icon("download", 15) }}</span>
         <span class="nav-label">Догрузка по БИН</span>
       </a>
+      {% endif %}
+      {% if user and user.is_admin %}
       <a href="/submissions"  class="{{ 'active' if _active == 'submissions' else '' }}">
         <span class="nav-ic">{{ icon("send", 15) }}</span>
         <span class="nav-label">Автоподачи</span>
@@ -127,6 +132,7 @@
         <span class="nav-ic">{{ icon("grid", 15) }}</span>
         <span class="nav-label">Расходы LLM</span>
       </a>
+      {% endif %}
       {% endif %}
     </nav>
 
@@ -157,7 +163,7 @@
         </form>
         {% endif %}
         <div class="topbar-right">
-          {% if user and user.is_admin %}
+          {% if 'ingest' in perms %}
           <a class="btn sm" href="/ingest">{{ icon("refresh", 12) }} Прогон</a>
           {% endif %}
           {% if 'settings' in perms %}
