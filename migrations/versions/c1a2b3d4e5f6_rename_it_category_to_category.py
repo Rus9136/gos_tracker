@@ -46,14 +46,20 @@ def upgrade() -> None:
     # В lots только 4 старых IT-значения — все схлопываются в 'it'.
     op.execute("UPDATE lots SET category = 'it' WHERE category IS NOT NULL")
     if dialect == "postgresql":
+        # В колонках встречается jsonb-null (не SQL NULL) — на проде так у всех
+        # seed-preset'ов. jsonb_array_length на скаляре падает, а порядок
+        # вычисления AND/OR в PG не гарантирован — поэтому CASE.
+        non_empty_array = (
+            "CASE WHEN jsonb_typeof({col}) = 'array' "
+            "THEN jsonb_array_length({col}) > 0 ELSE false END"
+        )
         op.execute(
             "UPDATE users SET categories = '[\"it\"]'::jsonb "
-            "WHERE NOT is_admin "
-            "OR (categories IS NOT NULL AND jsonb_array_length(categories) > 0)"
+            "WHERE NOT is_admin OR " + non_empty_array.format(col="categories")
         )
         op.execute(
             "UPDATE presets SET categories = '[\"it\"]'::jsonb "
-            "WHERE categories IS NOT NULL AND jsonb_array_length(categories) > 0"
+            "WHERE " + non_empty_array.format(col="categories")
         )
     else:
         op.execute(
