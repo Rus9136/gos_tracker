@@ -442,7 +442,7 @@ def listing_actor(preset_id: int) -> None:
             amount_to=preset.amount_to,
             status_codes=list(preset.status_codes or []),
         )
-        it_categories = list(preset.it_categories or [])
+        categories = list(preset.categories or [])
 
         new_hits = []
         status_changes = []
@@ -452,10 +452,11 @@ def listing_actor(preset_id: int) -> None:
             for hit in source.iter_listing(params):
                 listing_count += 1
                 # Проект только про IT: не-IT лоты не храним и не парсим вообще.
-                cat = classify(hit.enstru, hit.lot_name)
+                # Интерим фазы A (WP3): сравнение уже в слагах вертикалей.
+                cat = "it" if classify(hit.enstru, hit.lot_name) else None
                 if cat is None:
                     continue
-                if it_categories and cat not in it_categories:
+                if categories and cat not in categories:
                     continue
                 _upsert_lot_from_listing(
                     session, hit, kato=params.kato,
@@ -515,7 +516,7 @@ def detail_actor(
     organizer/контакты, но не качать пачки PDF и не дёргать Cerebras.
 
     `only_it_lots=True` (default для daily-прогонов): пропускаем announcement'ы,
-    у которых в БД нет ни одного лота с it_category. Это даёт ~10× ускорения
+    у которых в БД нет ни одного лота с category. Это даёт ~10× ускорения
     фазы 2 для общереспубликанских прогонов, где IT ≈ 9% от всех лотов.
     `scan_actor`/`ingest_actor` передают False — там фильтрация не нужна.
     """
@@ -530,7 +531,7 @@ def detail_actor(
         with SessionLocal() as session:
             has_it = session.execute(
                 select(Lot.id)
-                .where(Lot.announcement_id == anno_id, Lot.it_category.is_not(None))
+                .where(Lot.announcement_id == anno_id, Lot.category.is_not(None))
                 .limit(1)
             ).first() is not None
         if not has_it:
@@ -560,7 +561,7 @@ def detail_actor(
                 session, run_id, details_fetched=1, new_documents=new_docs
             )
             if with_llm:
-                it_lot_ids = [lt.id for lt in lots if lt.it_category]
+                it_lot_ids = [lt.id for lt in lots if lt.category]
     except Exception:
         log.exception("detail_actor failed for anno=%s run=%s", anno_id, run_id)
         with SessionLocal() as session:
@@ -689,7 +690,7 @@ def scan_actor(
     amount_from: int,
     amount_to: int | None,
     status_codes: list[int],
-    it_categories: list[str],
+    categories: list[str],
     listing_only: bool = False,
     with_docs: bool = True,
     with_llm: bool = True,
@@ -706,7 +707,7 @@ def scan_actor(
     r = _redis_client()
     source = make_source(r)
     status_codes = list(status_codes or [])
-    it_categories = list(it_categories or [])
+    categories = list(categories or [])
 
     params = SearchParams(
         kato=kato or "",
@@ -723,9 +724,10 @@ def scan_actor(
         try:
             for hit in source.iter_listing(params):
                 listing_count += 1
-                if it_categories:
-                    cat = classify(hit.enstru, hit.lot_name)
-                    if cat not in it_categories:
+                if categories:
+                    # Интерим фазы A (WP3): UI шлёт слаги вертикалей.
+                    cat = "it" if classify(hit.enstru, hit.lot_name) else None
+                    if cat not in categories:
                         continue
                 _upsert_lot_from_listing(
                     session, hit, kato=params.kato,
@@ -764,7 +766,7 @@ def scan_actor(
     _set_pending(r, run_id, len(targets))
     for anno_id in targets:
         # scan по UI: пользователь сам выбрал IT-категории в форме — если
-        # хочет non-IT, он указал it_categories=[] и листинг уже это
+        # хочет non-IT, он указал categories=[] и листинг уже это
         # пропустил. На уровне detail не фильтруем — не сужаем ad-hoc-запрос.
         detail_actor.send(anno_id, run_id, with_docs, with_llm, only_it_lots=False)
 

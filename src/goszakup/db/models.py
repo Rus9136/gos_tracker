@@ -87,9 +87,9 @@ class User(Base):
 
     Multi-tenant поверх общих данных: лоты в БД одни на всех (скрейпинг
     глобальный), но у каждого пользователя свой read-time `scope` —
-    регионы (kato), IT-категории и минимальная сумма. `/actual`, `/past`,
+    регионы (kato), вертикали и минимальная сумма. `/actual`, `/past`,
     `/starred`, дашборд и счётчики сайдбара показывают только лоты в его
-    scope; админ (`is_admin`) видит всё. Пустой `regions`/`it_categories`
+    scope; админ (`is_admin`) видит всё. Пустой `regions`/`categories`
     (NULL или []) = «без ограничения по этому измерению».
     """
 
@@ -112,10 +112,10 @@ class User(Base):
         ForeignKey("roles.id", ondelete="SET NULL")
     )
     role: Mapped[Role | None] = relationship(Role, lazy="joined")
-    # scope: список kato-кодов и IT-категорий; min_amount перекрывает
-    # глобальный MIN_AMOUNT для этого пользователя.
+    # scope: список kato-кодов и слагов вертикалей (classify/verticals.py);
+    # min_amount перекрывает глобальный MIN_AMOUNT для этого пользователя.
     regions: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
-    it_categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
+    categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
     min_amount: Mapped[int | None] = mapped_column(Integer)
     # Telegram chat_id (numeric, в виде строки) для уведомлений о новых
     # подходящих лотах. Пустой → уведомления не шлём. `notify_telegram` —
@@ -267,7 +267,8 @@ class Lot(Base):
     is_starred: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False, index=True
     )
-    it_category: Mapped[str | None] = mapped_column(String(50), index=True)
+    # Слаг вертикали (classify/verticals.py), NULL = «прочее».
+    category: Mapped[str | None] = mapped_column(String(50), index=True)
     kato: Mapped[str | None] = mapped_column(String(20), index=True)
     method: Mapped[str | None] = mapped_column(String(200))
     url: Mapped[str] = mapped_column(String(300))
@@ -407,7 +408,7 @@ class Preset(Base):
     amount_from: Mapped[int | None] = mapped_column(Integer)
     amount_to: Mapped[int | None] = mapped_column(Integer)
     status_codes: Mapped[list[int] | None] = mapped_column(JSON_TYPE)
-    it_categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
+    categories: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
     updated_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
@@ -483,7 +484,7 @@ class LotAnalysis(Base):
 class UserQuery(Base):
     """Семантическая настройка пользователя — «какие лоты хочу видеть».
 
-    NL-предпочтение поверх детерминированного User.scope (regions/it_categories/
+    NL-предпочтение поверх детерминированного User.scope (regions/categories/
     min_amount). Scope грубо отсекает лоты SQL'ом, UserQuery даёт тонкий
     смысловой матч через LLM (см. classify/matcher.py). Несколько именованных
     запросов на пользователя — как Preset, но персональный и read-time.

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from ..db.models import Lot, UserLotMatch, UserQuery
 from ..scraper.katos import region_name
+from .it import classify as _it_subcategory
 from .llm import DEFAULT_MODEL, dev_category_label, vendor_lock_label
 from .usage import record_call, usage_from_response
 
@@ -106,7 +107,9 @@ def _build_user_message(query_text: str, lot: Lot) -> str:
         f"Плановая сумма ₸: {lot.plan_amount or '—'}",
         # Голый КАТО-код модели ни о чём не говорит — даём имя региона.
         f"Регион: {region_name(lot.kato) or lot.kato or '—'}",
-        f"IT-категория: {lot.it_category or '—'}",
+        # Подкатегория на лету (classify/it.py) — промпт байт-в-байт как до
+        # пивота, бамп MATCHER_VERSION не нужен.
+        f"IT-категория: {_it_subcategory(lot.enstru, lot.name) or '—'}",
     ]
     if a is not None:
         lines += [

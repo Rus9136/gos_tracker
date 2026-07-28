@@ -186,8 +186,10 @@ def _upsert_lot_from_listing(
     lot.url = hit.announcement_url or lot.url
     # API-листинг несёт цифровой код ЕНС ТРУ; не затираем добытое деталями.
     lot.enstru_code = hit.enstru_code or lot.enstru_code
-    if not lot.it_category:
-        lot.it_category = classify(lot.enstru, lot.name)
+    if not lot.category:
+        # Интерим фазы A (WP3): пайплайн ещё фильтрует IT, значение — слаг.
+        # WP5 заменит на classify_vertical по всем вертикалям.
+        lot.category = "it" if classify(lot.enstru, lot.name) else None
     session.flush()
 
     if is_new or prev_status != new_status_code:
@@ -242,7 +244,7 @@ def _apply_enstru_code(session: Session, lot: Lot, source: DataSource) -> None:
     если ещё нет (API-источник обычно приносит код прямо в детали, см.
     _apply_details). Сбой не должен ронять прогон объявления — деградируем
     тихо (правило #7)."""
-    if not lot.it_category or lot.enstru_code:
+    if not lot.category or lot.enstru_code:
         return
     try:
         code = source.fetch_enstru_code(lot.announcement_id, lot.id)
@@ -430,7 +432,7 @@ def execute_search(
     source: DataSource,
     params: SearchParams,
     *,
-    it_categories: list[str] | None = None,
+    categories: list[str] | None = None,
     download_docs: bool = True,
     run_llm: bool = True,
     max_pages: int | None = None,
@@ -452,10 +454,11 @@ def execute_search(
         for hit in source.iter_listing(params, max_pages=max_pages):
             stats.listing_count += 1
             # Проект только про IT: не-IT лоты не храним и не парсим вообще.
-            cat = classify(hit.enstru, hit.lot_name)
+            # Интерим фазы A (WP3): сравнение уже в слагах вертикалей.
+            cat = "it" if classify(hit.enstru, hit.lot_name) else None
             if cat is None:
                 continue
-            if it_categories and cat not in it_categories:
+            if categories and cat not in categories:
                 continue
             _upsert_lot_from_listing(
                 session,
@@ -508,7 +511,7 @@ def execute_search(
                 # документы. Любая ошибка LLM не должна валить прогон.
                 analyzed: list[Lot] = []
                 for lot in lots:
-                    if not lot.it_category:
+                    if not lot.category:
                         continue
                     if analyze_and_save(session, lot):
                         stats.llm_analyzed += 1
@@ -540,7 +543,7 @@ def run_preset(
     download_docs: bool = True,
     run_llm: bool = True,
     max_pages: int | None = None,
-    it_categories: list[str] | None = None,
+    categories: list[str] | None = None,
     listing_only: bool = False,
 ) -> ScrapeRun:
     """Прогоняет один preset. Если передан preset — берёт фильтры из БД."""
@@ -554,8 +557,8 @@ def run_preset(
             amount_to=preset.amount_to,
             status_codes=list(preset.status_codes or []),
         )
-    if it_categories is None and preset is not None:
-        it_categories = list(preset.it_categories or [])
+    if categories is None and preset is not None:
+        categories = list(preset.categories or [])
 
     source = make_source()
 
@@ -567,7 +570,7 @@ def run_preset(
 
         stats = execute_search(
             session, source, params,
-            it_categories=it_categories,
+            categories=categories,
             download_docs=download_docs,
             run_llm=run_llm,
             max_pages=max_pages,

@@ -34,7 +34,7 @@ def _seed(db_session):
     db_session.add(Announcement(id=101, url="u/101"))
     lot = Lot(
         id=1, url="u/101", announcement_id=101,
-        kato="751000000", it_category="software_dev", plan_amount=5_000_000,
+        kato="751000000", category="software_dev", plan_amount=5_000_000,
     )
     db_session.add(lot)
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from goszakup.classify.simhash import (
     HAMMING_THRESHOLD,
     from_signed64,
@@ -99,7 +97,7 @@ def _make_lot(session, lot_id: int, anno_id: int, name: str, doc_text: str, *,
         announcement_id=anno_id,
         url=f"https://example/lot/{lot_id}",
         name=name,
-        it_category="Услуги ИТ",  # без этого LLM не вызывается → не вызывается и дедуп
+        category="it",  # без этого LLM не вызывается → не вызывается и дедуп
     )
     doc = Document(
         announcement_id=anno_id,
@@ -166,9 +164,10 @@ def test_analyze_and_save_reuses_close_simhash(db_session, monkeypatch):
 
     # Перезагружаем lot_b с announcement → documents (relationship), чтобы
     # pick_tz_document нашёл документ.
-    from goszakup.db.models import Announcement, Lot
-    from sqlalchemy.orm import selectinload
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from goszakup.db.models import Announcement, Lot
     lot_b = db_session.scalar(
         select(Lot).where(Lot.id == 2).options(
             selectinload(Lot.announcement).selectinload(Announcement.documents)

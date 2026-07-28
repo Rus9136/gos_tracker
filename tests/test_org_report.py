@@ -30,7 +30,7 @@ def _seed(s):
         id=1, announcement_id=101, customer_id=cust.id, url="l1",
         number="1-ОИ1", enstru="Услуги ИТ-сопровождения", name="Сопровождение 1С",
         status_code=360, status_name="Закупка состоялась",
-        plan_amount=1000, it_category="Услуги ИТ",
+        plan_amount=1000, category="it",
         winner_bin="111111111111", winner_name="ТОО Победитель",
     )
     # Не состоялся.
@@ -51,7 +51,7 @@ def _seed(s):
         id=4, announcement_id=102, customer_id=cust.id, url="l4",
         number="2-ЗЦП2", enstru="Услуги ИТ-сопровождения", name="Модернизация ИС",
         status_code=240, status_name="Опубликован (прием ценовых предложений)",
-        plan_amount=9200, is_actual=True, it_category="Услуги ИТ",
+        plan_amount=9200, is_actual=True, category="it",
     )
     s.add_all([l1, l2, l3, l4])
     s.flush()

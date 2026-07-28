@@ -86,7 +86,7 @@
         <tr onclick="window.location='/lot/{{ lot.id }}'">
           <td class="mono dim" style="font-size:12px">#{{ lot.number or lot.id }}</td>
           <td><div class="strong clamp-2" style="max-width:440px">{{ lot.name or '—' }}</div></td>
-          <td>{{ cat_tag(lot.it_category) }}</td>
+          <td>{{ cat_tag(lot.category|vertical) }}</td>
           <td>{{ status_pill(lot.status_code, mini=True) }}</td>
           <td class="num mono">{{ lot.plan_amount|n }}</td>
           <td>

@@ -27,7 +27,7 @@ def main() -> int:
             .join(LotAnalysis, LotAnalysis.lot_id == Lot.id, isouter=True)
             .where(
                 Lot.is_actual.is_(True),
-                Lot.it_category.isnot(None),
+                Lot.category.isnot(None),
                 or_(
                     LotAnalysis.id.is_(None),
                     LotAnalysis.analyzer_version != ANALYZER_VERSION,

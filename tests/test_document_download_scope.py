@@ -64,7 +64,7 @@ def _mk_doc_in_region(tmp_path: Path, *, anno_id, doc_id, kato) -> str:
                 url="https://goszakup.gov.kz/x",
                 name=f"Лот в {kato}",
                 kato=kato,
-                it_category="Услуги ИТ",
+                category="it",
                 plan_amount=Decimal(1_000_000),
                 status_code=210,
                 is_actual=True,

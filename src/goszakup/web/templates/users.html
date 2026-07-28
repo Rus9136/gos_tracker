@@ -29,13 +29,13 @@
     </div>
   </div>
   <div class="field" style="grid-column: 1 / -1">
-    <label>IT-категории (пусто — все)</label>
+    <label>Вертикали (пусто — все)</label>
     <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px">
-      {% for cat in it_categories %}
+      {% for slug, label in it_categories %}
       <label class="flex items-start gap-2" style="font-size:12px; cursor:pointer">
-        <input type="checkbox" name="it_categories" value="{{ cat }}"
-               {% if u and u.it_categories and cat in u.it_categories %}checked{% endif %}>
-        <span>{{ cat }}</span>
+        <input type="checkbox" name="categories" value="{{ slug }}"
+               {% if u and u.categories and slug in u.categories %}checked{% endif %}>
+        <span>{{ label }}</span>
       </label>
       {% endfor %}
     </div>
@@ -53,7 +53,7 @@
     <div class="crumb"><span class="strong">Пользователи</span></div>
     <h1 class="page-title">Пользователи <span class="dim">({{ users|length }})</span></h1>
     <div class="page-sub">
-      У каждого свой scope — регионы, IT-категории и мин. сумма. Лоты в БД
+      У каждого свой scope — регионы, вертикали и мин. сумма. Лоты в БД
       общие; пользователь видит только лоты в своём scope. Админ видит всё.
     </div>
   </div>
@@ -136,7 +136,7 @@
           {% if u.is_admin %}<span class="dim">— всё —</span>
           {% else %}
             <div>Регионы: {% if u.regions %}<span class="mono">{{ u.regions|length }}</span>{% else %}<span class="dim">все</span>{% endif %},
-            IT: {% if u.it_categories %}{{ u.it_categories|join(', ') }}{% else %}<span class="dim">все</span>{% endif %}{% if u.min_amount %}, от <span class="mono">{{ u.min_amount|n }}</span>{% endif %}</div>
+            Категории: {% if u.categories %}{{ u.categories|map('vertical')|join(', ') }}{% else %}<span class="dim">все</span>{% endif %}{% if u.min_amount %}, от <span class="mono">{{ u.min_amount|n }}</span>{% endif %}</div>
           {% endif %}
         </td>
         <td class="dim mono" style="font-size:12px">{{ u.last_login_at|dt if u.last_login_at else '—' }}</td>

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from goszakup.api.mapping import (
@@ -30,7 +30,7 @@ def _lots_listing():
 def test_almaty_to_utc():
     # Сверено с боевым HTML-парсером: 19:59:23 Алматы == 14:59:23 UTC.
     assert almaty_to_utc("2026-07-28 19:59:23") == datetime(
-        2026, 7, 28, 14, 59, 23, tzinfo=timezone.utc
+        2026, 7, 28, 14, 59, 23, tzinfo=UTC
     )
     assert almaty_to_utc(None) is None
     assert almaty_to_utc("мусор") is None

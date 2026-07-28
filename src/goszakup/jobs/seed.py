@@ -38,7 +38,7 @@ def seed_regional_presets() -> int:
                     amount_from=MIN_AMOUNT,
                     amount_to=None,
                     status_codes=list(ACTUAL_STATUSES),
-                    it_categories=None,
+                    categories=None,
                     active=True,
                 )
             )

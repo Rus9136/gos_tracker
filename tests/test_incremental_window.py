@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from goszakup.config import MIN_AMOUNT
 from goszakup.db.engine import SessionLocal, init_db
 from goszakup.db.models import Preset, ScrapeRun
 from goszakup.jobs.incremental import (
@@ -16,7 +17,6 @@ from goszakup.jobs.incremental import (
     daily_scan_params,
     sync_window,
 )
-from goszakup.config import MIN_AMOUNT
 from goszakup.scraper.statuses import ACTUAL_STATUSES
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)

@@ -28,7 +28,7 @@ SECOND_STATUS = "Второй победитель"
 class SupplierFilters:
     enstru_code: str = ""  # префикс цифрового кода ЕНС ТРУ (192021.530…)
     enstru: str = ""  # подстрока имени ЕНС ТРУ («компьютер», «интернет»)
-    it_category: str = ""
+    category: str = ""
     year: int = 0  # год публикации объявления, 0 = всё время
 
 
@@ -53,8 +53,8 @@ def _lot_conditions(f: SupplierFilters) -> list:
         conds.append(Lot.enstru_code.like(f"{f.enstru_code.strip()}%"))
     if f.enstru:
         conds.append(Lot.enstru.ilike(f"%{f.enstru.strip()}%"))
-    if f.it_category:
-        conds.append(Lot.it_category == f.it_category)
+    if f.category:
+        conds.append(Lot.category == f.category)
     return conds
 
 

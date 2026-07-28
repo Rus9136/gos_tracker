@@ -39,7 +39,7 @@
         </td>
         <td class="num mono">{{ p.amount_from|n }}</td>
         <td class="dim mono" style="font-size:12px">{{ p.status_codes|join(', ') if p.status_codes else '—' }}</td>
-        <td class="dim" style="font-size:12px">{{ p.it_categories|join(', ') if p.it_categories else '—' }}</td>
+        <td class="dim" style="font-size:12px">{{ p.categories|join(', ') if p.categories else '—' }}</td>
         <td>
           {% if p.active %}<span class="badge ok"><span class="dot"></span>да</span>
           {% else %}<span class="badge muted">нет</span>{% endif %}

@@ -36,6 +36,7 @@ from ..classify.llm import (
     vendor_lock_label,
 )
 from ..classify.usage import record_call
+from ..classify.verticals import VERTICAL_LABELS, VERTICALS
 from ..config import (
     AUTOSUBMIT_INGEST_TOKEN,
     GZ_TELEGRAM_BOT_TOKEN,
@@ -72,13 +73,7 @@ from ..jobs.ingest import (
     find_active_run,
 )
 from ..jobs.org_report import build_org_report, related_org_ids, render_markdown
-from ..jobs.supplier_report import (
-    SupplierFilters,
-    build_supplier_report,
-    render_csv as render_suppliers_csv,
-)
 from ..jobs.run_preset import _save_announcement, _save_documents
-from ..sources import make_source
 from ..jobs.scan import (
     ALL_MODES,
     MODE_FULL,
@@ -86,6 +81,13 @@ from ..jobs.scan import (
     MODE_NO_HEAVY,
     create_scan_run,
     mode_flags,
+)
+from ..jobs.supplier_report import (
+    SupplierFilters,
+    build_supplier_report,
+)
+from ..jobs.supplier_report import (
+    render_csv as render_suppliers_csv,
 )
 from ..observability import setup_sentry
 from ..scope import lot_in_scope, scope_conditions
@@ -97,6 +99,7 @@ from ..scraper.statuses import (
     STATUS_NAMES,
     status_tone,
 )
+from ..sources import make_source
 from .auth import (
     NotAuthenticated,
     authenticate,
@@ -123,6 +126,8 @@ templates.env.filters["n"] = format_amount
 templates.env.filters["dt"] = format_dt
 templates.env.filters["compact"] = format_compact
 templates.env.filters["iso"] = format_iso
+# Слаг вертикали -> русский лейбл (незнакомое значение показываем как есть).
+templates.env.filters["vertical"] = lambda s: VERTICAL_LABELS.get(s, s or "—")
 templates.env.globals["region_name"] = region_name
 templates.env.globals["dev_category_label"] = dev_category_label
 templates.env.globals["vendor_lock_label"] = vendor_lock_label
@@ -225,7 +230,9 @@ def _redirect_to_login(request: Request, exc: NotAuthenticated):
     return RedirectResponse(f"/login?{nxt}" if nxt else "/login", status_code=303)
 
 
-IT_CATEGORIES = ["Оборудование", "Услуги ИТ", "ПО и лицензии", "Связь и интернет"]
+# Вертикали (classify/verticals.py): в форме/URL ходят слаги, лейблы — для UI.
+CATEGORY_CHOICES = [(v.slug, v.name_ru) for v in VERTICALS]
+CATEGORY_SLUGS = set(VERTICAL_LABELS)
 DEV_CATEGORIES = list(DEV_CATEGORY_LABELS.keys())
 VENDOR_LOCK_RISKS = list(VENDOR_LOCK_LABELS.keys())
 PAGE_SIZE = 50
@@ -341,7 +348,7 @@ def _lots_query(
     if kato:
         stmt = stmt.where(Lot.kato == kato)
     if it:
-        stmt = stmt.where(Lot.it_category == it)
+        stmt = stmt.where(Lot.category == it)
     if dev or risk:
         # outer join: чтобы можно было фильтровать «нет анализа» в будущем,
         # сейчас при заданном dev/risk запись анализа обязана существовать.
@@ -445,7 +452,7 @@ def _render_lots(
             "pages": pages,
             "filters": filters,
             "regions": REGIONS,
-            "categories": IT_CATEGORIES,
+            "categories": CATEGORY_CHOICES,
             "dev_categories": DEV_CATEGORIES,
             "vendor_lock_risks": VENDOR_LOCK_RISKS,
             "actual_statuses": [(c, STATUS_NAMES[c]) for c in ACTUAL_STATUSES],
@@ -532,9 +539,9 @@ def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depe
     ]
     by_cat_rows = db.execute(
         _scoped(
-            select(Lot.it_category, func.count(Lot.id), func.coalesce(func.sum(Lot.plan_amount), 0))
+            select(Lot.category, func.count(Lot.id), func.coalesce(func.sum(Lot.plan_amount), 0))
             .where(Lot.is_actual.is_(True))
-            .group_by(Lot.it_category)
+            .group_by(Lot.category)
             .order_by(desc(func.count(Lot.id)))
         )
     ).all()
@@ -1086,7 +1093,7 @@ def suppliers_report(
     f = SupplierFilters(
         enstru_code=enstru_code.strip(),
         enstru=enstru.strip(),
-        it_category=it.strip(),
+        category=it.strip(),
         year=year,
     )
     rows = build_supplier_report(db, f)
@@ -1114,7 +1121,7 @@ def suppliers_report(
             **_base_ctx(request, db, user),
             "rows": rows,
             "f": f,
-            "it_categories": IT_CATEGORIES,
+            "it_categories": CATEGORY_CHOICES,
             "years": years,
             "with_contacts": with_contacts,
         },
@@ -1814,7 +1821,7 @@ def scan_form(
             **_base_ctx(request, db, user),
             "regions": REGIONS,
             "status_groups": _STATUS_GROUPS,
-            "it_categories": IT_CATEGORIES,
+            "it_categories": CATEGORY_CHOICES,
             "scan_modes": _SCAN_MODES,
             "defaults": {
                 "kato": "",
@@ -1850,7 +1857,7 @@ def scan_start(
     if mode not in ALL_MODES:
         return RedirectResponse("/scan?error=mode_invalid", status_code=303)
     # Чекбоксы IT приходят строками — отфильтруем мусор.
-    it_clean = [c for c in (it or []) if c in IT_CATEGORIES]
+    it_clean = [c for c in (it or []) if c in CATEGORY_SLUGS]
     status_clean = list(status or [])
 
     try:
@@ -1859,7 +1866,7 @@ def scan_start(
             amount_from=amount_from,
             amount_to=amount_to_int,
             status_codes=status_clean,
-            it_categories=it_clean,
+            categories=it_clean,
             mode=mode,
         )
     except RuntimeError:
@@ -1992,11 +1999,11 @@ def settings_test(
 
 
 def _parse_scope_form(
-    regions: list[str], it_categories: list[str], min_amount: str
+    regions: list[str], categories: list[str], min_amount: str
 ) -> dict:
     return {
         "regions": [r for r in regions if r in BY_CODE] or None,
-        "it_categories": [c for c in it_categories if c in IT_CATEGORIES] or None,
+        "categories": [c for c in categories if c in CATEGORY_SLUGS] or None,
         "min_amount": _maybe_int(min_amount),
     }
 
@@ -2027,7 +2034,7 @@ def users_list(
             "users": users,
             "roles": roles,
             "regions": REGIONS,
-            "it_categories": IT_CATEGORIES,
+            "it_categories": CATEGORY_CHOICES,
             "error": error,
             "ok": ok,
         },
@@ -2043,7 +2050,7 @@ def users_create(
     is_admin: str = Form(""),
     role_id: str = Form(""),
     regions: list[str] = Form(default=[]),
-    it_categories: list[str] = Form(default=[]),
+    categories: list[str] = Form(default=[]),
     min_amount: str = Form(""),
 ):
     username = username.strip()
@@ -2051,7 +2058,7 @@ def users_create(
         return RedirectResponse("/users?error=invalid", status_code=303)
     if db.scalar(select(User).where(User.username == username)) is not None:
         return RedirectResponse("/users?error=exists", status_code=303)
-    scope = _parse_scope_form(regions, it_categories, min_amount)
+    scope = _parse_scope_form(regions, categories, min_amount)
     db.add(
         User(
             username=username,
@@ -2077,15 +2084,15 @@ def users_edit(
     is_active: str = Form(""),
     role_id: str = Form(""),
     regions: list[str] = Form(default=[]),
-    it_categories: list[str] = Form(default=[]),
+    categories: list[str] = Form(default=[]),
     min_amount: str = Form(""),
 ):
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(404, "пользователь не найден")
-    scope = _parse_scope_form(regions, it_categories, min_amount)
+    scope = _parse_scope_form(regions, categories, min_amount)
     target.regions = scope["regions"]
-    target.it_categories = scope["it_categories"]
+    target.categories = scope["categories"]
     target.min_amount = scope["min_amount"]
     target.role_id = _role_id_or_none(db, role_id)
     # Себя нельзя разжаловать/деактивировать — иначе можно потерять доступ.

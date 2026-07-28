@@ -83,7 +83,7 @@
       </div>
       <div class="card-body" style="padding-top:0; padding-bottom:0">
         <dl class="dl">
-          <dt>IT-категория</dt><dd>{% if lot.it_category %}{{ cat_tag(lot.it_category) }}{% else %}<span class="dim">—</span>{% endif %}</dd>
+          <dt>Категория</dt><dd>{% if lot.category %}{{ cat_tag(lot.category|vertical) }}{% else %}<span class="dim">—</span>{% endif %}</dd>
           {% if lot.analysis %}
           <dt>Тип разработки (LLM)</dt><dd>{{ dev_tag(lot.analysis.dev_category) }}</dd>
           {% endif %}
@@ -324,7 +324,7 @@
           <div class="card-title" style="color: var(--accent-hi)">LLM-анализ ТЗ</div>
           {% if lot.analysis %}<span class="badge accent">{{ lot.analysis.analysis_confidence or 'low' }}</span>{% endif %}
         </div>
-        {% if lot.it_category and has_downloaded_doc %}
+        {% if lot.category and has_downloaded_doc %}
         <form method="post" action="/lot/{{ lot.id }}/analyze">
           <button type="submit" class="btn sm">{% if lot.analysis %}Перезапустить{% else %}Запустить{% endif %}</button>
         </form>
@@ -369,7 +369,7 @@
       </div>
       {% else %}
         <div class="dim">Лот ещё не проанализирован.
-          {% if not lot.it_category %}<br>Не прошёл IT-фильтр — анализ не запускается.
+          {% if not lot.category %}<br>Вне watchlist — анализ не запускается.
           {% elif not has_downloaded_doc %}<br>Нужны документы — сначала нажмите «Загрузить документы».{% endif %}
         </div>
       </div>

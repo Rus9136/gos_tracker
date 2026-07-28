@@ -21,22 +21,24 @@ from functools import lru_cache
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy.orm import Session
-
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..db.models import Announcement, Document, Lot, LotAnalysis
 from ..scraper.modal_files import is_tz_like_name
 from .extractive_summary import extract_summary
+from .it import classify as _it_subcategory
 from .rules import CONFIDENCE_THRESHOLD, RULES_VERSION, classify_lot
-from .usage import record_call, usage_from_response
 from .simhash import (
     HAMMING_THRESHOLD,
     from_signed64,
     hamming,
-    simhash as compute_simhash,
     to_signed64,
 )
+from .simhash import (
+    simhash as compute_simhash,
+)
+from .usage import record_call, usage_from_response
 
 log = logging.getLogger(__name__)
 
@@ -362,7 +364,9 @@ def _build_user_message(
         f"Заказчик: {lot.customer.name if lot.customer else '—'}",
         f"Способ закупки: {lot.method or (announcement.method if announcement else '—')}",
         f"Плановая сумма ₸: {lot.plan_amount or '—'}",
-        f"IT-категория (pre-filter): {lot.it_category or '—'}",
+        # Подкатегория считается на лету (classify/it.py): промпт байт-в-байт
+        # как до пивота — бамп ANALYZER_VERSION не нужен.
+        f"IT-категория (pre-filter): {_it_subcategory(lot.enstru, lot.name) or '—'}",
     ]
     if announcement and announcement.attributes:
         lines.append(f"Признаки объявления: {announcement.attributes}")
@@ -513,8 +517,8 @@ def analyze_and_save(session: Session, lot: Lot, *, force: bool = False) -> bool
 
 
 def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
-    # Без IT-категории LLM не вызываем — это pre-filter условие.
-    if not lot.it_category:
+    # Вне watchlist LLM не вызываем — это pre-filter условие.
+    if not lot.category:
         return False
 
     announcement = lot.announcement
@@ -578,7 +582,7 @@ def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
         rule_res = classify_lot(
             lot_name=lot.name,
             lot_extra=lot.extra,
-            it_category=lot.it_category,
+            it_category=_it_subcategory(lot.enstru, lot.name),
             plan_amount=lot.plan_amount,
             announcement_attributes=announcement.attributes if announcement else None,
             tz_text=tz_text,
@@ -732,7 +736,7 @@ def _chat_system_message(lot: Lot) -> str:
         f"Заказчик: {lot.customer.name if lot.customer else '—'}",
         f"Способ закупки: {lot.method or (announcement.method if announcement else '—')}",
         f"Плановая сумма ₸: {lot.plan_amount or '—'}",
-        f"IT-категория (pre-filter): {lot.it_category or '—'}",
+        f"IT-категория (pre-filter): {_it_subcategory(lot.enstru, lot.name) or '—'}",
     ]
     if announcement and announcement.attributes:
         lines.append(f"Признаки: {announcement.attributes}")

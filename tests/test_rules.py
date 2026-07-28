@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from goszakup.classify.rules import (
     CONFIDENCE_THRESHOLD,
     classify_lot,
@@ -191,7 +189,9 @@ def test_analyze_and_save_uses_rules_for_obvious_hardware(db_session, monkeypatc
         announcement_id=200,
         url="https://example/lot/20",
         name="Поставка ноутбуков в количестве 25 штук",
-        it_category="Оборудование",
+        # Подкатегория для rules-prior больше не хранится на лоте — считается
+        # на лету из name («ноутбук» → «Оборудование»); лоту достаточно слага.
+        category="it",
         plan_amount=Decimal("5000000"),
     )
     doc = Document(

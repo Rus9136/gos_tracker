@@ -68,13 +68,13 @@ def build_org_report(session: Session, org: Organization) -> dict:
             func.coalesce(
                 func.sum(contract_sq).filter(Lot.status_code == _OK_STATUS), 0
             ).label("contract_total"),
-            func.count(Lot.id).filter(Lot.it_category.is_not(None)).label("it_n"),
+            func.count(Lot.id).filter(Lot.category.is_not(None)).label("it_n"),
             func.count(Lot.id)
-            .filter(Lot.it_category.is_not(None), Lot.status_code == _OK_STATUS)
+            .filter(Lot.category.is_not(None), Lot.status_code == _OK_STATUS)
             .label("it_ok"),
             func.coalesce(
                 func.sum(contract_sq).filter(
-                    Lot.it_category.is_not(None), Lot.status_code == _OK_STATUS
+                    Lot.category.is_not(None), Lot.status_code == _OK_STATUS
                 ),
                 0,
             ).label("it_contract_total"),
@@ -141,7 +141,7 @@ def build_org_report(session: Session, org: Organization) -> dict:
             Lot.id,
             extract("year", Announcement.publish_date).label("yr"),
             Lot.name,
-            Lot.it_category,
+            Lot.category,
             Lot.plan_amount,
             contract_sq.label("contract_amount"),
             Lot.winner_bin,
@@ -150,7 +150,7 @@ def build_org_report(session: Session, org: Organization) -> dict:
         .outerjoin(Announcement, Announcement.id == Lot.announcement_id)
         .where(
             Lot.id.in_(lot_ids_sq),
-            Lot.it_category.is_not(None),
+            Lot.category.is_not(None),
             Lot.status_code == _OK_STATUS,
         )
         .order_by(Announcement.publish_date)
@@ -161,7 +161,7 @@ def build_org_report(session: Session, org: Organization) -> dict:
             Lot.id,
             Lot.name,
             Lot.status_name,
-            Lot.it_category,
+            Lot.category,
             Lot.plan_amount,
             Announcement.application_end,
         )
@@ -219,7 +219,7 @@ def render_markdown(report: dict, base_url: str = "") -> str:
             name = (a.name or "—").replace("|", "/")[:80]
             L.append(
                 f"| [{name}]({base_url}/lot/{a.id}) | {a.status_name or '—'} "
-                f"| {a.it_category or '—'} | {_t(a.plan_amount)} "
+                f"| {a.category or '—'} | {_t(a.plan_amount)} "
                 f"| {a.application_end or '—'} |"
             )
     L.append("")
@@ -246,7 +246,7 @@ def render_markdown(report: dict, base_url: str = "") -> str:
             contract = _t(lt.contract_amount) if lt.contract_amount is not None else "—"
             L.append(
                 f"| {int(lt.yr) if lt.yr else '—'} "
-                f"| [{name}]({base_url}/lot/{lt.id}) | {lt.it_category} "
+                f"| [{name}]({base_url}/lot/{lt.id}) | {lt.category} "
                 f"| {_t(lt.plan_amount)} | {contract} | {win} |"
             )
     L.append("")

@@ -3,7 +3,7 @@
 {% block title %}Поставщики — Goszakup Tracker{% endblock %}
 {% block content %}
 
-{% set qs = 'enstru_code=' ~ (f.enstru_code|urlencode) ~ '&enstru=' ~ (f.enstru|urlencode) ~ '&it=' ~ (f.it_category|urlencode) ~ '&year=' ~ f.year %}
+{% set qs = 'enstru_code=' ~ (f.enstru_code|urlencode) ~ '&enstru=' ~ (f.enstru|urlencode) ~ '&it=' ~ (f.category|urlencode) ~ '&year=' ~ f.year %}
 
 <div class="page-head">
   <div>
@@ -30,11 +30,11 @@
              placeholder="компьютер, интернет, сопровождение…">
     </div>
     <div class="field">
-      <label>IT-категория</label>
+      <label>Категория</label>
       <select class="select" name="it">
         <option value="">— любая —</option>
-        {% for cat in it_categories %}
-        <option value="{{ cat }}" {% if f.it_category == cat %}selected{% endif %}>{{ cat }}</option>
+        {% for slug, label in it_categories %}
+        <option value="{{ slug }}" {% if f.category == slug %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </div>

@@ -73,7 +73,7 @@ def build_note(
     amount_from: int,
     amount_to: int | None,
     status_codes: list[int],
-    it_categories: list[str],
+    categories: list[str],
     mode: str,
 ) -> str:
     parts: list[str] = ["Скан"]
@@ -92,8 +92,8 @@ def build_note(
     if stat:
         parts.append(stat)
 
-    if it_categories:
-        parts.append("IT: " + ", ".join(it_categories))
+    if categories:
+        parts.append("Категории: " + ", ".join(categories))
 
     parts.append(_MODE_LABELS.get(mode, mode))
     return " · ".join(parts)
@@ -105,7 +105,7 @@ def create_scan_run(
     amount_from: int,
     amount_to: int | None,
     status_codes: list[int],
-    it_categories: list[str],
+    categories: list[str],
     mode: str,
 ) -> int:
     """Создаёт ScrapeRun под ad-hoc сканирование и возвращает его id.
@@ -132,7 +132,7 @@ def create_scan_run(
             amount_from=amount_from,
             amount_to=amount_to,
             status_codes=status_codes,
-            it_categories=it_categories,
+            categories=categories,
             mode=mode,
         )
         run = ScrapeRun(preset_id=None, note=note)

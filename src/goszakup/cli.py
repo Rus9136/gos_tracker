@@ -94,8 +94,8 @@ def run_once(
     amount_to: int | None = typer.Option(None),
     status: list[int] = typer.Option(None, "--status", help="код статуса (можно повторять)"),
     actual_only: bool = typer.Option(False, "--actual"),
-    it_only: list[str] = typer.Option(
-        None, "--it", help="оставить только эти IT-категории (можно повторять)"
+    category: list[str] = typer.Option(
+        None, "--category", help="оставить только эти вертикали (слаги, можно повторять)"
     ),
     docs: bool = typer.Option(True, "--docs/--no-docs"),
     listing_only: bool = typer.Option(
@@ -113,7 +113,7 @@ def run_once(
     )
     run = run_preset(
         params=params,
-        it_categories=it_only,
+        categories=category,
         download_docs=docs,
         listing_only=listing_only,
     )
@@ -327,7 +327,7 @@ def reanalyze(
     with SessionLocal() as s:
         stmt = (
             select(Lot)
-            .where(Lot.it_category.isnot(None))
+            .where(Lot.category.isnot(None))
             .options(
                 selectinload(Lot.customer),
                 selectinload(Lot.analysis),

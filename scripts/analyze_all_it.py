@@ -43,7 +43,7 @@ def main() -> int:
     with SessionLocal() as s:
         candidates = s.scalars(
             select(Lot)
-            .where(Lot.it_category.isnot(None))
+            .where(Lot.category.isnot(None))
             .options(
                 selectinload(Lot.customer),
                 selectinload(Lot.analysis),

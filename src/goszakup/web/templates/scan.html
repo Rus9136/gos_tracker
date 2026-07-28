@@ -8,7 +8,7 @@
     <div class="crumb"><span class="strong">Сканировать</span></div>
     <h1 class="page-title">Ad-hoc прогон по фильтрам</h1>
     <div class="page-sub">
-      Разовый прогон с произвольными KATO / суммой / статусами / IT-категориями.
+      Разовый прогон с произвольными KATO / суммой / статусами / категориями.
       Результат — на странице прогона <a href="/runs">/runs</a>.
       <span class="strong">Не запускайте параллельно с ежедневным прогоном</span> —
       на goszakup глобальный Crawl-delay 5с.
@@ -105,12 +105,12 @@
     </div>
 
     <div style="grid-column: 1 / -1">
-      <div class="uc mb-2">IT-категории (пусто — без фильтра)</div>
+      <div class="uc mb-2">Категории (пусто — без фильтра)</div>
       <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px">
-        {% for cat in it_categories %}
+        {% for slug, label in it_categories %}
         <label class="flex items-start gap-2" style="font-size:12.5px; margin-bottom:0; cursor:pointer">
-          <input type="checkbox" name="it" value="{{ cat }}">
-          <span>{{ cat }}</span>
+          <input type="checkbox" name="it" value="{{ slug }}">
+          <span>{{ label }}</span>
         </label>
         {% endfor %}
       </div>
@@ -150,7 +150,7 @@
   <div class="card-body dim" style="font-size:13px">
     <ol style="margin:0; padding-left:20px; line-height:1.7">
       <li>Создаётся <span class="mono">ScrapeRun</span> с описанием параметров и шлётся <span class="mono">scan_actor</span> в очередь Dramatiq — worker подберёт его сразу.</li>
-      <li>Фаза 1: walk listing с фильтрами <span class="mono">filter[kato]</span>, <span class="mono">filter[amount_from/to]</span>, <span class="mono">filter[status][]</span>. Если выбраны IT-категории — лоты вне их отбрасываются.</li>
+      <li>Фаза 1: walk listing с фильтрами <span class="mono">filter[kato]</span>, <span class="mono">filter[amount_from/to]</span>, <span class="mono">filter[status][]</span>. Если выбраны категории — лоты вне их отбрасываются.</li>
       <li>Фаза 2 (если режим не «только листинг»): для новых / сменивших статус объявлений тянутся detail-карточки. Документы и LLM — опционально, по режиму.</li>
       <li>Прогресс смотри на <a href="/runs">/runs</a> — страница run'а сама обновляется каждые 3с, пока он идёт.</li>
     </ol>

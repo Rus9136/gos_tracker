@@ -30,7 +30,7 @@ def client(monkeypatch):
         yield c
 
 
-def _mk_user(username, password, *, is_admin=False, regions=None, it_categories=None, min_amount=None):
+def _mk_user(username, password, *, is_admin=False, regions=None, categories=None, min_amount=None):
     with SessionLocal() as s:
         u = User(
             username=username,
@@ -38,7 +38,7 @@ def _mk_user(username, password, *, is_admin=False, regions=None, it_categories=
             is_admin=is_admin,
             is_active=True,
             regions=regions,
-            it_categories=it_categories,
+            categories=categories,
             min_amount=min_amount,
         )
         s.add(u)
@@ -46,7 +46,7 @@ def _mk_user(username, password, *, is_admin=False, regions=None, it_categories=
         return u.id
 
 
-def _mk_lot(lot_id, *, kato, it_category, amount, actual=True):
+def _mk_lot(lot_id, *, kato, category, amount, actual=True):
     with SessionLocal() as s:
         s.add(
             Lot(
@@ -54,7 +54,7 @@ def _mk_lot(lot_id, *, kato, it_category, amount, actual=True):
                 url=f"https://goszakup.gov.kz/ru/announce/index/{lot_id}",
                 name=f"Лот {lot_id}",
                 kato=kato,
-                it_category=it_category,
+                category=category,
                 plan_amount=Decimal(amount),
                 status_code=210,
                 is_actual=actual,
@@ -102,8 +102,8 @@ def test_login_then_access(client):
 
 def test_scope_filters_lots_by_region(client):
     _mk_user("bob", "secret123", regions=["750000000"])
-    _mk_lot(1, kato="750000000", it_category="Услуги ИТ", amount=1_000_000)
-    _mk_lot(2, kato="710000000", it_category="Услуги ИТ", amount=1_000_000)
+    _mk_lot(1, kato="750000000", category="it", amount=1_000_000)
+    _mk_lot(2, kato="710000000", category="it", amount=1_000_000)
     _login(client, "bob", "secret123")
     body = client.get("/actual").text
     assert "Лот 1" in body
@@ -112,7 +112,7 @@ def test_scope_filters_lots_by_region(client):
 
 def test_scope_blocks_out_of_scope_lot_detail(client):
     _mk_user("bob", "secret123", regions=["750000000"])
-    _mk_lot(2, kato="710000000", it_category="Услуги ИТ", amount=1_000_000)
+    _mk_lot(2, kato="710000000", category="it", amount=1_000_000)
     _login(client, "bob", "secret123")
     r = client.get("/lot/2")
     assert r.status_code == 404
@@ -120,8 +120,8 @@ def test_scope_blocks_out_of_scope_lot_detail(client):
 
 def test_admin_sees_all_regions(client):
     _mk_user("root", "secret123", is_admin=True)
-    _mk_lot(1, kato="750000000", it_category="Услуги ИТ", amount=1_000_000)
-    _mk_lot(2, kato="710000000", it_category="Услуги ИТ", amount=1_000_000)
+    _mk_lot(1, kato="750000000", category="it", amount=1_000_000)
+    _mk_lot(2, kato="710000000", category="it", amount=1_000_000)
     _login(client, "root", "secret123")
     body = client.get("/actual").text
     assert "Лот 1" in body and "Лот 2" in body

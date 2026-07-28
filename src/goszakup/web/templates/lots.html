@@ -63,11 +63,11 @@
         </select>
       </div>
       <div class="field">
-        <label>IT-категория</label>
+        <label>Категория</label>
         <select class="select" name="it">
           <option value="">— все —</option>
-          {% for c in categories %}
-          <option value="{{ c }}" {% if filters.it == c %}selected{% endif %}>{{ c }}</option>
+          {% for slug, label in categories %}
+          <option value="{{ slug }}" {% if filters.it == slug %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
       </div>
@@ -242,7 +242,7 @@
             <span class="dimer">—</span>
           {% endif %}
         </td>
-        <td @click="window.location='/lot/{{ lot.id }}'">{{ cat_tag(lot.it_category) }}</td>
+        <td @click="window.location='/lot/{{ lot.id }}'">{{ cat_tag(lot.category|vertical) }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'">{{ status_pill(lot.status_code, mini=True) }}</td>
         <td class="num strong mono" @click="window.location='/lot/{{ lot.id }}'" style="font-size:13.5px">{{ lot.plan_amount|n }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'" class="dim">{{ region_name(lot.kato) or '—' }}</td>
@@ -289,7 +289,7 @@
   <a class="card" href="/lot/{{ lot.id }}" style="cursor:pointer; text-decoration:none; color:inherit; display:block">
     <div class="card-body" style="padding:16px">
       <div class="flex items-center justify-between mb-2">
-        <div class="flex items-center gap-2">{{ status_pill(lot.status_code, mini=True) }} {{ cat_tag(lot.it_category) }}</div>
+        <div class="flex items-center gap-2">{{ status_pill(lot.status_code, mini=True) }} {{ cat_tag(lot.category|vertical) }}</div>
         <button class="icon-btn star-btn {{ 'starred' if lot.is_starred else '' }}"
                 type="button"
                 data-starred="{{ '1' if lot.is_starred else '0' }}"

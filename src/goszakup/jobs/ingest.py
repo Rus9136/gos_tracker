@@ -181,7 +181,7 @@ def execute_ingest_run(
                 )
                 stats = execute_search(
                     session, source, params,
-                    it_categories=None,
+                    categories=None,
                     download_docs=False,
                     run_llm=False,
                 )

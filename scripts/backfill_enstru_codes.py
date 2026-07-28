@@ -38,7 +38,7 @@ def main() -> int:
     with SessionLocal() as s:
         rows = s.execute(
             select(Lot.id, Lot.announcement_id)
-            .where(Lot.it_category.isnot(None))
+            .where(Lot.category.isnot(None))
             .where(Lot.enstru_code.is_(None))
             .where(Lot.announcement_id.isnot(None))
             .order_by(Lot.id)

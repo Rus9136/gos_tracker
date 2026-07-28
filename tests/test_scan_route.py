@@ -55,7 +55,7 @@ def test_scan_run_creates_scraperun_and_enqueues(client):
             "amount_from": "300000",
             "amount_to": "1000000",
             "status": ["210", "220"],
-            "it": ["Услуги ИТ"],
+            "it": ["it"],
             "mode": "listing",
         },
         follow_redirects=False,
@@ -81,7 +81,7 @@ def test_scan_run_creates_scraperun_and_enqueues(client):
     assert amount_from == 300000
     assert amount_to == 1000000
     assert statuses == [210, 220]
-    assert its == ["Услуги ИТ"]
+    assert its == ["it"]
     assert listing_only is True
     assert with_docs is False
     assert with_llm is False

@@ -26,7 +26,7 @@ def test_admin_and_anon_see_everything():
 
 
 def test_empty_scope_means_no_restriction():
-    u = _user(regions=None, it_categories=[], min_amount=None)
+    u = _user(regions=None, categories=[], min_amount=None)
     assert scope_conditions(u) == []
     assert lot_in_scope(_lot(kato="751000000", plan_amount=None), u)
 
@@ -38,11 +38,11 @@ def test_regions_filter():
     assert len(scope_conditions(u)) == 1
 
 
-def test_it_categories_filter():
-    u = _user(it_categories=["software_dev"])
-    assert lot_in_scope(_lot(it_category="software_dev"), u)
-    assert not lot_in_scope(_lot(it_category="hardware"), u)
-    assert not lot_in_scope(_lot(it_category=None), u)
+def test_categories_filter():
+    u = _user(categories=["software_dev"])
+    assert lot_in_scope(_lot(category="software_dev"), u)
+    assert not lot_in_scope(_lot(category="hardware"), u)
+    assert not lot_in_scope(_lot(category=None), u)
 
 
 def test_min_amount_filter():
@@ -54,10 +54,10 @@ def test_min_amount_filter():
 
 
 def test_combined_scope_is_conjunction():
-    u = _user(regions=["751000000"], it_categories=["software_dev"], min_amount=1_000_000)
-    ok = _lot(kato="751000000", it_category="software_dev", plan_amount=5_000_000)
+    u = _user(regions=["751000000"], categories=["software_dev"], min_amount=1_000_000)
+    ok = _lot(kato="751000000", category="software_dev", plan_amount=5_000_000)
     assert lot_in_scope(ok, u)
     assert not lot_in_scope(
-        _lot(kato="431000000", it_category="software_dev", plan_amount=5_000_000), u
+        _lot(kato="431000000", category="software_dev", plan_amount=5_000_000), u
     )
     assert len(scope_conditions(u)) == 3
