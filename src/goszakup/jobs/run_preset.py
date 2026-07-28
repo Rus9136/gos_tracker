@@ -29,6 +29,7 @@ from ..scraper.modal_files import is_tz_like_name
 from ..scraper.search import ListingHit, SearchParams
 from ..scraper.statuses import is_actual
 from ..sources import DataSource, make_source
+from ..watchlist import should_analyze
 
 log = logging.getLogger(__name__)
 
@@ -240,11 +241,11 @@ def _apply_details(session: Session, lot: Lot, detail: AnnouncementDetail) -> No
 
 def _apply_enstru_code(session: Session, lot: Lot, source: DataSource) -> None:
     """Цифровой «Код ТРУ» на HTML-пути доступен только на карточке лота —
-    +1 запрос/лот. Тянем поэтому лишь для IT-лотов (как и LLM-шаг) и только
-    если ещё нет (API-источник обычно приносит код прямо в детали, см.
+    +1 запрос/лот. Тянем поэтому лишь для watchlist-лотов (как и LLM-шаг) и
+    только если ещё нет (API-источник обычно приносит код прямо в детали, см.
     _apply_details). Сбой не должен ронять прогон объявления — деградируем
     тихо (правило #7)."""
-    if not lot.category or lot.enstru_code:
+    if lot.enstru_code or not should_analyze(session, lot):
         return
     try:
         code = source.fetch_enstru_code(lot.announcement_id, lot.id)
@@ -506,12 +507,12 @@ def execute_search(
             session.commit()
 
             if run_llm:
-                # LLM-классификация только для лотов, прошедших IT-фильтр.
+                # LLM-классификация только для watchlist-лотов.
                 # Никаких goszakup-запросов отсюда — используем уже скачанные
                 # документы. Любая ошибка LLM не должна валить прогон.
                 analyzed: list[Lot] = []
                 for lot in lots:
-                    if not lot.category:
+                    if not should_analyze(session, lot):
                         continue
                     if analyze_and_save(session, lot):
                         stats.llm_analyzed += 1

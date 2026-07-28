@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from ..db.models import Announcement, Document, Lot, LotAnalysis
 from ..scraper.modal_files import is_tz_like_name
+from ..watchlist import should_analyze
 from .extractive_summary import extract_summary
 from .it import classify as _it_subcategory
 from .rules import CONFIDENCE_THRESHOLD, RULES_VERSION, classify_lot
@@ -518,7 +519,7 @@ def analyze_and_save(session: Session, lot: Lot, *, force: bool = False) -> bool
 
 def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
     # Вне watchlist LLM не вызываем — это pre-filter условие.
-    if not lot.category:
+    if not should_analyze(session, lot):
         return False
 
     announcement = lot.announcement

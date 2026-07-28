@@ -327,7 +327,9 @@ def reanalyze(
     with SessionLocal() as s:
         stmt = (
             select(Lot)
-            .where(Lot.category.isnot(None))
+            # SQL-зеркало watchlist.should_analyze (заглушка фазы A) —
+            # при смене предиката менять синхронно.
+            .where(Lot.category == "it")
             .options(
                 selectinload(Lot.customer),
                 selectinload(Lot.analysis),

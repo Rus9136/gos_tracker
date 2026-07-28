@@ -324,7 +324,7 @@
           <div class="card-title" style="color: var(--accent-hi)">LLM-анализ ТЗ</div>
           {% if lot.analysis %}<span class="badge accent">{{ lot.analysis.analysis_confidence or 'low' }}</span>{% endif %}
         </div>
-        {% if lot.category and has_downloaded_doc %}
+        {% if can_analyze and has_downloaded_doc %}
         <form method="post" action="/lot/{{ lot.id }}/analyze">
           <button type="submit" class="btn sm">{% if lot.analysis %}Перезапустить{% else %}Запустить{% endif %}</button>
         </form>
@@ -369,7 +369,7 @@
       </div>
       {% else %}
         <div class="dim">Лот ещё не проанализирован.
-          {% if not lot.category %}<br>Вне watchlist — анализ не запускается.
+          {% if not can_analyze %}<br>Вне watchlist — анализ не запускается.
           {% elif not has_downloaded_doc %}<br>Нужны документы — сначала нажмите «Загрузить документы».{% endif %}
         </div>
       </div>

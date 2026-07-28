@@ -100,6 +100,7 @@ from ..scraper.statuses import (
     status_tone,
 )
 from ..sources import make_source
+from ..watchlist import should_analyze
 from .auth import (
     NotAuthenticated,
     authenticate,
@@ -736,6 +737,9 @@ def lot_detail(
             "contracts": contracts,
             "bids": bids,
             "has_downloaded_doc": has_downloaded_doc,
+            # Гейт кнопки «Переанализировать»: _analyze_inner молча откажет
+            # лоту вне watchlist — не показываем кнопку, которая не сработает.
+            "can_analyze": should_analyze(db, lot),
             "analyze_status": analyze_status,
             "fetched_docs": fetched_docs,
             "fetch_error": fetch_error,

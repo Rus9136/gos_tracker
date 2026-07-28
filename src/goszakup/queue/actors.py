@@ -51,6 +51,7 @@ from ..jobs.run_preset import (
 )
 from ..scraper.search import SearchParams
 from ..sources import ApiSource, make_source, mark_api_degraded
+from ..watchlist import should_analyze
 
 # Импорты ниже регистрируют actor'ы в брокере (воркер грузит именно этот модуль).
 # Без них actor не зарегистрирован, и его задачи молча копятся в Redis независимо
@@ -561,7 +562,7 @@ def detail_actor(
                 session, run_id, details_fetched=1, new_documents=new_docs
             )
             if with_llm:
-                it_lot_ids = [lt.id for lt in lots if lt.category]
+                it_lot_ids = [lt.id for lt in lots if should_analyze(session, lt)]
     except Exception:
         log.exception("detail_actor failed for anno=%s run=%s", anno_id, run_id)
         with SessionLocal() as session:
