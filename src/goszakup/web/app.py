@@ -59,6 +59,7 @@ from ..db.models import (
     LotStatusHistory,
     Organization,
     Preset,
+    Role,
     ScrapeRun,
     Submission,
     User,
@@ -105,6 +106,7 @@ from .auth import (
     seed_admin_from_env,
 )
 from .deps import format_amount, format_compact, format_dt, format_iso, get_db
+from .pages import PAGE_KEYS, PAGES, allowed_pages, first_allowed_path, require_page
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -169,6 +171,8 @@ def _nav_active(request: Request) -> str:
         return "scan"
     if path.startswith("/submissions"):
         return "submissions"
+    if path.startswith("/roles"):
+        return "roles"
     if path.startswith("/users"):
         return "users"
     if path.startswith("/expenses"):
@@ -281,12 +285,13 @@ def _bust_nav_cache() -> None:
 
 
 def _base_ctx(request: Request, db: Session, user: User | None) -> dict:
-    """Общий контекст для всех шаблонов — версия, текущий пользователь и
-    nav-счётчики (в его scope)."""
+    """Общий контекст для всех шаблонов — версия, текущий пользователь,
+    nav-счётчики (в его scope) и разрешённые вкладки его роли."""
     return {
         "version": __version__,
         "user": user,
         "nav_counts": _nav_counts(db, user),
+        "perms": allowed_pages(user),
     }
 
 
@@ -445,6 +450,13 @@ def _render_lots(
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    # "/" — точка входа после логина, поэтому закрытый ролью дашборд не 403,
+    # а редирект на первую разрешённую вкладку (роль совсем без вкладок — 403).
+    if "dashboard" not in allowed_pages(user):
+        target = first_allowed_path(user)
+        if target is None:
+            raise HTTPException(403, "раздел недоступен для вашей роли")
+        return RedirectResponse(target, status_code=303)
     # scope пользователя — режем все лот-метрики дашборда под его регионы/
     # категории/сумму. Прогоны и счётчики org/doc остаются глобальными.
     scope = _scope_conditions(user)
@@ -573,7 +585,7 @@ def _maybe_int(s: str) -> int | None:
 def actual_lots(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("actual")),
     q: str = "",
     kato: str = "",
     it: str = "",
@@ -600,7 +612,7 @@ def actual_lots(
 def past_lots(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("past")),
     q: str = "",
     kato: str = "",
     it: str = "",
@@ -627,7 +639,7 @@ def past_lots(
 def starred_lots(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("starred")),
     q: str = "",
     kato: str = "",
     it: str = "",
@@ -891,7 +903,7 @@ def document_download(
 def organizations_list(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("organizations")),
     q: str = "",
     sort: str = "-total",
     page: int = 1,
@@ -964,7 +976,7 @@ def organization_detail(
     org_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("organizations")),
 ):
     org = db.get(Organization, org_id)
     if not org:
@@ -1156,7 +1168,7 @@ def _trigger_backfill(query_id: int) -> int | None:
 def queries_page(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("queries")),
 ):
     queries = db.scalars(
         select(UserQuery)
@@ -1185,7 +1197,7 @@ def query_create(
     name: str = Form(...),
     text: str = Form(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("queries")),
 ):
     name = name.strip() or "Без названия"
     text = text.strip()
@@ -1211,7 +1223,7 @@ def query_edit(
     name: str = Form(...),
     text: str = Form(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("queries")),
 ):
     q = _owned_query(db, query_id, user)
     new_text = text.strip()
@@ -1231,7 +1243,7 @@ def query_edit(
 def query_rematch(
     query_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("queries")),
 ):
     # Ручной повтор backfill'а: прогнать запрос по актуальным лотам в scope
     # прямо сейчас, не дожидаясь ночного forward-матчинга новых лотов.
@@ -1246,7 +1258,7 @@ def query_rematch(
 def query_toggle(
     query_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("queries")),
 ):
     q = _owned_query(db, query_id, user)
     q.active = not q.active
@@ -1258,7 +1270,7 @@ def query_toggle(
 def query_delete(
     query_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("queries")),
 ):
     q = _owned_query(db, query_id, user)
     db.delete(q)  # cascade удалит UserLotMatch
@@ -1271,7 +1283,7 @@ def matched_page(
     request: Request,
     query_id: int | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("matched")),
 ):
     """Подходящие лоты — чистый SQL по кешу UserLotMatch, без LLM."""
     # Выключенные запросы (active=False) в подбор не попадают: ни в фильтр,
@@ -1916,7 +1928,7 @@ def logout(request: Request):
 def settings_page(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("settings")),
     ok: str = "",
     error: str = "",
 ):
@@ -1940,7 +1952,7 @@ def settings_save(
     telegram_chat_id: str = Form(""),
     notify_telegram: str = Form(""),
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("settings")),
 ):
     chat_id = telegram_chat_id.strip()
     user.telegram_chat_id = chat_id or None
@@ -1954,7 +1966,7 @@ def settings_save(
 def settings_test(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_page("settings")),
 ):
     from ..notify.telegram import send_message
 
@@ -1981,6 +1993,14 @@ def _parse_scope_form(
     }
 
 
+def _role_id_or_none(db: Session, raw: str) -> int | None:
+    """'' или несуществующий id из формы → None (без роли = все вкладки)."""
+    rid = _maybe_int(raw)
+    if rid is None:
+        return None
+    return rid if db.get(Role, rid) is not None else None
+
+
 @app.get("/users", response_class=HTMLResponse)
 def users_list(
     request: Request,
@@ -1990,12 +2010,14 @@ def users_list(
     ok: str = "",
 ):
     users = db.scalars(select(User).order_by(User.id)).all()
+    roles = db.scalars(select(Role).order_by(Role.name)).all()
     return templates.TemplateResponse(
         request,
         "users.html",
         {
             **_base_ctx(request, db, user),
             "users": users,
+            "roles": roles,
             "regions": REGIONS,
             "it_categories": IT_CATEGORIES,
             "error": error,
@@ -2011,6 +2033,7 @@ def users_create(
     username: str = Form(...),
     password: str = Form(...),
     is_admin: str = Form(""),
+    role_id: str = Form(""),
     regions: list[str] = Form(default=[]),
     it_categories: list[str] = Form(default=[]),
     min_amount: str = Form(""),
@@ -2026,6 +2049,7 @@ def users_create(
             username=username,
             password_hash=hash_password(password),
             is_admin=(is_admin == "1"),
+            role_id=_role_id_or_none(db, role_id),
             is_active=True,
             **scope,
         )
@@ -2043,6 +2067,7 @@ def users_edit(
     password: str = Form(""),
     is_admin: str = Form(""),
     is_active: str = Form(""),
+    role_id: str = Form(""),
     regions: list[str] = Form(default=[]),
     it_categories: list[str] = Form(default=[]),
     min_amount: str = Form(""),
@@ -2054,6 +2079,7 @@ def users_edit(
     target.regions = scope["regions"]
     target.it_categories = scope["it_categories"]
     target.min_amount = scope["min_amount"]
+    target.role_id = _role_id_or_none(db, role_id)
     # Себя нельзя разжаловать/деактивировать — иначе можно потерять доступ.
     if target.id != user.id:
         target.is_admin = is_admin == "1"
@@ -2084,3 +2110,102 @@ def users_delete(
         db.delete(target)
         db.commit()
     return RedirectResponse("/users?ok=deleted", status_code=303)
+
+
+def _parse_role_form(name: str, pages: list[str]) -> tuple[str, list[str]] | None:
+    name = name.strip()
+    if not name:
+        return None
+    # Сохраняем в порядке реестра — чтобы список в UI был стабильным.
+    keys = [key for key, _, _ in PAGES if key in set(pages) & PAGE_KEYS]
+    return name, keys
+
+
+@app.get("/roles", response_class=HTMLResponse)
+def roles_list(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    error: str = "",
+    ok: str = "",
+):
+    roles = db.scalars(select(Role).order_by(Role.id)).all()
+    user_counts = dict(
+        db.execute(
+            select(User.role_id, func.count(User.id))
+            .where(User.role_id.is_not(None))
+            .group_by(User.role_id)
+        ).all()
+    )
+    return templates.TemplateResponse(
+        request,
+        "roles.html",
+        {
+            **_base_ctx(request, db, user),
+            "roles": roles,
+            "user_counts": user_counts,
+            "pages": PAGES,
+            "error": error,
+            "ok": ok,
+        },
+    )
+
+
+@app.post("/roles")
+def roles_create(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    name: str = Form(...),
+    pages: list[str] = Form(default=[]),
+):
+    parsed = _parse_role_form(name, pages)
+    if parsed is None:
+        return RedirectResponse("/roles?error=invalid", status_code=303)
+    name, keys = parsed
+    if db.scalar(select(Role).where(Role.name == name)) is not None:
+        return RedirectResponse("/roles?error=exists", status_code=303)
+    db.add(Role(name=name, pages=keys))
+    db.commit()
+    return RedirectResponse("/roles?ok=created", status_code=303)
+
+
+@app.post("/roles/{role_id}/edit")
+def roles_edit(
+    role_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    name: str = Form(...),
+    pages: list[str] = Form(default=[]),
+):
+    role = db.get(Role, role_id)
+    if role is None:
+        raise HTTPException(404, "роль не найдена")
+    parsed = _parse_role_form(name, pages)
+    if parsed is None:
+        return RedirectResponse("/roles?error=invalid", status_code=303)
+    new_name, keys = parsed
+    if new_name != role.name and db.scalar(select(Role).where(Role.name == new_name)):
+        return RedirectResponse("/roles?error=exists", status_code=303)
+    role.name = new_name
+    role.pages = keys
+    db.commit()
+    return RedirectResponse("/roles?ok=saved", status_code=303)
+
+
+@app.post("/roles/{role_id}/delete")
+def roles_delete(
+    role_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    role = db.get(Role, role_id)
+    if role is None:
+        return RedirectResponse("/roles", status_code=303)
+    # Удаление назначенной роли молча открыло бы её пользователям все вкладки
+    # (NULL = полный доступ) — заставляем сначала переназначить пользователей.
+    assigned = db.scalar(select(func.count(User.id)).where(User.role_id == role_id)) or 0
+    if assigned:
+        return RedirectResponse("/roles?error=in_use", status_code=303)
+    db.delete(role)
+    db.commit()
+    return RedirectResponse("/roles?ok=deleted", status_code=303)

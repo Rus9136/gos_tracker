@@ -64,6 +64,24 @@ JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
 TS_TYPE = DateTime(timezone=True)
 
 
+class Role(Base):
+    """Роль UI: какие пользовательские вкладки видит не-админ.
+
+    `pages` — список ключей вкладок из реестра `web/pages.PAGES`. Роль
+    ограничивает только видимость разделов UI (nav + роуты страниц);
+    scope данных (регионы/категории/сумма) остаётся на пользователе, а
+    системные вкладки — только за `is_admin`. Пользователь без роли видит
+    все пользовательские вкладки (поведение до ввода ролей).
+    """
+
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    pages: Mapped[list[str] | None] = mapped_column(JSON_TYPE)
+    created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+
+
 class User(Base):
     """Учётная запись для входа в UI.
 
@@ -87,6 +105,13 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="1", nullable=False
     )
+    # Роль UI (видимость вкладок). NULL = все пользовательские вкладки.
+    # lazy="joined" — роль нужна на каждом рендере (perms в _base_ctx),
+    # отдельный SELECT на запрос ни к чему.
+    role_id: Mapped[int | None] = mapped_column(
+        ForeignKey("roles.id", ondelete="SET NULL")
+    )
+    role: Mapped[Role | None] = relationship(Role, lazy="joined")
     # scope: список kato-кодов и IT-категорий; min_amount перекрывает
     # глобальный MIN_AMOUNT для этого пользователя.
     regions: Mapped[list[str] | None] = mapped_column(JSON_TYPE)

@@ -146,6 +146,7 @@ erDiagram
     lots ||--|| lot_analyses : "1:1"
     documents |o--o{ lot_analyses : "source_document_id"
     lots ||--o{ user_lot_matches : ""
+    roles |o--o{ users : "role_id"
     users ||--o{ user_queries : ""
     user_queries ||--o{ user_lot_matches : ""
     presets |o--o{ scrape_runs : ""
@@ -166,7 +167,9 @@ erDiagram
   **намеренно без FK** — лог переживает удаление сущностей и dev-админа
   uid=0).
 - **Пользователи и подбор**: `users` (scope-поля — фильтр на чтение,
-  правило #15; с лотами FK нет), `user_queries` (`version` инвалидирует
+  правило #15; с лотами FK нет), `roles` (видимость вкладок UI для
+  не-админов; `users.role_id`, NULL = все вкладки; реестр ключей —
+  `web/pages.py`), `user_queries` (`version` инвалидирует
   кеш), `user_lot_matches` (кеш матчей, `notified_at` — дедуп
   уведомлений).
 - **Операционные**: `presets`, `scrape_runs` (счётчики + heartbeat).
@@ -176,8 +179,9 @@ erDiagram
 
 ## 4. Веб-слой
 
-42 роута в `web/app.py`; авторизация — cookie-сессия, роли
-`require_user` / `require_admin` (правило #16), scope фильтрует чтение
+46 роутов в `web/app.py`; авторизация — cookie-сессия, зависимости
+`require_user` / `require_admin` (правило #16) + `require_page(key)`
+(вкладки по роли пользователя, `web/pages.py`), scope фильтрует чтение
 (правило #15).
 
 | Группа | Роуты | Роль |
@@ -191,7 +195,7 @@ erDiagram
 | Прогоны и ad-hoc | `/runs`, `/runs/{id}`, `/scan`, `/ingest`, `/presets`, `/expenses` | admin |
 | Автоподача | `/submissions` (admin); `POST /autosubmit/result` — машинный токен `X-Autosubmit-Token` | admin/машина |
 | Telegram | `POST /telegram/webhook` — машинный секрет заголовка | машина |
-| Auth и профиль | `/login`, `/logout`, `/settings` (+test), `/users` CRUD (admin) | публичный/user/admin |
+| Auth и профиль | `/login`, `/logout`, `/settings` (+test), `/users` CRUD (admin), `/roles` CRUD (admin — видимость вкладок для не-админов) | публичный/user/admin |
 
 ## 5. Источники данных и матрица OWS
 

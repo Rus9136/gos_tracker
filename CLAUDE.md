@@ -372,7 +372,16 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     (`fetch_documents`, `analyze`) только для админа. `GZ_USER`/`GZ_PASSWORD`
     теперь лишь **сид первого админа** через `seed_admin_from_env` (lifespan,
     срабатывает только при пустой `users`). Бутстрап из консоли —
-    `cli create-user --admin`.
+    `cli create-user --admin`. **Роли UI** (`Role`, `users.role_id`, вкладка
+    `/roles` у админа): роль = список ключей пользовательских вкладок из
+    реестра `web/pages.PAGES`; гейт — `require_page(key)` на роутах вкладки
+    (и её POST'ах) + скрытие пунктов сайдбара по `perms` из `_base_ctx`.
+    Без роли (NULL) — все пользовательские вкладки, админ роль игнорирует.
+    Системный раздел ролями НЕ раздаётся — только `is_admin` (галочка в
+    роли не должна уметь выдавать админ-права). Роль, назначенную
+    пользователям, удалить нельзя (иначе NULL молча открыл бы им всё).
+    Закрытый ролью дашборд — не 403, а редирект на первую разрешённую
+    вкладку ("/" — точка входа после логина).
 
 17. **Семантический подбор лотов (`UserQuery`/`UserLotMatch`) — кеш, LLM на
     UI не вызывается.** Пользователь пишет NL-запрос «какие лоты хочу»
@@ -608,6 +617,8 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   запуски — чтобы не нарушить Crawl-delay.
   Аутентификация: `/login` (GET/POST), `/logout`, CRUD `/users` (admin).
   `_scope_conditions`/`_lot_in_scope` — persona-scope (правило #15).
+- `web/pages.py` — реестр пользовательских вкладок (`PAGES`) + доступ по
+  роли: `allowed_pages(user)`, `require_page(key)` (правило #16, роли UI).
 - `web/auth.py` — bcrypt-хеши, `authenticate`, `get_current_user` из сессии,
   зависимости `require_user`/`require_admin`, `NotAuthenticated` (→ редирект
   на `/login`), `seed_admin_from_env` (сид первого админа из `GZ_USER`/
@@ -700,7 +711,9 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   (отчёт на Linux), `protocol.py`/`timing.py` (зеркало `autosubmit/`), `RECON.md`
   + `recon_dump.py` (снять данные с живого конкурса). Зависит только от
   httpx+playwright+pywinauto.
-- `db/models.py` — 15 таблиц. `Organization` — общая для customer/organizer/supplier.
+- `db/models.py` — 16 таблиц. `Organization` — общая для customer/organizer/supplier.
+  `Role` — видимость вкладок UI для не-админов (`users.role_id`, NULL = все;
+  правило #16).
   `LotBid` — заявка поставщика по лоту с ценой и статусом (правило #22); PK —
   `TrdAppLots.id` из API, поэтому пересинк обновляет строку, а не плодит дубли.
   `User` — учётка для входа (bcrypt-пароль, `is_admin`, scope-поля

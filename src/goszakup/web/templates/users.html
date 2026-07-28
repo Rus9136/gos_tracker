@@ -3,6 +3,18 @@
 {% block title %}Пользователи — Goszakup Tracker{% endblock %}
 {% block content %}
 
+{% macro role_field(u) %}
+  <div class="field">
+    <label>Роль (видимость вкладок; пусто — все вкладки)</label>
+    <select class="input" name="role_id">
+      <option value="">— без роли —</option>
+      {% for r in roles %}
+      <option value="{{ r.id }}" {% if u and u.role_id == r.id %}selected{% endif %}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endmacro %}
+
 {% macro scope_fields(u) %}
   <div class="field" style="grid-column: 1 / -1">
     <label>Регионы (пусто — все)</label>
@@ -85,11 +97,12 @@
         <label>Пароль (≥6)</label>
         <input class="input" type="text" name="password" required minlength="6">
       </div>
-      <div class="field" style="grid-column: 1 / -1">
+      <div class="field" style="display:flex; align-items:flex-end">
         <label class="flex items-center gap-2" style="cursor:pointer">
           <input type="checkbox" name="is_admin" value="1"> Администратор (видит всё, управляет пользователями)
         </label>
       </div>
+      {{ role_field(None) }}
       {{ scope_fields(None) }}
       <div style="grid-column: 1 / -1">
         <button type="submit" class="btn primary">{{ icon("check", 13) }} Создать</button>
@@ -117,7 +130,7 @@
       <tr>
         <td class="mono dim">{{ u.id }}</td>
         <td class="strong">{{ u.username }}{% if u.id == user.id %} <span class="dim">(вы)</span>{% endif %}</td>
-        <td>{% if u.is_admin %}<span class="badge">админ</span>{% else %}<span class="dim">юзер</span>{% endif %}</td>
+        <td>{% if u.is_admin %}<span class="badge">админ</span>{% elif u.role %}<span class="badge">{{ u.role.name }}</span>{% else %}<span class="dim">юзер</span>{% endif %}</td>
         <td>{% if u.is_active %}{{ icon("check", 14) }}{% else %}<span class="dim">{{ icon("x", 14) }}</span>{% endif %}</td>
         <td style="font-size:12px">
           {% if u.is_admin %}<span class="dim">— всё —</span>
@@ -147,6 +160,7 @@
                              {% if u.id == user.id %}disabled{% endif %}> активен
                     </label>
                   </div>
+                  {{ role_field(u) }}
                   {{ scope_fields(u) }}
                   <div style="grid-column: 1 / -1">
                     <button type="submit" class="btn primary">{{ icon("check", 13) }} Сохранить</button>

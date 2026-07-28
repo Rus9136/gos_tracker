@@ -1,0 +1,129 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% block title %}Роли — Goszakup Tracker{% endblock %}
+{% block content %}
+
+{% macro page_checkboxes(role) %}
+  <div class="field" style="grid-column: 1 / -1">
+    <label>Вкладки, доступные роли</label>
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px">
+      {% for key, label, path in pages %}
+      <label class="flex items-start gap-2" style="font-size:12px; cursor:pointer">
+        <input type="checkbox" name="pages" value="{{ key }}"
+               {% if role and role.pages and key in role.pages %}checked{% endif %}>
+        <span>{{ label }} <span class="dim mono">{{ path }}</span></span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+{% endmacro %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><span class="strong">Роли</span></div>
+    <h1 class="page-title">Роли <span class="dim">({{ roles|length }})</span></h1>
+    <div class="page-sub">
+      Роль ограничивает видимость вкладок для не-админов. Пользователь без
+      роли видит все пользовательские вкладки; системный раздел — только у
+      админов и ролями не раздаётся. Назначение роли — на странице
+      «Пользователи».
+    </div>
+  </div>
+</div>
+
+{% if error == "exists" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Роль с таким названием уже есть.</div>
+</div>
+{% elif error == "invalid" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Название роли обязательно.</div>
+</div>
+{% elif error == "in_use" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Роль назначена пользователям — сначала снимите её с них на странице «Пользователи».</div>
+</div>
+{% elif error %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">{{ error }}</div>
+</div>
+{% endif %}
+
+{% if ok %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--ok, var(--accent)) 30%, transparent)">
+  <div class="card-body" style="padding:12px 16px; color: var(--accent-hi)">Готово.</div>
+</div>
+{% endif %}
+
+<details class="card mb-3">
+  <summary class="card-body" style="cursor:pointer; padding:14px 16px; font-weight:600">
+    {{ icon("plus", 14) }} Создать роль
+  </summary>
+  <form method="post" action="/roles">
+    <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; border-top:1px solid var(--line)">
+      <div class="field">
+        <label>Название</label>
+        <input class="input" type="text" name="name" required placeholder="Например: Менеджер">
+      </div>
+      {{ page_checkboxes(None) }}
+      <div style="grid-column: 1 / -1">
+        <button type="submit" class="btn primary">{{ icon("check", 13) }} Создать</button>
+      </div>
+    </div>
+  </form>
+</details>
+
+<div class="card">
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:48px">#</th>
+        <th>Название</th>
+        <th>Вкладки</th>
+        <th style="width:130px">Пользователей</th>
+        <th style="width:90px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in roles %}
+      {% set labels = [] %}
+      {% for key, label, path in pages %}{% if r.pages and key in r.pages %}{% set _ = labels.append(label) %}{% endif %}{% endfor %}
+      <tr>
+        <td class="mono dim">{{ r.id }}</td>
+        <td class="strong">{{ r.name }}</td>
+        <td style="font-size:12px">
+          {% if labels %}{{ labels|join(', ') }}{% else %}<span class="dim">— ни одной —</span>{% endif %}
+        </td>
+        <td class="mono">{{ user_counts.get(r.id, 0) }}</td>
+        <td>
+          <details>
+            <summary class="btn sm" style="cursor:pointer">Изменить</summary>
+            <div class="card" style="position:absolute; z-index:30; margin-top:6px; width:560px; box-shadow:0 12px 40px rgba(0,0,0,.4)">
+              <form method="post" action="/roles/{{ r.id }}/edit">
+                <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr; gap:12px">
+                  <div class="field" style="grid-column: 1 / -1">
+                    <label>Название</label>
+                    <input class="input" type="text" name="name" required value="{{ r.name }}">
+                  </div>
+                  {{ page_checkboxes(r) }}
+                  <div style="grid-column: 1 / -1">
+                    <button type="submit" class="btn primary">{{ icon("check", 13) }} Сохранить</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </details>
+          <form method="post" action="/roles/{{ r.id }}/delete" style="display:inline"
+                onsubmit="return confirm('Удалить роль {{ r.name }}?')">
+            <button type="submit" class="btn sm" style="color:var(--bad)">{{ icon("x", 13) }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% endblock %}

@@ -27,46 +27,66 @@
     </a>
 
     <nav class="nav">
+      {% if 'dashboard' in perms or 'actual' in perms or 'past' in perms or 'starred' in perms or 'organizations' in perms %}
       <div class="nav-group-label">Тендеры</div>
+      {% endif %}
+      {% if 'dashboard' in perms %}
       <a href="/"             class="{{ 'active' if _active == 'dashboard' else '' }}">
         <span class="nav-ic">{{ icon("grid", 15) }}</span>
         <span class="nav-label">Дашборд</span>
       </a>
+      {% endif %}
+      {% if 'actual' in perms %}
       <a href="/actual"       class="{{ 'active' if _active == 'actual' else '' }}">
         <span class="nav-ic">{{ icon("flame", 15) }}</span>
         <span class="nav-label">Актуальные</span>
         <span class="nav-count">{{ _counts.actual }}</span>
       </a>
+      {% endif %}
+      {% if 'past' in perms %}
       <a href="/past"         class="{{ 'active' if _active == 'past' else '' }}">
         <span class="nav-ic">{{ icon("clock", 15) }}</span>
         <span class="nav-label">Прошедшие</span>
         <span class="nav-count">{{ _counts.past }}</span>
       </a>
+      {% endif %}
+      {% if 'starred' in perms %}
       <a href="/starred"      class="{{ 'active' if _active == 'starred' else '' }}">
         <span class="nav-ic">{{ icon("star", 15) }}</span>
         <span class="nav-label">Избранное</span>
         <span class="nav-count">{{ _counts.starred }}</span>
       </a>
+      {% endif %}
+      {% if 'organizations' in perms %}
       <a href="/organizations" class="{{ 'active' if _active == 'customers' else '' }}">
         <span class="nav-ic">{{ icon("list", 15) }}</span>
         <span class="nav-label">Заказчики</span>
         <span class="nav-count">{{ _counts.customers }}</span>
       </a>
+      {% endif %}
 
+      {% if 'matched' in perms or 'queries' in perms or 'settings' in perms %}
       <div class="nav-group-label">Подбор</div>
+      {% endif %}
+      {% if 'matched' in perms %}
       <a href="/matched"      class="{{ 'active' if _active == 'matched' else '' }}">
         <span class="nav-ic">{{ icon("sparkle", 15) }}</span>
         <span class="nav-label">Подходящие</span>
         <span class="nav-count">{{ _counts.matched }}</span>
       </a>
+      {% endif %}
+      {% if 'queries' in perms %}
       <a href="/queries"      class="{{ 'active' if _active == 'queries' else '' }}">
         <span class="nav-ic">{{ icon("search", 15) }}</span>
         <span class="nav-label">Мои запросы</span>
       </a>
+      {% endif %}
+      {% if 'settings' in perms %}
       <a href="/settings"     class="{{ 'active' if _active == 'settings' else '' }}">
         <span class="nav-ic">{{ icon("settings", 15) }}</span>
         <span class="nav-label">Настройки</span>
       </a>
+      {% endif %}
 
       {% if user and user.is_admin %}
       <div class="nav-group-label">Система</div>
@@ -99,6 +119,10 @@
         <span class="nav-ic">{{ icon("list", 15) }}</span>
         <span class="nav-label">Пользователи</span>
       </a>
+      <a href="/roles"        class="{{ 'active' if _active == 'roles' else '' }}">
+        <span class="nav-ic">{{ icon("settings", 15) }}</span>
+        <span class="nav-label">Роли</span>
+      </a>
       <a href="/expenses"     class="{{ 'active' if _active == 'expenses' else '' }}">
         <span class="nav-ic">{{ icon("grid", 15) }}</span>
         <span class="nav-label">Расходы LLM</span>
@@ -114,7 +138,7 @@
       </div>
       <div class="user-meta" style="min-width:0">
         <div class="user-name" style="overflow:hidden; text-overflow:ellipsis">{{ user.username if user else 'Гость' }}</div>
-        <div class="user-role">{{ 'админ' if user and user.is_admin else 'пользователь' }}</div>
+        <div class="user-role">{{ 'админ' if user and user.is_admin else (user.role.name if user and user.role else 'пользователь') }}</div>
       </div>
       <form method="post" action="/logout" style="margin-left:auto">
         <button class="icon-btn" type="submit" title="Выйти">{{ icon("external", 15) }}</button>
@@ -125,16 +149,20 @@
   <div class="col" style="min-width:0">
     <header class="topbar">
       <div class="topbar-inner">
+        {% if 'actual' in perms %}
         <form class="global-search" method="get" action="/actual">
           <span class="ic">{{ icon("search", 14) }}</span>
           <input name="q" placeholder="Поиск по лотам, БИН, заказчикам…" autocomplete="off">
           <span class="kbd">⌘K</span>
         </form>
+        {% endif %}
         <div class="topbar-right">
           {% if user and user.is_admin %}
           <a class="btn sm" href="/ingest">{{ icon("refresh", 12) }} Прогон</a>
           {% endif %}
+          {% if 'settings' in perms %}
           <a class="icon-btn" href="/settings" title="Уведомления в Telegram">{{ icon("bell", 15) }}</a>
+          {% endif %}
           {% if user and user.is_admin %}
           <a class="icon-btn" href="/presets" title="Preset'ы">{{ icon("settings", 15) }}</a>
           {% endif %}
