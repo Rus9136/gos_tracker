@@ -8,7 +8,7 @@
 (один на каждый из 20 регионов РК), хранит в SQLite, отдаёт FastAPI UI с
 фильтрами и отчётами. Данные общие (один скрейпинг на всех), но вход —
 **multi-user**: таблица `users`, форма `/login` + cookie-сессия, у каждого
-пользователя свой read-time **scope** (регионы / IT-категории / мин. сумма).
+пользователя свой read-time **scope** (регионы / вертикали / мин. сумма).
 Админ видит всё и управляет пользователями. Развёрнут на
 <https://gost.salemsoft.kz> (Linux + systemd + nginx, см. ниже раздел
 «Продакшн»). Может запускаться и под macOS как dev-окружение — launchd-агент
@@ -84,7 +84,7 @@ API. При добавлении актора, таблицы или фичи о
   стадии — `listing_actor` (одна выдача), `detail_actor` (одно объявление,
   4 таба + документы), `analyze_actor` (LLM по одному лоту). `daily_actor`
   — ежедневный entry-point. `ingest_actor` — ad-hoc по БИН.
-  **`scan_actor`** — ad-hoc по произвольным kato/amount/status/IT-категориям
+  **`scan_actor`** — ad-hoc по произвольным kato/amount/status/вертикалям
   из UI (`/scan`); умеет режимы `listing_only` / без LLM-документов / полный
   через флаги `with_docs`, `with_llm` (передаются дальше в `detail_actor`).
   Очереди именованы:
@@ -350,15 +350,17 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 
 15. **Multi-user поверх общих данных — изоляция read-time, НЕ на уровне БД.**
     Лоты в БД одни на всех (скрейпинг глобальный, по preset'ам/регионам).
-    «Scope» пользователя (`User.regions`/`it_categories`/`min_amount`) — это
+    «Scope» пользователя (`User.regions`/`categories`/`min_amount`) — это
     фильтр на чтение: `web/app._scope_conditions` добавляет `WHERE` к выборкам
     лотов на `/actual`, `/past`, `/starred`, дашборде и в счётчиках сайдбара;
     `_lot_in_scope` гейтит `/lot/{id}` (вне scope → 404). Админ
     (`User.is_admin`) и dev-аноним (`GZ_NO_AUTH=1`) видят всё — пустой список
     условий. НЕ привязывать лоты к пользователям через FK/M2M и НЕ трогать
-    пайплайн: scope живёт только в web-слое. Пустой `regions`/`it_categories`
+    пайплайн: scope живёт только в web-слое. Пустой `regions`/`categories`
     = «без ограничения по измерению», поэтому проверки `if user.regions:`
-    (а не `is not None`). Кеш счётчиков сайдбара (`_nav_cache`) ключуется по
+    (а не `is not None`). Нюанс миграции фазы A: не-админам с пустым scope
+    проставлено `['it']` — иначе после снятия IT-фильтра они увидели бы весь
+    рынок. Кеш счётчиков сайдбара (`_nav_cache`) ключуется по
     `uid` — у каждого scope свой, общий кеш дал бы протечку чисел.
 
 16. **Аутентификация — таблица `users`, НЕ env Basic Auth.** Пароли —
@@ -482,7 +484,7 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     `telegram_chat_id`, дедуп — Redis-ключ `goszakup:health:alerted` с TTL
     (`GZ_HEALTH_ALERT_COOLDOWN`), иначе за две недели прилетело бы 300+
     сообщений. Redis недоступен → шлём (лучше лишнее, чем тишина).
-    Диагностика такого сбоя по БД: у актуального IT-лота **нет строки** в
+    Диагностика такого сбоя по БД: у актуального watchlist-лота **нет строки** в
     `lot_analyses` (при ошибке LLM запись не создаётся намеренно — чтобы
     следующий прогон переанализировал). `analyzer_version='rules-v1-ru'` —
     НЕ признак сбоя: rule-based идёт до LLM и экономит вызов при
@@ -503,8 +505,10 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     время UTC+5; невалидный/истёкший токен = **404 «Invalid Route»**, не 401
     (ловится `OwsAuthError`); серверные фильтры — статусы/`amount:[от]`/
     customerBin, регион фильтруется клиентски по префиксу КАТО (2 цифры);
-    ЕНС ТРУ-имя = `Lots.nameRu`, код — из `Plans[].RefEnstru` (у свежих ЗЦП
-    плана нет → код добирает HTML-запрос subpriceoffer для IT-лотов). Каждый
+    ЕНС ТРУ-имя = `Lots.nameRu`, код — из `Plans[].RefEnstru` уже в листинге
+    (`ListingHit.enstru_code`, фаза A) — по нему `classify_vertical` ставит
+    вертикаль; у свежих ЗЦП плана нет → код приезжает с деталями (категория
+    NULL-дозаполняется), HTML-добор subpriceoffer — только watchlist. Каждый
     уход на фолбэк пишет WARNING + Redis-флаг `goszakup:api_degraded` — его
     видит health-check (плюс живой пинг OWS и предупреждение об истечении
     токена по `GZ_OWS_TOKEN_EXPIRES`). Откат: закомментировать `GZ_OWS_TOKEN`
@@ -586,6 +590,26 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     (`jobs/supplier_report.py`) — чистый SQL, admin-only, `?format=csv`
     для обзвона (BOM + `;` — под Excel).
 
+24. **Пайплайн хранит ВСЕ лоты (SaaS-пивот, фаза A) — дорогие стадии только
+    watchlist.** Вертикаль — `Lot.category`: слаг из реестра
+    `classify/verticals.py` (`classify_vertical`: код ЕНС ТРУ первичен,
+    keyword-фоллбэк вторичен), NULL = «прочее», лот всё равно хранится.
+    Категория присваивается один раз в `_upsert_lot_from_listing` и
+    NULL-дозаполняется в `_apply_details`, когда код приезжает с деталями;
+    НЕ перезаписывать присвоенную — смена задним числом дёргает scope
+    пользователей и watchlist. Документы и LLM гейтит
+    `watchlist.should_analyze` (фаза A — заглушка `category == 'it'`,
+    фаза C заменит на вертикали подписчиков ∪ пре-фильтры запросов);
+    SQL-зеркало предиката в `cli reanalyze` менять синхронно. `detail_actor`
+    детализирует все лоты (`detail_scope='all'`) только пока жив API-путь —
+    при Redis-флаге `goszakup:api_degraded` сам сужается до `'watchlist'`
+    (HTML на полном рынке — 20+ часов, математически не проходит).
+    Legacy-параметр `only_it_lots` — совместимость с in-flight сообщениями
+    деплоя фазы A, удалить в фазе B. Старые 4 русские IT-подкатегории
+    схлопнуты миграцией в слаг `it`; подкатегория для rules-prior и промптов
+    считается на лету через `classify/it.py` (промпты байт-в-байт прежние,
+    бампы версий не потребовались).
+
 ## Где что лежит
 
 - `sources.py` — абстракция DataSource (правило #21): `HtmlSource` (обёртка
@@ -604,8 +628,19 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 - `scraper/katos.py` — 20 регионов. Коды для Абайской/Жетысуской/Улытауской
   (333/191/351) проверены на форме goszakup, но могут отличаться от
   официального справочника КАТО.
-- `classify/it.py` — IT pre-filter: точное совпадение `enstru` (21 запись из
-  фактической выборки) + regex-фоллбэк по ключевым словам.
+- `classify/verticals.py` — публичный классификатор вертикалей (правило #24):
+  реестр `VERTICALS` (слаг/имя/префиксы КПВЭД/keywords),
+  `classify_vertical(enstru_code, enstru_name, lot_name)` — код первичен
+  (longest-prefix), keyword-фоллбэк вторичен (IT — через it.py).
+- `classify/it.py` — IT-подкатегории, внутренний хелпер (НЕ фильтр пайплайна):
+  точное совпадение `enstru` (32 записи) + regex-фоллбэк. Кормит
+  keyword-фоллбэк IT-вертикали, rules-prior и промпты LLM/matcher
+  (подкатегория считается на лету — 4 русских значения менять нельзя без
+  бампа ANALYZER_VERSION/MATCHER_VERSION).
+- `watchlist.py` — `should_analyze(session, lot)`: гейт дорогих стадий
+  (документы, LLM). Фаза A — заглушка `category == 'it'`; SQL-зеркало в
+  `cli reanalyze` менять синхронно. Отдельно от scope.py намеренно: scope —
+  изоляция пользователя, watchlist — экономика пайплайна.
 - `classify/llm.py` — LLM-классификатор ТЗ + чат по ТЗ. Pydantic-схема +
   Cerebras tool calling (OpenAI-формат, `strict: True`); модель — `gpt-oss-120b`
   по умолчанию; `reasoning_effort="low"` (задача структурная); ANALYZER_VERSION
@@ -627,7 +662,7 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   колонка «Короткое ТЗ» — берётся из `lot_analyses.tz_summary`,
   ограничена 3 строками через CSS `-webkit-line-clamp`.
   Страница **`/scan`** (`scan.html`) — форма ad-hoc прогона: регион,
-  amount, статусы, IT-категории, режим запуска (только листинг / без
+  amount, статусы, вертикали, режим запуска (только листинг / без
   LLM-документов / полный). POST `/scan/run` зовёт
   `jobs.scan.create_scan_run` (ScrapeRun stub), затем `scan_actor.send(...)`
   → 303 на `/runs/{id}`. Эта же `find_active_run` блокирует параллельные
@@ -643,11 +678,13 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 - `scraper/modal_files.py` — разворачивает кнопку «Перейти» через ajax,
   возвращает прямые ссылки на файлы на `v3bl`. Содержит публичный
   `is_tz_like_name(text)` — переиспользуется в `classify/llm.pick_tz_document`.
-- `jobs/run_preset.py` — пайплайн. Двухфазный: сначала listing+upsert stub'ов,
-  потом details для новых/сменивших статус. IT-фильтр применяется на фазе 1.
-  В фазе 2 `_save_documents` сначала качает прямые `<a href>`, затем для
-  строк за «Перейти» проверяет `is_tz_like_name` и разворачивает modal.
-  LLM-шаг — следом, только для лотов с `it_category`. Флаг `listing_only`
+- `jobs/run_preset.py` — пайплайн. Двухфазный: сначала listing+upsert stub'ов
+  ВСЕХ лотов (вертикаль ставит `classify_vertical` в upsert'е; сужение по
+  `Preset.categories` — только если preset их задал), потом details для
+  новых/сменивших статус. В фазе 2 `_save_documents` качается только при
+  watchlist-лотах объявления: сначала прямые `<a href>`, затем для строк за
+  «Перейти» проверяет `is_tz_like_name` и разворачивает modal.
+  LLM-шаг — следом, только для `should_analyze`-лотов. Флаг `listing_only`
   на `execute_search`/`run_preset` (и CLI `run-once --listing-only`)
   останавливается после фазы 1 — нужен для ad-hoc стабования по большим
   выборкам, когда details ходить дорого/нежелательно.
@@ -679,7 +716,7 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   сценарий: `/ingest` по БИН (услуги, годы, завершённые статусы) → дождаться
   прогона → кнопка «Отчёт по закупкам» на странице организации.
 - `jobs/scan.py` — `create_scan_run(...)` для UI `/scan`. Собирает
-  человекочитаемый `note` (регион, диапазон сумм, статусы, IT-категории,
+  человекочитаемый `note` (регион, диапазон сумм, статусы, вертикали,
   режим), проверяет `find_active_run`, создаёт `ScrapeRun(preset_id=NULL)`.
   Режимы (`MODE_LISTING` / `MODE_NO_HEAVY` / `MODE_FULL`) преобразуются в
   тройку флагов `(listing_only, with_docs, with_llm)` через `mode_flags`.
@@ -735,7 +772,7 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   `LotBid` — заявка поставщика по лоту с ценой и статусом (правило #22); PK —
   `TrdAppLots.id` из API, поэтому пересинк обновляет строку, а не плодит дубли.
   `User` — учётка для входа (bcrypt-пароль, `is_admin`, scope-поля
-  `regions`/`it_categories`/`min_amount`); данные с лотами не связаны FK
+  `regions`/`categories`/`min_amount`); данные с лотами не связаны FK
   (изоляция read-time, правило #15).
   `LotAnalysis` — 1:1 к `Lot` через FK + UniqueConstraint.
   `UserQuery`/`UserLotMatch` — семантический подбор (правило #17); матчи
@@ -759,7 +796,7 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   `os.environ.get(...)`.
 - `scripts/reanalyze_actual_it.py` — одноразовый скрипт для массового
   переанализа после смены `ANALYZER_VERSION`. Идёт по всем актуальным
-  IT-лотам, у которых нет анализа с текущей версией; 1.5с pacing между
+  watchlist-лотам, у которых нет анализа с текущей версией; 1.5с pacing между
   запросами, чтобы держать Cerebras под лимитом.
 - `scripts/backfill_start_dates.py` — бэкофилл `Announcement.application_start`
   пачками по 200 (`TrdBuy.id` принимает массив). По умолчанию только

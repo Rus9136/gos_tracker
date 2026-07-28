@@ -3,11 +3,12 @@
 Обзорная карта: фичи и связи между ними, конвейер данных, модель БД,
 веб-слой и матрица возможностей OWS API. Документ отвечает на вопрос
 «что где и как связано»; ответы на вопрос «почему именно так» живут в
-CLAUDE.md (архитектурные правила #1–#22) — здесь на них только ссылки
+CLAUDE.md (архитектурные правила #1–#24) — здесь на них только ссылки
 вида «правило #N». При добавлении актора, таблицы или фичи — обновить
 соответствующий раздел здесь.
 
-Снимок соответствует коду на 2026-07-27.
+Снимок соответствует коду на 2026-07-28 (фаза A SaaS-пивота: храним все
+лоты, вертикали, watchlist).
 
 ## 1. Карта фич
 
@@ -15,7 +16,10 @@ CLAUDE.md (архитектурные правила #1–#22) — здесь н
 flowchart TD
     OWS[OWS API GraphQL/REST] --> INGEST
     HTML[HTML-скрейпинг v3bl] --> INGEST
-    INGEST[Инжест лотов и объявлений<br/>правило 21] --> DOCS[Загрузка документов ТЗ<br/>правило 3]
+    INGEST[Инжест ВСЕХ лотов и объявлений<br/>правила 21, 24] --> DOCS[Загрузка документов ТЗ<br/>правило 3]
+    INGEST --> VERT[Вертикаль лота<br/>classify_vertical, правило 24]
+    WATCH[Watchlist should_analyze<br/>правило 24] -.гейтит.-> DOCS
+    WATCH -.гейтит.-> LLM
     INGEST --> EXPIRE[Актуальность лотов<br/>правило 12]
     INGEST --> BIDS[Заявки поставщиков с ценами<br/>правило 22]
     INGEST --> CONTRACTS[Договоры и победители]
@@ -47,6 +51,9 @@ flowchart TD
 - **Ретроспектива цен зависит от дедлайна**: заявки видны в API только
   после окончания приёма (правило #22), поэтому `bids_sync` идёт от своих
   объявлений с прошедшим дедлайном, а не по окну дат.
+- **Дорогие стадии зависят от watchlist**: документы и LLM-анализ идут
+  только для лотов `watchlist.should_analyze` (фаза A — вертикаль `it`);
+  остальной рынок хранится как листинг+детали без ТЗ.
 - **Scope пронизывает чтение и fan-out**: `scope.py` используется и
   веб-слоем (фильтры выборок, гейт карточки), и матчингом (pre-filter до
   постановки в очередь).
@@ -106,7 +113,7 @@ flowchart LR
 |---|---|---|
 | `goszakup_daily` | `daily_actor`, `api_daily_actor`, `contracts_sync_actor`, `bids_sync_actor`, `expire_actor`, `reconcile_actor` | оркестрация ежедневного цикла и служебные синки |
 | `goszakup_listing` | `listing_actor`, `ingest_actor`, `scan_actor` | обход выдачи (preset / БИН / ad-hoc форма) |
-| `goszakup_detail` | `detail_actor` | одно объявление: детали, договоры, документы |
+| `goszakup_detail` | `detail_actor` | одно объявление: детали, договоры; документы — только watchlist. `detail_scope` 'all'/'watchlist', при `api_degraded` сам сужается (правило #24) |
 | `goszakup_llm` | `analyze_actor` | LLM-анализ одного лота |
 | `goszakup_matching` | `match_actor` | матч пары (запрос × лот) |
 | `goszakup_notify` | `notify_actor`, `explain_actor` | Telegram: уведомление о матче, объяснение лота |
@@ -157,7 +164,8 @@ erDiagram
 
 - **Ядро закупок**: `organizations` (одно лицо во всех ролях — заказчик /
   организатор / поставщик), `announcements` (PK = anno_id с сайта),
-  `lots` (PK = lot_id, центральная таблица), `lot_status_history`,
+  `lots` (PK = lot_id, центральная таблица; `category` — слаг вертикали,
+  NULL = «прочее», правило #24), `lot_status_history`,
   `documents` (sha256 + simhash для дедупа шаблонных ТЗ), `contracts`
   (уникальность `(lot_id, contract_number)` — два писателя: HTML detail и
   API-синк), `lot_bids` (PK = `TrdAppLots.id` из API — пересинк
@@ -166,7 +174,8 @@ erDiagram
   `reused_from_lot_id` при дедупе по simhash), `llm_calls` (учёт расходов;
   **намеренно без FK** — лог переживает удаление сущностей и dev-админа
   uid=0).
-- **Пользователи и подбор**: `users` (scope-поля — фильтр на чтение,
+- **Пользователи и подбор**: `users` (scope-поля `regions`/`categories`/
+  `min_amount` — фильтр на чтение,
   правило #15; с лотами FK нет), `roles` (видимость вкладок UI для
   не-админов; `users.role_id`, NULL = все вкладки; реестр ключей —
   `web/pages.py`), `user_queries` (`version` инвалидирует
