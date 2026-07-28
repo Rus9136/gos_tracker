@@ -4,7 +4,7 @@
 
   daily_actor() ──> listing_actor(preset_id) ──> detail_actor(anno_id, run_id) ──> analyze_actor(lot_id, run_id)
        │                  │                              │
-       │                  │                              ├─ Если есть IT-лоты — enqueue analyze_actor.
+       │                  │                              ├─ Если есть watchlist-лоты — enqueue analyze_actor.
        │                  │                              └─ Decrement pending-counter; если 0 → закрыть run.
        │                  │
        │                  └─ Создаёт ScrapeRun, walks listing, ставит detail_actor для каждого нового/changed anno.
@@ -32,8 +32,8 @@ import redis
 from sqlalchemy import select, update
 
 from ..api.client import OwsApiError, OwsClient
-from ..classify.it import classify
 from ..classify.llm import analyze_and_save
+from ..classify.verticals import classify_vertical
 from ..config import MIN_AMOUNT, OWS_TOKEN
 from ..db.engine import SessionLocal
 from ..db.models import Lot, Preset, ScrapeRun
@@ -50,7 +50,7 @@ from ..jobs.run_preset import (
     _upsert_lot_from_listing,
 )
 from ..scraper.search import SearchParams
-from ..sources import ApiSource, make_source, mark_api_degraded
+from ..sources import API_DEGRADED_KEY, ApiSource, make_source, mark_api_degraded
 from ..watchlist import should_analyze
 
 # Импорты ниже регистрируют actor'ы в брокере (воркер грузит именно этот модуль).
@@ -320,10 +320,8 @@ def api_daily_actor() -> None:
                 status_codes=status_codes, amount_from=amount_from,
             ):
                 listing_count += 1
-                # Проект только про IT: не-IT лоты не храним и не парсим вообще.
-                cat = classify(hit.enstru, hit.lot_name)
-                if cat is None:
-                    continue
+                # SaaS-пивот (фаза A): храним ВСЕ лоты, вертикаль
+                # проставляет _upsert_lot_from_listing (classify_vertical).
                 _upsert_lot_from_listing(
                     session, hit, kato=region,
                     on_new=new_hits, on_status_change=status_changes,
@@ -452,13 +450,12 @@ def listing_actor(preset_id: int) -> None:
         try:
             for hit in source.iter_listing(params):
                 listing_count += 1
-                # Проект только про IT: не-IT лоты не храним и не парсим вообще.
-                # Интерим фазы A (WP3): сравнение уже в слагах вертикалей.
-                cat = "it" if classify(hit.enstru, hit.lot_name) else None
-                if cat is None:
-                    continue
-                if categories and cat not in categories:
-                    continue
+                # SaaS-пивот (фаза A): храним ВСЕ лоты. Сужение по
+                # вертикалям — только если preset их задал.
+                if categories:
+                    cat = classify_vertical(hit.enstru_code, hit.enstru, hit.lot_name)
+                    if cat not in categories:
+                        continue
                 _upsert_lot_from_listing(
                     session, hit, kato=params.kato,
                     on_new=new_hits, on_status_change=status_changes,
@@ -496,6 +493,20 @@ def listing_actor(preset_id: int) -> None:
             detail_actor.send(anno_id, run_id)
 
 
+def _normalize_detail_scope(
+    detail_scope: str | bool, only_it_lots: bool | None
+) -> str:
+    """Совместимость с in-flight сообщениями на момент деплоя фазы A:
+    старый бул `only_it_lots` мог приехать и позиционно (5-й аргумент —
+    попадает в detail_scope), и kwarg'ом (ingest/scan слали
+    only_it_lots=False). Удалить вместе с параметром в фазе B."""
+    if isinstance(detail_scope, bool):
+        detail_scope = "watchlist" if detail_scope else "all"
+    if only_it_lots is not None:
+        detail_scope = "watchlist" if only_it_lots else "all"
+    return detail_scope
+
+
 @dramatiq.actor(
     queue_name="goszakup_detail",
     max_retries=3,
@@ -508,40 +519,55 @@ def detail_actor(
     run_id: int,
     with_docs: bool = True,
     with_llm: bool = True,
-    only_it_lots: bool = True,
+    detail_scope: str = "all",
+    only_it_lots: bool | None = None,
 ) -> None:
-    """Fetch деталей одного объявления, save в БД, enqueue LLM для IT-лотов.
+    """Fetch деталей одного объявления, save в БД, enqueue LLM для watchlist.
 
     Флаги `with_docs` / `with_llm` управляют тяжёлыми побочками — нужны
     для ad-hoc сканирования (`scan_actor`), где обычно хочется получить
     organizer/контакты, но не качать пачки PDF и не дёргать Cerebras.
+    Документы при этом качаются только когда у объявления есть хотя бы один
+    watchlist-лот — ТЗ всего рынка не тянем (SaaS-пивот, фаза A).
 
-    `only_it_lots=True` (default для daily-прогонов): пропускаем announcement'ы,
-    у которых в БД нет ни одного лота с category. Это даёт ~10× ускорения
-    фазы 2 для общереспубликанских прогонов, где IT ≈ 9% от всех лотов.
-    `scan_actor`/`ingest_actor` передают False — там фильтрация не нужна.
+    `detail_scope`: 'all' (default — детализируем все лоты, это дёшево через
+    OWS API) | 'watchlist' (пропускаем announcement'ы без watchlist-лотов —
+    режим экономии для HTML-пути). При Redis-флаге `api_degraded` актор сам
+    деградирует 'all' → 'watchlist': HTML-фолбэк на полном рынке
+    математически не проходит (20+ часов при Crawl-delay 5с).
     """
     r = _redis_client()
+    detail_scope = _normalize_detail_scope(detail_scope, only_it_lots)
 
     # Heartbeat в начале каждой попытки: даже если details уезжают в ретрай
     # с backoff'ом (до 10 мин), reaper не сочтёт run зависшим — он живой.
     with SessionLocal() as session:
         _touch_run(session, run_id)
 
-    if only_it_lots:
+    if detail_scope == "all" and r is not None:
+        try:
+            if r.get(API_DEGRADED_KEY):
+                log.warning(
+                    "detail_actor: api_degraded — сужаюсь до watchlist (anno=%s)",
+                    anno_id,
+                )
+                detail_scope = "watchlist"
+        except Exception:  # noqa: BLE001 — Redis best-effort
+            pass
+
+    if detail_scope == "watchlist":
         with SessionLocal() as session:
-            has_it = session.execute(
-                select(Lot.id)
-                .where(Lot.announcement_id == anno_id, Lot.category.is_not(None))
-                .limit(1)
-            ).first() is not None
-        if not has_it:
+            lots = session.scalars(
+                select(Lot).where(Lot.announcement_id == anno_id)
+            ).all()
+            has_watch = any(should_analyze(session, lt) for lt in lots)
+        if not has_watch:
             _decrement_pending_and_maybe_close(r, run_id)
             return
 
     source = make_source(r)
 
-    it_lot_ids: list[int] = []
+    watch_lot_ids: list[int] = []
     try:
         with SessionLocal() as session:
             detail = source.fetch_announcement(anno_id)
@@ -555,14 +581,17 @@ def detail_actor(
             lots_by_number = {lt.number: lt for lt in lots if lt.number}
             _save_contracts(session, lots_by_number, detail)
             new_docs = 0
-            if with_docs:
+            # Docs — только при watchlist-лотах (после _apply_details:
+            # категории уже дозаполнены кодом из деталей). Иначе при
+            # detail_scope='all' качали бы ТЗ всего рынка.
+            if with_docs and any(should_analyze(session, lt) for lt in lots):
                 new_docs = _save_documents(session, anno, detail, source)
             session.commit()
             _increment_run(
                 session, run_id, details_fetched=1, new_documents=new_docs
             )
             if with_llm:
-                it_lot_ids = [lt.id for lt in lots if should_analyze(session, lt)]
+                watch_lot_ids = [lt.id for lt in lots if should_analyze(session, lt)]
     except Exception:
         log.exception("detail_actor failed for anno=%s run=%s", anno_id, run_id)
         with SessionLocal() as session:
@@ -580,7 +609,7 @@ def detail_actor(
         _decrement_pending_and_maybe_close(r, run_id)
         return
 
-    for lot_id in it_lot_ids:
+    for lot_id in watch_lot_ids:
         analyze_actor.send(lot_id, run_id)
     _decrement_pending_and_maybe_close(r, run_id)
 
@@ -673,8 +702,8 @@ def ingest_actor(
     _set_pending(r, run_id, len(targets))
     for anno_id in targets:
         # ingest по БИН — пользователь явно хочет все лоты этого заказчика,
-        # включая не-IT. only_it_lots=False обходит IT-skip-guard в detail_actor.
-        detail_actor.send(anno_id, run_id, only_it_lots=False)
+        # включая вне watchlist: ingest по БИН должен видеть всё.
+        detail_actor.send(anno_id, run_id, detail_scope="all")
 
 
 # === Ad-hoc сканирование (UI: /scan) — kato/amount/status/IT-категории ===
@@ -726,8 +755,7 @@ def scan_actor(
             for hit in source.iter_listing(params):
                 listing_count += 1
                 if categories:
-                    # Интерим фазы A (WP3): UI шлёт слаги вертикалей.
-                    cat = "it" if classify(hit.enstru, hit.lot_name) else None
+                    cat = classify_vertical(hit.enstru_code, hit.enstru, hit.lot_name)
                     if cat not in categories:
                         continue
                 _upsert_lot_from_listing(
@@ -769,7 +797,7 @@ def scan_actor(
         # scan по UI: пользователь сам выбрал IT-категории в форме — если
         # хочет non-IT, он указал categories=[] и листинг уже это
         # пропустил. На уровне detail не фильтруем — не сужаем ad-hoc-запрос.
-        detail_actor.send(anno_id, run_id, with_docs, with_llm, only_it_lots=False)
+        detail_actor.send(anno_id, run_id, with_docs, with_llm, detail_scope="all")
 
 
 def _walk_listing(

@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..classify.it import classify
 from ..classify.llm import analyze_and_save
+from ..classify.verticals import classify_vertical
 from ..db.engine import SessionLocal, init_db
 from ..db.models import (
     Announcement,
@@ -188,9 +188,7 @@ def _upsert_lot_from_listing(
     # API-листинг несёт цифровой код ЕНС ТРУ; не затираем добытое деталями.
     lot.enstru_code = hit.enstru_code or lot.enstru_code
     if not lot.category:
-        # Интерим фазы A (WP3): пайплайн ещё фильтрует IT, значение — слаг.
-        # WP5 заменит на classify_vertical по всем вертикалям.
-        lot.category = "it" if classify(lot.enstru, lot.name) else None
+        lot.category = classify_vertical(lot.enstru_code, lot.enstru, lot.name)
     session.flush()
 
     if is_new or prev_status != new_status_code:
@@ -225,6 +223,11 @@ def _apply_details(session: Session, lot: Lot, detail: AnnouncementDetail) -> No
             lot.customer_id = cust.id
     lot.extra = matched.extra or lot.extra
     lot.enstru_code = matched.enstru_code or lot.enstru_code
+    # Код ЕНС ТРУ мог приехать только с деталями (свежие ЗЦП без плана в
+    # листинге) — дозаполняем вертикаль. Только NULL→значение: смена уже
+    # присвоенной категории задним числом дёргала бы scope и watchlist.
+    if lot.category is None and lot.enstru_code:
+        lot.category = classify_vertical(lot.enstru_code, lot.enstru, lot.name)
     lot.price_per_unit = matched.price_per_unit or lot.price_per_unit
     lot.quantity = matched.quantity if matched.quantity is not None else lot.quantity
     lot.unit = matched.unit or lot.unit
@@ -454,13 +457,12 @@ def execute_search(
     try:
         for hit in source.iter_listing(params, max_pages=max_pages):
             stats.listing_count += 1
-            # Проект только про IT: не-IT лоты не храним и не парсим вообще.
-            # Интерим фазы A (WP3): сравнение уже в слагах вертикалей.
-            cat = "it" if classify(hit.enstru, hit.lot_name) else None
-            if cat is None:
-                continue
-            if categories and cat not in categories:
-                continue
+            # SaaS-пивот (фаза A): храним ВСЕ лоты, вертикаль проставит
+            # upsert. Сужение по вертикалям — только если preset их задал.
+            if categories:
+                cat = classify_vertical(hit.enstru_code, hit.enstru, hit.lot_name)
+                if cat not in categories:
+                    continue
             _upsert_lot_from_listing(
                 session,
                 hit,
@@ -502,7 +504,9 @@ def execute_search(
                 _apply_enstru_code(session, lot, source)
             _save_contracts(session, lots_by_number, detail)
 
-            if download_docs:
+            # Docs — только при watchlist-лотах (SaaS-пивот, фаза A):
+            # ТЗ всего рынка не качаем, категории уже дозаполнены деталями.
+            if download_docs and any(should_analyze(session, lt) for lt in lots):
                 stats.new_documents += _save_documents(session, anno, detail, source)
             session.commit()
 
