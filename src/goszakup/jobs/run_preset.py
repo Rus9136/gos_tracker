@@ -184,6 +184,8 @@ def _upsert_lot_from_listing(
     # лот без региона невидим пользователям с регионами.
     lot.kato = kato or lot.kato
     lot.url = hit.announcement_url or lot.url
+    # API-листинг несёт цифровой код ЕНС ТРУ; не затираем добытое деталями.
+    lot.enstru_code = hit.enstru_code or lot.enstru_code
     if not lot.it_category:
         lot.it_category = classify(lot.enstru, lot.name)
     session.flush()

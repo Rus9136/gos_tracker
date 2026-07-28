@@ -107,8 +107,9 @@ def test_listing_hit_fields():
     assert hit.plan_amount == lot["amount"]
     assert hit.customer_name == lot["customerNameRu"]
     assert hit.method == lot["RefTradeMethods"]["nameRu"]
-    # ЕНС ТРУ: из Plans, когда план проиндексирован.
+    # ЕНС ТРУ: из Plans, когда план проиндексирован — имя и цифровой код.
     assert hit.enstru == lot["Plans"][0]["RefEnstru"]["nameRu"]
+    assert hit.enstru_code == lot["Plans"][0]["RefEnstru"]["code"]
 
 
 def test_enstru_fallback_to_lot_name():
@@ -116,6 +117,7 @@ def test_enstru_fallback_to_lot_name():
     lot = next(l for l in _lots_listing() if not l["Plans"])
     hit = listing_hit_from_lot(lot)
     assert hit.enstru == lot["nameRu"]
+    assert hit.enstru_code == ""
 
 
 def test_enstru_code_in_lot_detail():

@@ -105,7 +105,7 @@ def _lot_enstru(lot: dict) -> tuple[str, str | None]:
 
 
 def listing_hit_from_lot(lot: dict) -> ListingHit:
-    enstru_name, _ = _lot_enstru(lot)
+    enstru_name, enstru_code = _lot_enstru(lot)
     anno_id = int(lot.get("trdBuyId") or 0)
     amount = lot.get("amount")
     return ListingHit(
@@ -123,6 +123,7 @@ def listing_hit_from_lot(lot: dict) -> ListingHit:
         method=(lot.get("RefTradeMethods") or {}).get("nameRu") or "",
         status_name=_lot_status_name(lot.get("refLotStatusId")),
         trd_buy_id=str(anno_id or ""),
+        enstru_code=enstru_code or "",
     )
 
 

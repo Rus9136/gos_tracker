@@ -39,6 +39,9 @@ class ListingHit:
     method: str
     status_name: str
     trd_buy_id: str = ""
+    # Цифровой код ЕНС ТРУ: API-путь отдаёт его из Plans[].RefEnstru прямо в
+    # листинге, HTML-листинг — никогда (там только имя, поэтому дефолт "").
+    enstru_code: str = ""
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
