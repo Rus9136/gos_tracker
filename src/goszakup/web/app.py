@@ -19,7 +19,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import case, delete, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
@@ -90,6 +90,7 @@ from ..jobs.supplier_report import (
     render_csv as render_suppliers_csv,
 )
 from ..observability import setup_sentry
+from ..prefilter import PrefilterError, lot_passes_prefilter, normalize_prefilter
 from ..scope import lot_in_scope, scope_conditions
 from ..scraper.katos import BY_CODE, REGIONS, region_name
 from ..scraper.statuses import (
@@ -100,7 +101,7 @@ from ..scraper.statuses import (
     status_tone,
 )
 from ..sources import make_source
-from ..watchlist import should_analyze
+from ..watchlist import invalidate_watchlist_cache
 from .auth import (
     NotAuthenticated,
     authenticate,
@@ -302,6 +303,10 @@ def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
 
 def _bust_nav_cache() -> None:
     _nav_cache.clear()
+    # Вертикали пользователя — половина watchlist'а (правило #24), поэтому
+    # правка scope/учёток сбрасывает и его кеш. У воркера кеш свой, он
+    # подхватит изменение в течение watchlist.CACHE_TTL.
+    invalidate_watchlist_cache()
 
 
 def _base_ctx(request: Request, db: Session, user: User | None) -> dict:
@@ -744,9 +749,11 @@ def lot_detail(
             "contracts": contracts,
             "bids": bids,
             "has_downloaded_doc": has_downloaded_doc,
-            # Гейт кнопки «Переанализировать»: _analyze_inner молча откажет
-            # лоту вне watchlist — не показываем кнопку, которая не сработает.
-            "can_analyze": should_analyze(db, lot),
+            # Кнопка «Переанализировать» — только админу (роут под
+            # require_admin), зато на любом лоте: force=True минует
+            # watchlist-гейт, иначе админ с пустым scope не смог бы
+            # проанализировать ничего.
+            "can_analyze": user.is_admin,
             "analyze_status": analyze_status,
             "fetched_docs": fetched_docs,
             "fetch_error": fetch_error,
@@ -1190,6 +1197,42 @@ def _trigger_backfill(query_id: int) -> int | None:
         return None
 
 
+def _parse_prefilter_form(
+    categories: list[str], code_prefixes: str, keywords: str, max_amount: str
+) -> dict | None:
+    """Форма → `UserQuery.compiled_filters`. PrefilterError ловит вызывающий."""
+    return normalize_prefilter(
+        {
+            "categories": categories,
+            "code_prefixes": code_prefixes,
+            "keywords": keywords,
+            "max_amount": _maybe_int(max_amount),
+        }
+    )
+
+
+def _drop_stale_matches(db: Session, q: UserQuery) -> None:
+    """Убрать матчи, которые новый (суженный) пре-фильтр больше не пропускает.
+
+    Иначе на «Подходящих» висят лоты, которые пользователь только что
+    исключил, а перематчить их нечем: сам матч валиден по версиям.
+    """
+    if not q.compiled_filters:
+        return
+    rows = db.execute(
+        select(UserLotMatch.id, Lot)
+        .join(Lot, UserLotMatch.lot_id == Lot.id)
+        .where(UserLotMatch.user_query_id == q.id)
+    ).all()
+    stale = [
+        match_id
+        for match_id, lot in rows
+        if not lot_passes_prefilter(q.compiled_filters, lot)
+    ]
+    if stale:
+        db.execute(delete(UserLotMatch).where(UserLotMatch.id.in_(stale)))
+
+
 @app.get("/queries", response_class=HTMLResponse)
 def queries_page(
     request: Request,
@@ -1214,7 +1257,13 @@ def queries_page(
     return templates.TemplateResponse(
         request,
         "queries.html",
-        {**_base_ctx(request, db, user), "queries": queries, "match_counts": counts},
+        {
+            **_base_ctx(request, db, user),
+            "queries": queries,
+            "match_counts": counts,
+            "verticals": CATEGORY_CHOICES,
+            "vertical_labels": VERTICAL_LABELS,
+        },
     )
 
 
@@ -1222,6 +1271,10 @@ def queries_page(
 def query_create(
     name: str = Form(...),
     text: str = Form(...),
+    categories: list[str] = Form(default=[]),
+    code_prefixes: str = Form(default=""),
+    keywords: str = Form(default=""),
+    max_amount: str = Form(default=""),
     db: Session = Depends(get_db),
     user: User = Depends(require_page("queries")),
 ):
@@ -1229,9 +1282,15 @@ def query_create(
     text = text.strip()
     if not text:
         return RedirectResponse("/queries", status_code=303)
-    q = UserQuery(user_id=user.id, name=name, text=text)
+    try:
+        prefilter = _parse_prefilter_form(categories, code_prefixes, keywords, max_amount)
+    except PrefilterError as e:
+        return RedirectResponse(f"/queries?error={quote(str(e))}", status_code=303)
+    q = UserQuery(user_id=user.id, name=name, text=text, compiled_filters=prefilter)
     db.add(q)
     db.commit()
+    # Пре-фильтр расширяет watchlist — воркеру и web'у нужны свежие правила.
+    invalidate_watchlist_cache()
     _trigger_backfill(q.id)
     return RedirectResponse("/queries", status_code=303)
 
@@ -1248,20 +1307,40 @@ def query_edit(
     query_id: int,
     name: str = Form(...),
     text: str = Form(...),
+    categories: list[str] = Form(default=[]),
+    code_prefixes: str = Form(default=""),
+    keywords: str = Form(default=""),
+    max_amount: str = Form(default=""),
     db: Session = Depends(get_db),
     user: User = Depends(require_page("queries")),
 ):
     q = _owned_query(db, query_id, user)
+    try:
+        prefilter = _parse_prefilter_form(categories, code_prefixes, keywords, max_amount)
+    except PrefilterError as e:
+        return RedirectResponse(f"/queries?error={quote(str(e))}", status_code=303)
+
     new_text = text.strip()
     q.name = name.strip() or q.name
-    # Правка текста инвалидирует кеш матчей — поднимаем version и пере-backfill'им.
-    if new_text and new_text != q.text:
+    changed_text = bool(new_text) and new_text != q.text
+    changed_prefilter = prefilter != q.compiled_filters
+
+    if changed_text:
+        # Правка текста меняет семантику матча — поднимаем version, это
+        # инвалидирует кеш UserLotMatch.
         q.text = new_text
         q.version += 1
-        db.commit()
+    if changed_prefilter:
+        # А пре-фильтр в промпт матчера не идёт: version не трогаем (пересчёт
+        # дал бы тот же ответ за деньги), но протухшие матчи убираем.
+        q.compiled_filters = prefilter
+        _drop_stale_matches(db, q)
+    db.commit()
+
+    if changed_prefilter:
+        invalidate_watchlist_cache()
+    if changed_text or changed_prefilter:
         _trigger_backfill(q.id)
-    else:
-        db.commit()
     return RedirectResponse("/queries", status_code=303)
 
 
@@ -1289,6 +1368,7 @@ def query_toggle(
     q = _owned_query(db, query_id, user)
     q.active = not q.active
     db.commit()
+    invalidate_watchlist_cache()  # выключённый запрос больше не заказывает анализ
     return RedirectResponse("/queries", status_code=303)
 
 
@@ -1301,6 +1381,7 @@ def query_delete(
     q = _owned_query(db, query_id, user)
     db.delete(q)  # cascade удалит UserLotMatch
     db.commit()
+    invalidate_watchlist_cache()
     return RedirectResponse("/queries", status_code=303)
 
 

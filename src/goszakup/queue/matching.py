@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from ..classify.matcher import match_and_save
 from ..db.engine import SessionLocal
 from ..db.models import Lot, User, UserLotMatch, UserQuery
+from ..prefilter import lot_passes_prefilter
 from ..scope import lot_in_scope
 from .broker import broker  # noqa: F401 — импорт broker до actor'а обязателен
 
@@ -56,6 +57,10 @@ def match_actor(user_query_id: int, lot_id: int, notify: bool = False) -> None:
         query = session.get(UserQuery, user_query_id)
         lot = session.get(Lot, lot_id)
         if query is None or not query.active or lot is None:
+            return
+        # Пре-фильтр мог сузиться уже после постановки задачи в очередь —
+        # проверяем повторно, чтобы правка не оплачивалась LLM-вызовами.
+        if not lot_passes_prefilter(query.compiled_filters, lot):
             return
         if match_and_save(session, query, lot):
             session.commit()
@@ -97,6 +102,10 @@ def enqueue_matches_for_lot(session: Session, lot: Lot) -> int:
     n = 0
     for query, user in rows:
         if not lot_in_scope(lot, user):
+            continue
+        # Пре-фильтр (если задан) — второй дешёвый отсев перед LLM: лот вне
+        # его рамок пользователь в этом запросе заведомо не имел в виду.
+        if not lot_passes_prefilter(query.compiled_filters, lot):
             continue
         # notify=True: это forward-поток (лот только что проанализирован) —
         # положительный матч превратится в Telegram-уведомление.

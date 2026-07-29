@@ -3,6 +3,62 @@
 {% block title %}Мои запросы — Goszakup Tracker{% endblock %}
 {% block content %}
 
+{% macro prefilter_fields(q) %}
+  {% set pf = (q.compiled_filters if q else None) or {} %}
+  <details {% if pf %}open{% endif %}>
+    <summary class="dim" style="font-size:12px;cursor:pointer">
+      пре-фильтр (что вообще смотреть){% if pf %} — задан{% endif %}
+    </summary>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+      <div class="dim" style="font-size:12px">
+        Пре-фильтр отсекает лоты до LLM и запускает разбор ТЗ по вашей нише.
+        Без него запрос подбирает только среди уже разобранных лотов.
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+        {% for slug, label in verticals %}
+        <label class="flex items-start gap-2" style="font-size:12px;cursor:pointer">
+          <input type="checkbox" name="categories" value="{{ slug }}"
+                 {% if slug in pf.get('categories', []) %}checked{% endif %}>
+          <span>{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <input name="keywords" class="input"
+             placeholder="Ключевые слова через запятую (сервер, СХД)"
+             value="{{ pf.get('keywords', [])|join(', ') }}">
+      <input name="code_prefixes" class="input"
+             placeholder="Префиксы кода ЕНС ТРУ через запятую (26.6, 62)"
+             value="{{ pf.get('code_prefixes', [])|join(', ') }}">
+      <input name="max_amount" class="input" type="number" min="1"
+             placeholder="Максимальная сумма, ₸"
+             value="{{ pf.get('max_amount', '') }}">
+      <div class="dim" style="font-size:12px">
+        Код ЕНС ТРУ известен не у всех лотов — если фильтруете по нему,
+        добавьте ещё вертикаль или слова.
+      </div>
+    </div>
+  </details>
+{% endmacro %}
+
+{% macro prefilter_chips(pf) %}
+  {% if pf %}
+    <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">
+      {% for slug in pf.get('categories', []) %}
+      <span class="badge muted">{{ vertical_labels.get(slug, slug) }}</span>
+      {% endfor %}
+      {% for word in pf.get('keywords', []) %}
+      <span class="badge muted">«{{ word }}»</span>
+      {% endfor %}
+      {% for code in pf.get('code_prefixes', []) %}
+      <span class="badge muted mono">{{ code }}…</span>
+      {% endfor %}
+      {% if pf.get('max_amount') %}
+      <span class="badge muted">до {{ pf['max_amount']|n }} ₸</span>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endmacro %}
+
 <div class="page-head">
   <div>
     <div class="crumb"><span class="strong">Мои запросы</span></div>
@@ -22,6 +78,13 @@
     лотов. Матчи появятся на вкладке «Подходящие» по мере обработки воркером.
   </div>
 </div>
+{% elif request.query_params.get('error') %}
+<div class="card" style="margin-bottom:16px;border-color:var(--danger,#c62828)">
+  <div class="strong">Пре-фильтр не сохранён</div>
+  <div class="dim" style="font-size:13px;margin-top:4px">
+    {{ request.query_params.get('error') }}
+  </div>
+</div>
 {% elif request.query_params.get('rematch_failed') %}
 <div class="card" style="margin-bottom:16px;border-color:var(--danger,#c62828)">
   <div class="strong">Подбор не запущен</div>
@@ -37,6 +100,7 @@
     <input name="name" class="input" placeholder="Название (напр. «Разработка 1С до 5 млн»)" required>
     <textarea name="text" class="input" rows="3" required
       placeholder="Например: хочу лоты на разработку или доработку 1С, бюджет до 5 млн тенге, желательно по Алматы. Не интересны продление лицензий и поставка железа."></textarea>
+    {{ prefilter_fields(None) }}
     <div>
       <button type="submit" class="btn">{{ icon("plus", 14) }} Создать запрос</button>
     </div>
@@ -63,12 +127,14 @@
         <td>
           <div class="strong">{{ q.name }}</div>
           <div class="dim" style="font-size:12px;max-width:560px">{{ q.text }}</div>
+          {{ prefilter_chips(q.compiled_filters) }}
           <details style="margin-top:6px">
             <summary class="dim" style="font-size:12px;cursor:pointer">редактировать</summary>
             <form method="post" action="/queries/{{ q.id }}/edit"
                   style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
               <input name="name" class="input" value="{{ q.name }}" required>
               <textarea name="text" class="input" rows="3" required>{{ q.text }}</textarea>
+              {{ prefilter_fields(q) }}
               <div><button type="submit" class="btn sm">Сохранить</button></div>
             </form>
           </details>

@@ -46,6 +46,10 @@ def db_session():
     for tbl in (
         "user_lot_matches",
         "user_queries",
+        # users чистим тоже: после фазы C watchlist — функция таблицы users,
+        # и утёкшая строка молча меняет глобальный предикат should_analyze
+        # (порядко-зависимая флакота в соседних тестах).
+        "users",
         "lot_analyses",
         "contracts",
         "lot_status_history",

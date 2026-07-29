@@ -77,6 +77,37 @@ def test_fanout_passes_notify_true(db_session, monkeypatch):
     assert captured == [True]
 
 
+def test_fanout_respects_query_prefilter(db_session, sent):
+    """Пре-фильтр — второй дешёвый отсев перед LLM: лот вне его рамок
+    владельцу запроса не уходит, а запрос без пре-фильтра работает как
+    раньше."""
+    lot, q_in, *_ = _seed(db_session)  # lot: category=it, name=None
+    q_in.compiled_filters = {"keywords": ["мебель"]}
+    db_session.flush()
+
+    assert enqueue_matches_for_lot(db_session, lot) == 0
+    assert sent == []
+
+    q_in.compiled_filters = {"categories": ["it"]}
+    db_session.flush()
+
+    assert enqueue_matches_for_lot(db_session, lot) == 1
+
+
+def test_match_actor_rechecks_prefilter(db_session, monkeypatch):
+    """Задача могла быть поставлена до сужения пре-фильтра — актор
+    перепроверяет, иначе правка оплачивается LLM-вызовами."""
+    lot, q_in, *_ = _seed(db_session)
+    q_in.compiled_filters = {"categories": ["medicine"]}
+    db_session.commit()
+
+    def _boom(*a, **kw):
+        raise AssertionError("матчер не должен вызываться вне пре-фильтра")
+
+    monkeypatch.setattr(matching_mod, "match_and_save", _boom)
+    matching_mod.match_actor.fn(q_in.id, lot.id)
+
+
 def test_fanout_keeps_dev_queries_without_user_row(db_session, sent):
     """GZ_NO_AUTH-админ имеет id=0 без строки в users — outerjoin не должен
     выкидывать его запросы (видит всё)."""

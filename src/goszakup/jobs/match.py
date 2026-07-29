@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..classify.matcher import match_and_save
 from ..db.engine import SessionLocal
 from ..db.models import Lot, User, UserQuery
+from ..prefilter import lot_passes_prefilter, prefilter_conditions
 from ..scope import scope_conditions
 
 log = logging.getLogger(__name__)
@@ -27,15 +28,26 @@ log = logging.getLogger(__name__)
 DEFAULT_LIMIT = 2000
 
 
-def _actual_lots_in_scope(session: Session, user: User | None, limit: int) -> list[Lot]:
+def _actual_lots_for_query(
+    session: Session, user: User | None, prefilter: dict | None, limit: int
+) -> list[Lot]:
+    # Пре-фильтр уходит в SQL ДО limit — иначе узкий фильтр голодал бы под
+    # потолком (последние 2000 лотов рынка могут не содержать ни одного
+    # подходящего). SQL — надмножество, поэтому дофильтровываем в Python.
     stmt = (
         select(Lot)
         .options(selectinload(Lot.analysis), selectinload(Lot.customer))
-        .where(Lot.is_actual.is_(True), *scope_conditions(user))
+        .where(
+            Lot.is_actual.is_(True),
+            *scope_conditions(user),
+            *prefilter_conditions(prefilter),
+        )
         .order_by(Lot.first_seen.desc())
         .limit(limit)
     )
-    return list(session.scalars(stmt).all())
+    return [
+        lot for lot in session.scalars(stmt) if lot_passes_prefilter(prefilter, lot)
+    ]
 
 
 def backfill_query(query_id: int, *, limit: int = DEFAULT_LIMIT, sync: bool = False) -> int:
@@ -53,7 +65,7 @@ def backfill_query(query_id: int, *, limit: int = DEFAULT_LIMIT, sync: bool = Fa
         # ограничений (scope_conditions(None) == []), как у админа.
         user = session.get(User, query.user_id)
 
-        lots = _actual_lots_in_scope(session, user, limit)
+        lots = _actual_lots_for_query(session, user, query.compiled_filters, limit)
         if len(lots) >= limit:
             log.warning(
                 "backfill query %s: достигнут лимит %d лотов — часть могла "

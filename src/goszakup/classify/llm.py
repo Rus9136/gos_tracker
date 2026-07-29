@@ -518,8 +518,11 @@ def analyze_and_save(session: Session, lot: Lot, *, force: bool = False) -> bool
 
 
 def _analyze_inner(session: Session, lot: Lot, *, force: bool = False) -> bool:
-    # Вне watchlist LLM не вызываем — это pre-filter условие.
-    if not should_analyze(session, lot):
+    # Вне watchlist LLM не вызываем — это pre-filter условие. `force` его
+    # обходит: это ручная кнопка в UI, осознанное намерение человека и ровно
+    # один вызов (иначе админ с пустым scope не смог бы проанализировать
+    # вообще ничего — watchlist собирается по вертикалям подписчиков).
+    if not force and not should_analyze(session, lot):
         return False
 
     announcement = lot.announcement

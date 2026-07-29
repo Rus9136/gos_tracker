@@ -163,6 +163,9 @@ def daily_actor() -> None:
     # отдельно от ежечасного expire_actor, чтобы daily всегда оставлял
     # консистентную выдачу даже если таймер expire почему-то не сработал.
     expire_actor.send()
+    # Догон watchlist: свежий поток разбирается сам, а лоты, попавшие в
+    # watchlist задним числом (новая подписка/пре-фильтр), — только здесь.
+    watchlist_catchup_actor.send()
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=30 * 60 * 1000)
@@ -370,6 +373,19 @@ def api_daily_actor() -> None:
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
+def watchlist_catchup_actor(limit: int | None = None) -> None:
+    """Догнать лоты, попавшие в watchlist задним числом (новая подписка).
+
+    max_retries=0: следующий daily всё равно повторит проход, а ретрай дал бы
+    дубль ScrapeRun и повторные скачивания.
+    """
+    from ..jobs.watchlist_catchup import DEFAULT_LIMIT, run_catchup
+
+    n = run_catchup(limit=limit or DEFAULT_LIMIT)
+    log.info("watchlist_catchup_actor: поставлено %d объявлений", n)
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
 def expire_actor() -> None:
     """Снять с «актуальных» лоты, у которых истёк срок приёма заявок.
 
@@ -493,20 +509,6 @@ def listing_actor(preset_id: int) -> None:
             detail_actor.send(anno_id, run_id)
 
 
-def _normalize_detail_scope(
-    detail_scope: str | bool, only_it_lots: bool | None
-) -> str:
-    """Совместимость с in-flight сообщениями на момент деплоя фазы A:
-    старый бул `only_it_lots` мог приехать и позиционно (5-й аргумент —
-    попадает в detail_scope), и kwarg'ом (ingest/scan слали
-    only_it_lots=False). Удалить вместе с параметром в фазе B."""
-    if isinstance(detail_scope, bool):
-        detail_scope = "watchlist" if detail_scope else "all"
-    if only_it_lots is not None:
-        detail_scope = "watchlist" if only_it_lots else "all"
-    return detail_scope
-
-
 @dramatiq.actor(
     queue_name="goszakup_detail",
     max_retries=3,
@@ -520,7 +522,6 @@ def detail_actor(
     with_docs: bool = True,
     with_llm: bool = True,
     detail_scope: str = "all",
-    only_it_lots: bool | None = None,
 ) -> None:
     """Fetch деталей одного объявления, save в БД, enqueue LLM для watchlist.
 
@@ -537,7 +538,6 @@ def detail_actor(
     математически не проходит (20+ часов при Crawl-delay 5с).
     """
     r = _redis_client()
-    detail_scope = _normalize_detail_scope(detail_scope, only_it_lots)
 
     # Heartbeat в начале каждой попытки: даже если details уезжают в ретрай
     # с backoff'ом (до 10 мин), reaper не сочтёт run зависшим — он живой.

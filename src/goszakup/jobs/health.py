@@ -34,6 +34,7 @@ from ..config import (
     PUBLIC_BASE_URL,
 )
 from ..db.models import User, UserLotMatch
+from ..watchlist import watchlist_rules
 
 log = logging.getLogger(__name__)
 
@@ -224,6 +225,16 @@ def collect_problems(session: Session) -> list[str]:
         problems.append(
             f"⚠️ Мало места под документы: {free:.1f} ГБ свободно "
             f"(порог {DISK_MIN_FREE_GB} ГБ) — скачивание ТЗ может встать"
+        )
+
+    # Пустой watchlist — тихая смерть дорогих стадий: ошибок нет, счётчики
+    # просто нули (документы не качаются, LLM не зовётся). Случается, когда
+    # у всех активных пользователей пустой `categories` и ни у одного
+    # запроса нет пре-фильтра.
+    if not watchlist_rules(session):
+        problems.append(
+            "❌ Watchlist пуст: ни одной вертикали у активных пользователей и "
+            "ни одного пре-фильтра — документы и LLM выключены для всего рынка"
         )
 
     if MATCH_STALE_HOURS > 0:

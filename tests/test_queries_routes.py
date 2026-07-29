@@ -72,6 +72,75 @@ def test_create_edit_toggle_delete_query(client, db_session):
     assert db_session.query(UserQuery).count() == 0
 
 
+def test_create_with_prefilter_stores_normalized_json(client, db_session):
+    client.post(
+        "/queries",
+        data={
+            "name": "СХД",
+            "text": "хочу системы хранения",
+            "categories": ["it"],
+            "keywords": "СХД,  сервер ",
+            "code_prefixes": "26.6",
+            "max_amount": "5000000",
+        },
+    )
+    q = db_session.query(UserQuery).one()
+    assert q.compiled_filters == {
+        "categories": ["it"],
+        "code_prefixes": ["266"],
+        "keywords": ["сервер", "схд"],  # нормализация сортирует
+        "max_amount": 5_000_000,
+    }
+    assert q.version == 1
+
+
+def test_prefilter_edit_keeps_version_and_drops_stale_matches(client, db_session):
+    """Пре-фильтр в промпт матчера не идёт: пересчитывать матчи незачем,
+    но те, что новый фильтр не пропускает, надо убрать с «Подходящих»."""
+    db_session.add(Announcement(id=101, url="u/101"))
+    db_session.add(Lot(id=1, url="u/101", announcement_id=101, name="Сервер",
+                       category="it", is_actual=True))
+    db_session.add(Lot(id=2, url="u/101", announcement_id=101, name="Стулья",
+                       category="furniture", is_actual=True))
+    db_session.commit()
+
+    client.post("/queries", data={"name": "q", "text": "хочу серверы"})
+    q = db_session.query(UserQuery).one()
+    for lot_id in (1, 2):
+        db_session.add(UserLotMatch(
+            user_query_id=q.id, lot_id=lot_id, matched=True, score=90,
+            matcher_version="m1", query_version=1,
+        ))
+    db_session.commit()
+
+    client.post(f"/queries/{q.id}/edit", data={
+        "name": "q", "text": "хочу серверы", "categories": ["it"],
+    })
+    db_session.expire_all()
+    q = db_session.get(UserQuery, q.id)
+    assert q.version == 1
+    assert q.compiled_filters == {"categories": ["it"]}
+    assert [m.lot_id for m in db_session.query(UserLotMatch).all()] == [1]
+
+
+def test_garbage_prefix_is_rejected_with_error(client, db_session):
+    r = client.post(
+        "/queries",
+        data={"name": "q", "text": "текст", "code_prefixes": "26%"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "error=" in r.headers["location"]
+    assert db_session.query(UserQuery).count() == 0
+
+
+def test_empty_prefilter_fields_stay_null(client, db_session):
+    client.post("/queries", data={
+        "name": "q", "text": "текст", "keywords": " , ", "max_amount": "",
+    })
+    assert db_session.query(UserQuery).one().compiled_filters is None
+
+
 def test_empty_text_is_rejected(client, db_session):
     client.post("/queries", data={"name": "x", "text": "   "})
     assert db_session.query(UserQuery).count() == 0

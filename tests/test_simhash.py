@@ -116,7 +116,13 @@ def test_analyze_and_save_reuses_close_simhash(db_session, monkeypatch):
     """Если у нового лота ТЗ почти идентичен уже проанализированному —
     результат копируется без LLM-вызова."""
     from goszakup.classify import llm as llm_mod
-    from goszakup.db.models import LotAnalysis
+    from goszakup.db.models import LotAnalysis, User
+
+    # Watchlist — функция таблицы users (фаза C): без подписчика на вертикаль
+    # analyze_and_save откажет ещё до simhash-дедупликации.
+    db_session.add(User(username="u", password_hash="", is_active=True,
+                        categories=["it"]))
+    db_session.flush()
 
     # Длинная общая часть (типовой ТЗ-шаблон в реальном размере) + одно
     # точечное отличие. На таком распределении одна замена даёт hamming ≤ 3.

@@ -598,15 +598,11 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     NULL-дозаполняется в `_apply_details`, когда код приезжает с деталями;
     НЕ перезаписывать присвоенную — смена задним числом дёргает scope
     пользователей и watchlist. Документы и LLM гейтит
-    `watchlist.should_analyze` (фаза A — заглушка `category == 'it'`,
-    фаза C заменит на вертикали подписчиков ∪ пре-фильтры запросов);
-    SQL-зеркало предиката в `cli reanalyze` менять синхронно. `detail_actor`
+    `watchlist.should_analyze`. `detail_actor`
     детализирует все лоты (`detail_scope='all'`) только пока жив API-путь —
     при Redis-флаге `goszakup:api_degraded` сам сужается до `'watchlist'`
     (HTML на полном рынке — 20+ часов, математически не проходит).
-    Legacy-параметр `only_it_lots` — совместимость с in-flight сообщениями
-    деплоя фазы A, удалить при следующей правке воркера (фаза C; в фазе B
-    воркер намеренно не трогали). Старые 4 русские IT-подкатегории
+    Старые 4 русские IT-подкатегории
     схлопнуты миграцией в слаг `it`; подкатегория для rules-prior и промптов
     считается на лету через `classify/it.py` (промпты байт-в-байт прежние,
     бампы версий не потребовались).
@@ -620,6 +616,37 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     показываются только при `category == 'it'`. В `org_report` ключи
     `cat_n`/`cat_ok`/`cat_contract_total`/`cat_lots` считают «лоты в
     вертикалях» (любая не-NULL категория, не только IT).
+
+25. **Watchlist — функция подписок, а не константа (фаза C).** Лот
+    заслуживает документов и LLM, если (а) его вертикаль перечислена в
+    `categories` активного пользователя ИЛИ (б) он проходит пре-фильтр
+    активного `UserQuery` И виден его владельцу по scope. Правила собирает
+    `watchlist.watchlist_rules` (процессный кеш `CACHE_TTL`=60с, 0 в тестах;
+    инвалидация — `invalidate_watchlist_cache` из web при правке
+    scope/запроса; у воркера кеш свой и подхватит изменение сам).
+    **Инверсия семантики:** пустой `User.categories` в scope означает «вижу
+    всё» (правило #15), а в watchlist — «не расширяю». Иначе один админ с
+    NULL-scope затянул бы в LLM весь рынок (≈$105/мес). Пересечение (б) со
+    scope владельца — чтобы клиент пре-фильтром не заказал анализ вертикали,
+    которую всё равно не увидит; практическое следствие — пре-фильтр реально
+    расширяет watchlist только у пользователя без вертикального ограничения.
+    `should_analyze` авторитетен; `watchlist_conditions` (SQL-зеркало для
+    `cli reanalyze` и догона) — заведомое НАДМНОЖЕСТВО: keywords пре-фильтров
+    в SQL не выражаются (SQLite `lower()` ASCII-only, `ilike` по кириллице
+    там врёт), поэтому результат всегда дофильтровывать Python-предикатом.
+    Пустые правила дают `false()`, НИКОГДА не `None` — `where(None)` означал
+    бы «весь рынок». Пустой watchlist = тихая смерть дорогих стадий (ошибок
+    нет, просто нули), поэтому его ловит `cli health-check` (правило #20).
+    `force=True` в `analyze_and_save` гейт минует — это ручная кнопка админа.
+    Расширение watchlist (новая подписка/пре-фильтр) НЕ догоняется само:
+    `run_preset` берёт детали только для новых и сменивших статус лотов, а
+    `backfill_query` анализ не заказывает — догон делает
+    `jobs/watchlist_catchup` (`cli watchlist-catchup`, плюс из `daily_actor`).
+    Пре-фильтр (`UserQuery.compiled_filters`, `prefilter.py`):
+    `{categories, code_prefixes, keywords, max_amount}`, И между полями, ИЛИ
+    внутри списка; правка пре-фильтра `UserQuery.version` НЕ бампает (в
+    промпт матчера он не идёт, пересчёт дал бы тот же ответ за деньги) —
+    вместо этого удаляются непроходящие `UserLotMatch` и зовётся backfill.
 
 ## Где что лежит
 
@@ -648,10 +675,20 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   keyword-фоллбэк IT-вертикали, rules-prior и промпты LLM/matcher
   (подкатегория считается на лету — 4 русских значения менять нельзя без
   бампа ANALYZER_VERSION/MATCHER_VERSION).
-- `watchlist.py` — `should_analyze(session, lot)`: гейт дорогих стадий
-  (документы, LLM). Фаза A — заглушка `category == 'it'`; SQL-зеркало в
-  `cli reanalyze` менять синхронно. Отдельно от scope.py намеренно: scope —
-  изоляция пользователя, watchlist — экономика пайплайна.
+- `watchlist.py` — гейт дорогих стадий (документы, LLM), правило #25:
+  `watchlist_rules` (правила из подписок + кеш), `should_analyze` (предикат),
+  `watchlist_conditions` (SQL-надмножество), `invalidate_watchlist_cache`.
+  Отдельно от scope.py намеренно: scope — изоляция пользователя, watchlist —
+  экономика пайплайна.
+- `prefilter.py` — пре-фильтр запроса (`UserQuery.compiled_filters`):
+  `normalize_prefilter` (валидация формы, `PrefilterError`),
+  `lot_passes_prefilter` (авторитетный предикат), `prefilter_conditions`
+  (recall-safe SQL без keywords). Пара «SQL + Python» как в scope.py.
+- `jobs/watchlist_catchup.py` — догон лотов, попавших в watchlist задним
+  числом: актуальные watchlist-лоты без строки в `lot_analyses` → их
+  объявления в `detail_actor(detail_scope='watchlist')`, потолок
+  `DEFAULT_LIMIT`. CLI `watchlist-catchup`, актор `watchlist_catchup_actor`
+  (очередь `goszakup_daily`, шлётся из `daily_actor`).
 - `classify/llm.py` — LLM-классификатор ТЗ + чат по ТЗ. Pydantic-схема +
   Cerebras tool calling (OpenAI-формат, `strict: True`); модель — `gpt-oss-120b`
   по умолчанию; `reasoning_effort="low"` (задача структурная); ANALYZER_VERSION
@@ -732,8 +769,9 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   Режимы (`MODE_LISTING` / `MODE_NO_HEAVY` / `MODE_FULL`) преобразуются в
   тройку флагов `(listing_only, with_docs, with_llm)` через `mode_flags`.
 - `jobs/match.py` — `backfill_query(query_id, limit, sync)`: матч запроса по
-  актуальным лотам в scope владельца (создание/правка запроса, CLI
-  `match-backfill`). `--sync` — без Redis/воркера.
+  актуальным лотам в scope владельца и его пре-фильтре (создание/правка
+  запроса, CLI `match-backfill`). Пре-фильтр уходит в SQL ДО `limit` —
+  иначе узкий фильтр голодал бы под потолком. `--sync` — без Redis/воркера.
 - `classify/matcher.py` — LLM-matcher запроса против `tz_summary` (правило
   #17). `MATCHER_VERSION`, `match_and_save()` — паттерн `classify/llm.py`
   (strict tool, ретраи 429, ошибки не наружу).
@@ -748,8 +786,10 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   (dialect-независимо), стоимость — оценка по `config.LLM_PRICE_*` (на
   free-tier Cerebras фактически $0).
 - `queue/matching.py` — `match_actor` (очередь `goszakup_matching`, флаг
-  `notify`) + `enqueue_matches_for_lot` (fan-out с pre-filter по scope,
-  `notify=True`) и `enqueue_matches_for_query` (backfill, `notify=False`).
+  `notify`; перепроверяет пре-фильтр — он мог сузиться после постановки
+  задачи) + `enqueue_matches_for_lot` (fan-out с pre-filter по scope И
+  пре-фильтру запроса, `notify=True`) и `enqueue_matches_for_query`
+  (backfill, `notify=False`).
 - `queue/notify.py` — `notify_actor` (очередь `goszakup_notify`): шлёт
   Telegram по положительному матчу, дедуп по `UserLotMatch.notified_at`
   (правило #18).
@@ -758,7 +798,8 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   сборка HTML-текста уведомления по лоту/матчу (с экранированием).
 - `scope.py` — `scope_conditions(user)` / `lot_in_scope(lot, user)` — единый
   источник правды для read-time scope (правило #15); используется и web,
-  и matcher-fan-out'ом.
+  и matcher-fan-out'ом. `Scope`/`user_scope`/`*_of` — те же правила на
+  плоских данных без ORM (watchlist кеширует их между сессиями).
 - `vault/` — KeyVault автоподачи (правило #19). `crypto.py` — AES-256-GCM
   (мастер-ключ из `GZ_VAULT_MASTER_KEY`, ленивый — модуль грузится и без него).
   `credentials.py` — `create_credential`/`decrypt_credential` поверх crypto.

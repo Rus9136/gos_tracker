@@ -26,6 +26,7 @@ from .jobs.seed import seed_regional_presets
 from .observability import setup_sentry
 from .scraper.search import SearchParams
 from .scraper.statuses import ACTUAL_STATUSES
+from .watchlist import should_analyze, watchlist_conditions
 
 setup_sentry("cli")
 
@@ -284,6 +285,26 @@ def expire(
     typer.echo(f"enqueued expire_actor (message_id={msg.message_id})")
 
 
+@app.command("watchlist-catchup")
+def watchlist_catchup(
+    limit: int = typer.Option(None, "--limit", help="потолок объявлений за проход"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="только посчитать, ничего не ставить"
+    ),
+    verbose: bool = typer.Option(False, "-v"),
+) -> None:
+    """Догнать лоты, попавшие в watchlist задним числом (новая подписка).
+
+    Свежий поток разбирается пайплайном сам; уже лежащие в БД лоты в фазу
+    деталей второй раз не попадают — только этой командой (или из daily).
+    """
+    _setup_logging(verbose)
+    from .jobs.watchlist_catchup import DEFAULT_LIMIT, run_catchup
+
+    n = run_catchup(limit=limit or DEFAULT_LIMIT, dry_run=dry_run)
+    typer.echo(f"объявлений к догону: {n}" + (" (dry-run)" if dry_run else ""))
+
+
 @app.command("health-check")
 def health_check(
     notify: bool = typer.Option(
@@ -327,9 +348,10 @@ def reanalyze(
     with SessionLocal() as s:
         stmt = (
             select(Lot)
-            # SQL-зеркало watchlist.should_analyze (заглушка фазы A) —
-            # при смене предиката менять синхронно.
-            .where(Lot.category == "it")
+            # Грубый отбор кандидатов: watchlist_conditions — заведомое
+            # надмножество should_analyze (keywords пре-фильтров в SQL не
+            # выражаются). Финальный гейт — should_analyze ниже.
+            .where(watchlist_conditions(s))
             .options(
                 selectinload(Lot.customer),
                 selectinload(Lot.analysis),
@@ -338,7 +360,10 @@ def reanalyze(
         )
         if lot_id is not None:
             stmt = stmt.where(Lot.id == lot_id)
-        candidates = s.scalars(stmt).all()
+        # Дофильтровка обязательна: SQL — надмножество, а `force` ниже
+        # переписывает analyzer_version, и лот вне watchlist остался бы с
+        # «__force__» навсегда (analyze_and_save его всё равно пропустит).
+        candidates = [lot for lot in s.scalars(stmt) if should_analyze(s, lot)]
 
         if force:
             # Сбрасываем версии — analyze_and_save посчитает их устаревшими.

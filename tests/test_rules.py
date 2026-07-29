@@ -179,8 +179,12 @@ def test_analyze_and_save_uses_rules_for_obvious_hardware(db_session, monkeypatc
     """Очевидный «поставка ноутбуков» → правила, без LLM."""
     from goszakup.classify import llm as llm_mod
     from goszakup.classify.rules import RULES_VERSION
-    from goszakup.db.models import Announcement, Document, Lot, LotAnalysis
+    from goszakup.db.models import Announcement, Document, Lot, LotAnalysis, User
 
+    # Watchlist — функция таблицы users (фаза C): без подписчика на вертикаль
+    # analyze_and_save откажет до правил.
+    db_session.add(User(username="u", password_hash="", is_active=True,
+                        categories=["it"]))
     ann = Announcement(id=200, url="https://example/200")
     db_session.add(ann)
     db_session.flush()

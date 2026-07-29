@@ -10,7 +10,6 @@ from goszakup.db.engine import SessionLocal
 from goszakup.db.models import Announcement, Lot
 from goszakup.jobs.run_preset import _apply_details, execute_search
 from goszakup.queue import actors
-from goszakup.queue.actors import _normalize_detail_scope
 from goszakup.scraper.announce import AnnouncementDetail, LotDetail
 from goszakup.scraper.search import ListingHit, SearchParams
 from goszakup.sources import API_DEGRADED_KEY
@@ -102,18 +101,6 @@ def test_apply_details_backfills_category_from_code(db_session):
     _apply_details(db_session, tagged, detail)
     assert blank.category == "medicine"
     assert tagged.category == "it"  # не перезаписана
-
-
-def test_normalize_detail_scope_legacy_args():
-    # Новые сообщения.
-    assert _normalize_detail_scope("all", None) == "all"
-    assert _normalize_detail_scope("watchlist", None) == "watchlist"
-    # Старый бул позиционно (5-й аргумент попал в detail_scope).
-    assert _normalize_detail_scope(True, None) == "watchlist"
-    assert _normalize_detail_scope(False, None) == "all"
-    # Старый kwarg only_it_lots (ingest/scan).
-    assert _normalize_detail_scope("all", False) == "all"
-    assert _normalize_detail_scope("all", True) == "watchlist"
 
 
 def _seed_anno_with_lot(anno_id, category):

@@ -32,9 +32,11 @@ def seeded(db_session):
         username="root", password_hash="", is_admin=True,
         telegram_chat_id="42", notify_telegram=True,
     )
+    # Вертикаль подписчика обязательна: без неё watchlist пуст, и это само
+    # по себе проблема (документы и LLM выключены для всего рынка).
     plain = User(
         username="user", password_hash="", is_admin=False,
-        telegram_chat_id="99", notify_telegram=True,
+        telegram_chat_id="99", notify_telegram=True, categories=["it"],
     )
     db_session.add_all([admin, plain])
     db_session.flush()
@@ -96,6 +98,16 @@ def test_no_matches_at_all_is_not_an_alarm(seeded, monkeypatch):
     seeded.flush()
     assert health.match_age_hours(seeded) is None
     assert health.collect_problems(seeded) == []
+
+
+def test_empty_watchlist_is_reported(seeded, monkeypatch):
+    """Пустой watchlist не даёт ошибок — только нули в счётчиках, поэтому
+    заметить его может только сторож."""
+    monkeypatch.setattr(health, "check_llm", lambda: (True, None))
+    seeded.execute(User.__table__.update().values(categories=None))
+    seeded.flush()
+    problems = health.collect_problems(seeded)
+    assert any("Watchlist пуст" in p for p in problems)
 
 
 def test_alert_is_sent_and_deduped(seeded, monkeypatch):

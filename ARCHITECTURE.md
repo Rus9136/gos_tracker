@@ -52,8 +52,10 @@ flowchart TD
   после окончания приёма (правило #22), поэтому `bids_sync` идёт от своих
   объявлений с прошедшим дедлайном, а не по окну дат.
 - **Дорогие стадии зависят от watchlist**: документы и LLM-анализ идут
-  только для лотов `watchlist.should_analyze` (фаза A — вертикаль `it`);
-  остальной рынок хранится как листинг+детали без ТЗ.
+  только для лотов `watchlist.should_analyze` — вертикали активных
+  подписчиков ∪ пре-фильтры их запросов (правило #25); остальной рынок
+  хранится как листинг+детали без ТЗ. Расширение watchlist догоняет
+  `jobs/watchlist_catchup` — сам пайплайн старые лоты в детали не вернёт.
 - **Scope пронизывает чтение и fan-out**: `scope.py` используется и
   веб-слоем (фильтры выборок, гейт карточки), и матчингом (pre-filter до
   постановки в очередь).
@@ -111,7 +113,7 @@ flowchart LR
 
 | Очередь | Акторы | Назначение |
 |---|---|---|
-| `goszakup_daily` | `daily_actor`, `api_daily_actor`, `contracts_sync_actor`, `bids_sync_actor`, `expire_actor`, `reconcile_actor` | оркестрация ежедневного цикла и служебные синки |
+| `goszakup_daily` | `daily_actor`, `api_daily_actor`, `contracts_sync_actor`, `bids_sync_actor`, `expire_actor`, `reconcile_actor`, `watchlist_catchup_actor` | оркестрация ежедневного цикла и служебные синки |
 | `goszakup_listing` | `listing_actor`, `ingest_actor`, `scan_actor` | обход выдачи (preset / БИН / ad-hoc форма) |
 | `goszakup_detail` | `detail_actor` | одно объявление: детали, договоры; документы — только watchlist. `detail_scope` 'all'/'watchlist', при `api_degraded` сам сужается (правило #24) |
 | `goszakup_llm` | `analyze_actor` | LLM-анализ одного лота |
