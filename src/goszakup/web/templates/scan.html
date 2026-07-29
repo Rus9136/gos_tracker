@@ -107,9 +107,9 @@
     <div style="grid-column: 1 / -1">
       <div class="uc mb-2">Категории (пусто — без фильтра)</div>
       <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px">
-        {% for slug, label in it_categories %}
+        {% for slug, label in verticals %}
         <label class="flex items-start gap-2" style="font-size:12.5px; margin-bottom:0; cursor:pointer">
-          <input type="checkbox" name="it" value="{{ slug }}">
+          <input type="checkbox" name="category" value="{{ slug }}">
           <span>{{ label }}</span>
         </label>
         {% endfor %}

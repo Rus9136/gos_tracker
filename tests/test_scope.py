@@ -39,9 +39,9 @@ def test_regions_filter():
 
 
 def test_categories_filter():
-    u = _user(categories=["software_dev"])
-    assert lot_in_scope(_lot(category="software_dev"), u)
-    assert not lot_in_scope(_lot(category="hardware"), u)
+    u = _user(categories=["it"])
+    assert lot_in_scope(_lot(category="it"), u)
+    assert not lot_in_scope(_lot(category="medicine"), u)
     assert not lot_in_scope(_lot(category=None), u)
 
 
@@ -54,10 +54,10 @@ def test_min_amount_filter():
 
 
 def test_combined_scope_is_conjunction():
-    u = _user(regions=["751000000"], categories=["software_dev"], min_amount=1_000_000)
-    ok = _lot(kato="751000000", category="software_dev", plan_amount=5_000_000)
+    u = _user(regions=["751000000"], categories=["it"], min_amount=1_000_000)
+    ok = _lot(kato="751000000", category="it", plan_amount=5_000_000)
     assert lot_in_scope(ok, u)
     assert not lot_in_scope(
-        _lot(kato="431000000", category="software_dev", plan_amount=5_000_000), u
+        _lot(kato="431000000", category="it", plan_amount=5_000_000), u
     )
     assert len(scope_conditions(u)) == 3

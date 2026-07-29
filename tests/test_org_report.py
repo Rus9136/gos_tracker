@@ -78,7 +78,7 @@ def test_build_org_report_counts(db_session):
     assert k.n_ok == 2              # l1 + l3
     assert k.n_winner == 2
     assert float(k.contract_total) == 900   # только договор l1; у l3 договора нет
-    assert k.it_n == 2 and k.it_ok == 1
+    assert k.cat_n == 2 and k.cat_ok == 1
 
     years = {int(y.yr): y for y in r["years"]}
     assert years[2024].n_ok == 1 and float(years[2024].contract_ok) == 900
@@ -89,7 +89,7 @@ def test_build_org_report_counts(db_session):
     # договор (900) + план l3 без договора (500)
     assert float(winners[0].total) == 1400
 
-    assert len(r["it_lots"]) == 1 and r["it_lots"][0].id == 1
+    assert len(r["cat_lots"]) == 1 and r["cat_lots"][0].id == 1
     assert len(r["actual_lots"]) == 1 and r["actual_lots"][0].id == 4
 
 

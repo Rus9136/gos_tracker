@@ -3,13 +3,6 @@
    {% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge, sparkline %}
 #}
 
-{%- set _IT_HUES = {
-  "Услуги ИТ": 200,
-  "Оборудование": 80,
-  "ПО и лицензии": 280,
-  "Связь и интернет": 160,
-} -%}
-
 {%- set _DEV_HUES = {
   "1c_development": 220,
   "web_development": 250,
@@ -31,13 +24,15 @@
   </span>
 {%- endmacro -%}
 
-{%- macro cat_tag(category) -%}
-  {%- if not category -%}<span class="tag">—</span>
+{# cat_tag принимает СЛАГ вертикали (lot.category), не лейбл. #}
+{%- macro cat_tag(slug) -%}
+  {%- if not slug -%}
+    <span class="tag"><span class="swatch" style="background: oklch(0.7 0.02 0)"></span>Прочее</span>
   {%- else -%}
-    {%- set hue = _IT_HUES.get(category, 200) -%}
-    <span class="tag" title="{{ category }}">
-      <span class="swatch" style="background: oklch(0.7 0.14 {{ hue }})"></span>
-      {{ category }}
+    {%- set hue = VERTICAL_HUES.get(slug) -%}
+    <span class="tag" title="{{ slug }}">
+      <span class="swatch" style="background: oklch(0.7 {{ '0.14' if hue is not none else '0.02' }} {{ hue if hue is not none else 0 }})"></span>
+      {{ slug|vertical }}
     </span>
   {%- endif -%}
 {%- endmacro -%}

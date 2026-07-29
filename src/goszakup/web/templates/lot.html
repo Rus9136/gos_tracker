@@ -83,7 +83,7 @@
       </div>
       <div class="card-body" style="padding-top:0; padding-bottom:0">
         <dl class="dl">
-          <dt>Категория</dt><dd>{% if lot.category %}{{ cat_tag(lot.category|vertical) }}{% else %}<span class="dim">—</span>{% endif %}</dd>
+          <dt>Категория</dt><dd>{{ cat_tag(lot.category) }}</dd>
           {% if lot.analysis %}
           <dt>Тип разработки (LLM)</dt><dd>{{ dev_tag(lot.analysis.dev_category) }}</dd>
           {% endif %}

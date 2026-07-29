@@ -68,14 +68,7 @@
   </div>
   <div class="card-body" style="display:flex; flex-wrap:wrap; gap:8px">
     {% for p in quick_presets %}
-      {% set hue = 200 %}
-      {% if p.categories %}
-        {% set cat0 = p.categories[0] %}
-        {% if cat0 == "medicine" %}{% set hue = 80 %}
-        {% elif cat0 == "construction" %}{% set hue = 280 %}
-        {% elif cat0 == "food" %}{% set hue = 160 %}
-        {% endif %}
-      {% endif %}
+      {% set hue = VERTICAL_HUES.get(p.categories[0], 200) if p.categories else 200 %}
       <a class="chip" href="/actual{% if p.kato %}?kato={{ p.kato }}{% endif %}" title="{{ p.name }}">
         <span class="swatch" style="width:8px;height:8px;border-radius:2px;background: oklch(0.7 0.14 {{ hue }})"></span>
         {{ p.name }}
@@ -117,29 +110,30 @@
   <div class="card">
     <div class="card-head">
       <div>
-        <div class="card-title">По категориям</div>
-        <div class="card-sub">Актуальные лоты</div>
+        <div class="card-title">По вертикалям</div>
+        <div class="card-sub">Актуальные лоты — рынок в scope</div>
       </div>
     </div>
     <div class="card-body">
       {% set max_c = by_category | map(attribute='total') | list | max if by_category else 1 %}
-      {% set hues = {"it": 200, "medicine": 80, "construction": 280, "food": 160} %}
       <div style="display:grid; gap:14px">
         {% for c in by_category %}
-        {% set hue = hues.get(c.category, 200) %}
-        <div>
+        {# None = «прочее»: серый чип, дриллдаун через псевдо-слаг other. #}
+        {% set hue = VERTICAL_HUES.get(c.category) %}
+        {% set swatch = "oklch(0.72 0.14 " ~ hue ~ ")" if hue is not none else "oklch(0.72 0.02 0)" %}
+        <a href="/actual?category={{ c.category or 'other' }}" style="display:block; color:inherit; text-decoration:none">
           <div class="flex justify-between items-center mb-1">
             <div class="flex items-center gap-2">
-              <span style="width:8px;height:8px;border-radius:2px;background: oklch(0.72 0.14 {{ hue }})"></span>
-              <span class="strong">{{ c.category|vertical }}</span>
+              <span style="width:8px;height:8px;border-radius:2px;background: {{ swatch }}"></span>
+              <span class="strong">{{ c.category|vertical if c.category else "Прочее" }}</span>
               <span class="dim num">— {{ c.count }} лот.</span>
             </div>
             <div class="mono dim">{{ c.total|n }} ₸</div>
           </div>
           <div class="bar">
-            <i style="width: {{ (c.total / max_c * 100) if max_c else 0 }}%; background: oklch(0.72 0.14 {{ hue }})"></i>
+            <i style="width: {{ (c.total / max_c * 100) if max_c else 0 }}%; background: {{ swatch }}"></i>
           </div>
-        </div>
+        </a>
         {% else %}
         <div class="dim">нет данных</div>
         {% endfor %}
@@ -167,7 +161,7 @@
           <div class="flex items-center gap-2 mb-1">
             <span class="icon-btn" title="скоро" style="cursor:default;width:auto;height:auto;border:0;padding:0">{{ icon("star", 12, "var(--fg-3)") }}</span>
             <span class="mono dimer" style="font-size:11px">#{{ l.number or l.id }}</span>
-            {{ cat_tag(l.category|vertical) }}
+            {{ cat_tag(l.category) }}
           </div>
           <div class="truncate strong" style="font-size:13.5px">{{ l.name or '—' }}</div>
           <div class="truncate dim" style="font-size:12px">{{ l.customer.name if l.customer else '—' }}</div>

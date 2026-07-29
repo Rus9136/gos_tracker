@@ -13,7 +13,7 @@
 {% set active = [] %}
 {% if filters.q %}{% set _ = active.append({'k':'q', 'label': 'Поиск: ' + filters.q}) %}{% endif %}
 {% if filters.kato %}{% set _ = active.append({'k':'kato', 'label': 'Регион: ' + (region_name(filters.kato) or filters.kato)}) %}{% endif %}
-{% if filters.it %}{% set _ = active.append({'k':'it', 'label': 'Категория: ' + filters.it}) %}{% endif %}
+{% if filters.category %}{% set _ = active.append({'k':'category', 'label': 'Категория: ' + filters.category|vertical}) %}{% endif %}
 {% if filters.dev %}{% set _ = active.append({'k':'dev', 'label': 'Разработка: ' + dev_category_label(filters.dev)}) %}{% endif %}
 {% if filters.risk %}{% set _ = active.append({'k':'risk', 'label': 'Риск: ' + vendor_lock_label(filters.risk)}) %}{% endif %}
 {% if filters.amount_from %}{% set _ = active.append({'k':'amount_from', 'label': 'От ' + filters.amount_from|compact + ' ₸'}) %}{% endif %}
@@ -44,7 +44,8 @@
 {# Фильтр-карта #}
 <form method="get" class="card mb-3">
   <div class="card-body" style="padding:14px">
-    <div class="filterbar">
+    {# Вне IT два фильтра анализа скрыты — сетка ужимается до 3 полей. #}
+    <div class="filterbar"{% if filters.category != 'it' %} style="grid-template-columns: 1.4fr repeat(2, 1fr) auto"{% endif %}>
       <div class="field">
         <label>Поиск</label>
         <div style="position:relative">
@@ -64,13 +65,16 @@
       </div>
       <div class="field">
         <label>Категория</label>
-        <select class="select" name="it">
+        <select class="select" name="category">
           <option value="">— все —</option>
           {% for slug, label in categories %}
-          <option value="{{ slug }}" {% if filters.it == slug %}selected{% endif %}>{{ label }}</option>
+          <option value="{{ slug }}" {% if filters.category == slug %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
+          <option value="other" {% if filters.category == 'other' %}selected{% endif %}>Прочее</option>
         </select>
       </div>
+      {# IT-only фильтры анализа — прячем, когда смотрят другую вертикаль. #}
+      {% if filters.category == 'it' %}
       <div class="field">
         <label>Тип разработки</label>
         <select class="select" name="dev">
@@ -89,6 +93,7 @@
           {% endfor %}
         </select>
       </div>
+      {% endif %}
       <button class="btn primary" type="submit">{{ icon("filter") }} Применить</button>
     </div>
     <div class="filterbar mt-2" style="grid-template-columns: repeat(4, 1fr) 1fr auto">
@@ -242,7 +247,7 @@
             <span class="dimer">—</span>
           {% endif %}
         </td>
-        <td @click="window.location='/lot/{{ lot.id }}'">{{ cat_tag(lot.category|vertical) }}</td>
+        <td @click="window.location='/lot/{{ lot.id }}'">{{ cat_tag(lot.category) }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'">{{ status_pill(lot.status_code, mini=True) }}</td>
         <td class="num strong mono" @click="window.location='/lot/{{ lot.id }}'" style="font-size:13.5px">{{ lot.plan_amount|n }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'" class="dim">{{ region_name(lot.kato) or '—' }}</td>
@@ -289,7 +294,7 @@
   <a class="card" href="/lot/{{ lot.id }}" style="cursor:pointer; text-decoration:none; color:inherit; display:block">
     <div class="card-body" style="padding:16px">
       <div class="flex items-center justify-between mb-2">
-        <div class="flex items-center gap-2">{{ status_pill(lot.status_code, mini=True) }} {{ cat_tag(lot.category|vertical) }}</div>
+        <div class="flex items-center gap-2">{{ status_pill(lot.status_code, mini=True) }} {{ cat_tag(lot.category) }}</div>
         <button class="icon-btn star-btn {{ 'starred' if lot.is_starred else '' }}"
                 type="button"
                 data-starred="{{ '1' if lot.is_starred else '0' }}"

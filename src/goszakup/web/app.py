@@ -36,7 +36,7 @@ from ..classify.llm import (
     vendor_lock_label,
 )
 from ..classify.usage import record_call
-from ..classify.verticals import VERTICAL_LABELS, VERTICALS
+from ..classify.verticals import VERTICAL_HUES, VERTICAL_LABELS, VERTICALS
 from ..config import (
     AUTOSUBMIT_INGEST_TOKEN,
     GZ_TELEGRAM_BOT_TOKEN,
@@ -128,7 +128,11 @@ templates.env.filters["dt"] = format_dt
 templates.env.filters["compact"] = format_compact
 templates.env.filters["iso"] = format_iso
 # Слаг вертикали -> русский лейбл (незнакомое значение показываем как есть).
-templates.env.filters["vertical"] = lambda s: VERTICAL_LABELS.get(s, s or "—")
+# "other" — псевдо-слаг UI-фильтров для category IS NULL, в реестре его нет.
+templates.env.filters["vertical"] = lambda s: VERTICAL_LABELS.get(
+    s, "Прочее" if s == "other" else (s or "—")
+)
+templates.env.globals["VERTICAL_HUES"] = VERTICAL_HUES
 templates.env.globals["region_name"] = region_name
 templates.env.globals["dev_category_label"] = dev_category_label
 templates.env.globals["vendor_lock_label"] = vendor_lock_label
@@ -318,7 +322,7 @@ def _lots_query(
     actual: bool | None,
     q: str | None,
     kato: str | None,
-    it: str | None,
+    category: str | None,
     dev: str | None,
     risk: str | None,
     amount_from: int | None,
@@ -348,8 +352,11 @@ def _lots_query(
         stmt = stmt.where(Lot.status_code == status)
     if kato:
         stmt = stmt.where(Lot.kato == kato)
-    if it:
-        stmt = stmt.where(Lot.category == it)
+    if category == "other":
+        # Псевдо-слаг UI: лоты вне вертикалей («прочее»).
+        stmt = stmt.where(Lot.category.is_(None))
+    elif category:
+        stmt = stmt.where(Lot.category == category)
     if dev or risk:
         # outer join: чтобы можно было фильтровать «нет анализа» в будущем,
         # сейчас при заданном dev/risk запись анализа обязана существовать.
@@ -393,7 +400,7 @@ def _render_lots(
     title: str,
     q: str,
     kato: str,
-    it: str,
+    category: str,
     dev: str,
     risk: str,
     amount_from: int | None,
@@ -409,7 +416,7 @@ def _render_lots(
         actual=actual,
         q=q or None,
         kato=kato or None,
-        it=it or None,
+        category=category or None,
         dev=dev or None,
         risk=risk or None,
         amount_from=amount_from,
@@ -426,7 +433,7 @@ def _render_lots(
     filters = {
         "q": q,
         "kato": kato,
-        "it": it,
+        "category": category,
         "dev": dev,
         "risk": risk,
         "amount_from": amount_from,
@@ -604,7 +611,7 @@ def actual_lots(
     user: User = Depends(require_page("actual")),
     q: str = "",
     kato: str = "",
-    it: str = "",
+    category: str = "",
     dev: str = "",
     risk: str = "",
     amount_from: str = "",
@@ -617,7 +624,7 @@ def actual_lots(
     return _render_lots(
         request, db, user=user,
         actual=True, base_path="/actual", title="Актуальные тендеры",
-        q=q, kato=kato, it=it, dev=dev, risk=risk,
+        q=q, kato=kato, category=category, dev=dev, risk=risk,
         amount_from=_maybe_int(amount_from), amount_to=_maybe_int(amount_to),
         sort=sort, page=page, starred=(starred == "1"),
         status=_maybe_int(status),
@@ -631,7 +638,7 @@ def past_lots(
     user: User = Depends(require_page("past")),
     q: str = "",
     kato: str = "",
-    it: str = "",
+    category: str = "",
     dev: str = "",
     risk: str = "",
     amount_from: str = "",
@@ -644,7 +651,7 @@ def past_lots(
     return _render_lots(
         request, db, user=user,
         actual=False, base_path="/past", title="Прошедшие тендеры",
-        q=q, kato=kato, it=it, dev=dev, risk=risk,
+        q=q, kato=kato, category=category, dev=dev, risk=risk,
         amount_from=_maybe_int(amount_from), amount_to=_maybe_int(amount_to),
         sort=sort, page=page, starred=(starred == "1"),
         status=_maybe_int(status),
@@ -658,7 +665,7 @@ def starred_lots(
     user: User = Depends(require_page("starred")),
     q: str = "",
     kato: str = "",
-    it: str = "",
+    category: str = "",
     dev: str = "",
     risk: str = "",
     amount_from: str = "",
@@ -676,7 +683,7 @@ def starred_lots(
     return _render_lots(
         request, db, user=user,
         actual=actual_filter, base_path="/starred", title="Избранные тендеры",
-        q=q, kato=kato, it=it, dev=dev, risk=risk,
+        q=q, kato=kato, category=category, dev=dev, risk=risk,
         amount_from=_maybe_int(amount_from), amount_to=_maybe_int(amount_to),
         sort=sort, page=page, starred=True,
         status=_maybe_int(status),
@@ -1084,7 +1091,7 @@ def suppliers_report(
     request: Request,
     enstru_code: str = "",
     enstru: str = "",
-    it: str = "",
+    category: str = "",
     year: int = 0,
     format: str = "",
     db: Session = Depends(get_db),
@@ -1097,7 +1104,7 @@ def suppliers_report(
     f = SupplierFilters(
         enstru_code=enstru_code.strip(),
         enstru=enstru.strip(),
-        category=it.strip(),
+        category=category.strip(),
         year=year,
     )
     rows = build_supplier_report(db, f)
@@ -1125,7 +1132,7 @@ def suppliers_report(
             **_base_ctx(request, db, user),
             "rows": rows,
             "f": f,
-            "it_categories": CATEGORY_CHOICES,
+            "verticals": CATEGORY_CHOICES,
             "years": years,
             "with_contacts": with_contacts,
         },
@@ -1800,7 +1807,7 @@ def ingest_start(
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
 
-# === /scan — ad-hoc прогон по kato/amount/status/IT-категориям ===
+# === /scan — ad-hoc прогон по kato/amount/status/вертикалям ===
 
 
 _SCAN_MODES = [
@@ -1825,7 +1832,7 @@ def scan_form(
             **_base_ctx(request, db, user),
             "regions": REGIONS,
             "status_groups": _STATUS_GROUPS,
-            "it_categories": CATEGORY_CHOICES,
+            "verticals": CATEGORY_CHOICES,
             "scan_modes": _SCAN_MODES,
             "defaults": {
                 "kato": "",
@@ -1846,7 +1853,7 @@ def scan_start(
     amount_from: int = Form(0),
     amount_to: str = Form(""),
     status: list[int] = Form(default=[]),
-    it: list[str] = Form(default=[]),
+    category: list[str] = Form(default=[]),
     mode: str = Form(MODE_FULL),
     user: User = Depends(require_admin),
 ):
@@ -1860,8 +1867,8 @@ def scan_start(
         return RedirectResponse("/scan?error=amount_range", status_code=303)
     if mode not in ALL_MODES:
         return RedirectResponse("/scan?error=mode_invalid", status_code=303)
-    # Чекбоксы IT приходят строками — отфильтруем мусор.
-    it_clean = [c for c in (it or []) if c in CATEGORY_SLUGS]
+    # Чекбоксы вертикалей приходят строками — отфильтруем мусор.
+    cat_clean = [c for c in (category or []) if c in CATEGORY_SLUGS]
     status_clean = list(status or [])
 
     try:
@@ -1870,7 +1877,7 @@ def scan_start(
             amount_from=amount_from,
             amount_to=amount_to_int,
             status_codes=status_clean,
-            categories=it_clean,
+            categories=cat_clean,
             mode=mode,
         )
     except RuntimeError:
@@ -1887,7 +1894,7 @@ def scan_start(
         amount_from,
         amount_to_int,
         status_clean,
-        it_clean,
+        cat_clean,
         listing_only,
         with_docs,
         with_llm,
@@ -2038,7 +2045,7 @@ def users_list(
             "users": users,
             "roles": roles,
             "regions": REGIONS,
-            "it_categories": CATEGORY_CHOICES,
+            "verticals": CATEGORY_CHOICES,
             "error": error,
             "ok": ok,
         },

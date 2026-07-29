@@ -10,6 +10,7 @@ from __future__ import annotations
 from sqlalchemy import Select, desc, extract, func, or_, select
 from sqlalchemy.orm import Session
 
+from ..classify.verticals import VERTICAL_LABELS
 from ..db.models import Announcement, Contract, Lot, Organization
 
 TOP_LIMIT = 20
@@ -68,16 +69,16 @@ def build_org_report(session: Session, org: Organization) -> dict:
             func.coalesce(
                 func.sum(contract_sq).filter(Lot.status_code == _OK_STATUS), 0
             ).label("contract_total"),
-            func.count(Lot.id).filter(Lot.category.is_not(None)).label("it_n"),
+            func.count(Lot.id).filter(Lot.category.is_not(None)).label("cat_n"),
             func.count(Lot.id)
             .filter(Lot.category.is_not(None), Lot.status_code == _OK_STATUS)
-            .label("it_ok"),
+            .label("cat_ok"),
             func.coalesce(
                 func.sum(contract_sq).filter(
                     Lot.category.is_not(None), Lot.status_code == _OK_STATUS
                 ),
                 0,
-            ).label("it_contract_total"),
+            ).label("cat_contract_total"),
         ).where(Lot.id.in_(lot_ids_sq))
     ).one()
 
@@ -136,7 +137,7 @@ def build_org_report(session: Session, org: Organization) -> dict:
         .limit(TOP_LIMIT)
     ).all()
 
-    it_lots = session.execute(
+    cat_lots = session.execute(
         select(
             Lot.id,
             extract("year", Announcement.publish_date).label("yr"),
@@ -177,7 +178,7 @@ def build_org_report(session: Session, org: Organization) -> dict:
         "years": years,
         "cats": cats,
         "winners": winners,
-        "it_lots": it_lots,
+        "cat_lots": cat_lots,
         "actual_lots": actual_lots,
     }
 
@@ -186,6 +187,10 @@ def _t(n) -> str:
     if n is None:
         return "—"
     return f"{round(n):,}".replace(",", " ")
+
+
+def _v(slug) -> str:
+    return VERTICAL_LABELS.get(slug, slug or "—")
 
 
 def render_markdown(report: dict, base_url: str = "") -> str:
@@ -206,20 +211,20 @@ def render_markdown(report: dict, base_url: str = "") -> str:
     L.append(f"| Состоялись | {k.n_ok} ({share}%), у {k.n_winner} записан победитель |")
     L.append(f"| Сумма договоров (без НДС) | {_t(k.contract_total)} ₸ |")
     L.append(
-        f"| IT-лоты | {k.it_n}, из них {k.it_ok} состоялись"
-        f" на {_t(k.it_contract_total)} ₸ |"
+        f"| Лоты в вертикалях | {k.cat_n}, из них {k.cat_ok} состоялись"
+        f" на {_t(k.cat_contract_total)} ₸ |"
     )
     if report["actual_lots"]:
         L.append("")
         L.append("## Открытые лоты сейчас")
         L.append("")
-        L.append("| Лот | Статус | IT | План, ₸ | Приём до (UTC) |")
+        L.append("| Лот | Статус | Вертикаль | План, ₸ | Приём до (UTC) |")
         L.append("|---|---|---|---:|---|")
         for a in report["actual_lots"]:
             name = (a.name or "—").replace("|", "/")[:80]
             L.append(
                 f"| [{name}]({base_url}/lot/{a.id}) | {a.status_name or '—'} "
-                f"| {a.category or '—'} | {_t(a.plan_amount)} "
+                f"| {_v(a.category)} | {_t(a.plan_amount)} "
                 f"| {a.application_end or '—'} |"
             )
     L.append("")
@@ -232,13 +237,13 @@ def render_markdown(report: dict, base_url: str = "") -> str:
             f"| {int(y.yr)} | {y.n_all} | {y.n_ok} "
             f"| {_t(y.plan_ok)} | {_t(y.contract_ok)} |"
         )
-    if report["it_lots"]:
+    if report["cat_lots"]:
         L.append("")
-        L.append(f"## Состоявшиеся IT-лоты ({len(report['it_lots'])})")
+        L.append(f"## Состоявшиеся лоты в вертикалях ({len(report['cat_lots'])})")
         L.append("")
-        L.append("| Год | Лот | Категория | План, ₸ | Договор, ₸ | Победитель |")
+        L.append("| Год | Лот | Вертикаль | План, ₸ | Договор, ₸ | Победитель |")
         L.append("|---|---|---|---:|---:|---|")
-        for lt in report["it_lots"]:
+        for lt in report["cat_lots"]:
             name = (lt.name or "—").replace("|", "/")[:80]
             win = (lt.winner_name or "—").replace("|", "/")
             if lt.winner_bin:
@@ -246,7 +251,7 @@ def render_markdown(report: dict, base_url: str = "") -> str:
             contract = _t(lt.contract_amount) if lt.contract_amount is not None else "—"
             L.append(
                 f"| {int(lt.yr) if lt.yr else '—'} "
-                f"| [{name}]({base_url}/lot/{lt.id}) | {lt.category} "
+                f"| [{name}]({base_url}/lot/{lt.id}) | {_v(lt.category)} "
                 f"| {_t(lt.plan_amount)} | {contract} | {win} |"
             )
     L.append("")

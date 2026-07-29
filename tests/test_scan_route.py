@@ -40,7 +40,7 @@ def test_scan_form_renders(client):
     assert 'name="amount_from"' in body
     assert 'name="amount_to"' in body
     assert 'name="status"' in body
-    assert 'name="it"' in body
+    assert 'name="category"' in body
     assert 'name="mode"' in body
     # все 20 регионов в селекте + «Весь РК»
     assert "Весь РК" in body
@@ -55,7 +55,7 @@ def test_scan_run_creates_scraperun_and_enqueues(client):
             "amount_from": "300000",
             "amount_to": "1000000",
             "status": ["210", "220"],
-            "it": ["it"],
+            "category": ["it"],
             "mode": "listing",
         },
         follow_redirects=False,

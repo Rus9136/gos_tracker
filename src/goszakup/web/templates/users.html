@@ -31,7 +31,7 @@
   <div class="field" style="grid-column: 1 / -1">
     <label>Вертикали (пусто — все)</label>
     <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px">
-      {% for slug, label in it_categories %}
+      {% for slug, label in verticals %}
       <label class="flex items-start gap-2" style="font-size:12px; cursor:pointer">
         <input type="checkbox" name="categories" value="{{ slug }}"
                {% if u and u.categories and slug in u.categories %}checked{% endif %}>
