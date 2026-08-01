@@ -1066,14 +1066,16 @@ def organization_report(
     org_id: int,
     request: Request,
     format: str = "",
+    error: str = "",
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
     """Отчёт по закупкам организации: агрегаты по уже загруженным лотам.
 
     Только SQL по локальной БД — к goszakup не ходит. Для полноты картины
-    лоты организации сначала догружаются через /ingest по БИН. Admin-only:
-    отчёт агрегирует все данные без persona-scope (правило #15)."""
+    лоты организации догружаются по БИН — либо через /ingest, либо
+    inline-формой прямо на этой странице. Admin-only: отчёт агрегирует
+    все данные без persona-scope (правило #15)."""
     org = db.get(Organization, org_id)
     if not org:
         raise HTTPException(404, "не найдено")
@@ -1086,11 +1088,55 @@ def organization_report(
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
+    current_year = datetime.now(UTC).year
     return templates.TemplateResponse(
         request,
         "org_report.html",
-        {**_base_ctx(request, db, user), **report},
+        {
+            **_base_ctx(request, db, user),
+            **report,
+            "active_run": find_active_run(db),
+            "error": error,
+            "ingest_year_from": current_year - 2,
+            "ingest_year_to": current_year,
+        },
     )
+
+
+@app.post("/organization/{org_id}/report/ingest")
+def organization_report_ingest(
+    org_id: int,
+    year_from: int = Form(...),
+    year_to: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Дозагрузка лотов организации прямо со страницы отчёта.
+
+    Тот же ingest-прогон, что и /ingest (без документов и LLM), но БИН
+    берётся из организации, статусы/суммы не сужаются — отчёту нужна полная
+    картина, включая несостоявшиеся закупки. После запуска пользователь
+    остаётся на отчёте и видит баннер идущего прогона."""
+    org = db.get(Organization, org_id)
+    if not org:
+        raise HTTPException(404, "не найдено")
+    back = f"/organization/{org_id}/report"
+    if not org.bin:
+        return RedirectResponse(f"{back}?error=no_bin", status_code=303)
+    if year_from > year_to:
+        return RedirectResponse(f"{back}?error=year_range", status_code=303)
+    try:
+        run_id = create_ingest_run(
+            customer_bin=org.bin,
+            year_from=year_from,
+            year_to=year_to,
+        )
+    except RuntimeError:
+        return RedirectResponse(f"{back}?error=busy", status_code=303)
+
+    from ..queue.actors import ingest_actor
+    ingest_actor.send(run_id, org.bin, year_from, year_to, "", [], 0, None)
+    return RedirectResponse(back, status_code=303)
 
 
 @app.get("/suppliers", response_class=HTMLResponse)

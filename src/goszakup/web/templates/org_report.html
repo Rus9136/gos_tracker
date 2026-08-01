@@ -4,6 +4,20 @@
 {% block title %}Отчёт: {{ org.name[:60] }} — Goszakup Tracker{% endblock %}
 {% block content %}
 
+{% macro ingest_range_form() %}
+<form method="post" action="/organization/{{ org.id }}/report/ingest" class="flex items-center gap-2"
+      onsubmit="var b=this.querySelector('button[type=submit]'); b.disabled=true; b.textContent='Запускаем…';">
+  <input class="input" type="number" name="year_from" required min="2010" max="2030"
+         value="{{ ingest_year_from }}" style="width:88px" title="Год от">
+  <span class="dim">—</span>
+  <input class="input" type="number" name="year_to" required min="2010" max="2030"
+         value="{{ ingest_year_to }}" style="width:88px" title="Год до">
+  <button type="submit" class="btn" {% if active_run %}disabled{% endif %}>
+    {{ icon("refresh", 13) }} Дозагрузить
+  </button>
+</form>
+{% endmacro %}
+
 <div class="crumb">
   <a href="/organizations">{{ icon("arrowLeft", 12) }} Заказчики</a>
   <span class="sep">/</span>
@@ -21,13 +35,53 @@
       {% if org_ids|length > 1 %} • объединены {{ org_ids|length }} записи организации{% endif %}
     </div>
   </div>
-  <div class="flex gap-2">
+  <div class="flex items-center gap-2" style="flex-wrap:wrap">
     <a class="btn" href="/organization/{{ org.id }}/report?format=md">{{ icon("download", 13) }} Скачать .md</a>
+    {% if org.bin %}{{ ingest_range_form() }}{% endif %}
+  </div>
+</div>
+
+{% if active_run %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--warn) 30%, transparent); background: var(--warn-bg)">
+  <div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 16px; color: var(--warn)">
+    {{ icon("clock", 16) }}
+    <span>Идёт прогон <a href="/runs/{{ active_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ active_run.id }}</a>{% if active_run.note %} ({{ active_run.note }}){% endif %}.
+      Когда он закончится, обновите страницу — отчёт пересчитается по свежим данным.</span>
+  </div>
+</div>
+{% endif %}
+
+{% if error == "year_range" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">«Год от» не может быть больше «Год до».</div>
+</div>
+{% elif error == "busy" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Уже идёт другой прогон. Дождитесь его завершения.</div>
+</div>
+{% elif error == "no_bin" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">У организации нет БИН — дозагрузка невозможна.</div>
+</div>
+{% endif %}
+
+{% if not kpis.n_lots and not active_run %}
+<div class="card mb-3">
+  <div class="card-body" style="padding:24px 20px">
+    <div class="strong mb-2" style="font-size:15px">По этой организации ещё нет загруженных лотов</div>
+    <div class="dim mb-3" style="font-size:13px; max-width:80ch">
+      Отчёт считается по локальной БД и к goszakup не ходит. Выберите период и запустите
+      дозагрузку — лоты организации подтянутся вместе с договорами и победителями
+      (документы и LLM не качаются). На 100 лотов уходит ~3–5 минут.
+    </div>
     {% if org.bin %}
-    <a class="btn" href="/ingest?customer_bin={{ org.bin }}">{{ icon("refresh", 13) }} Дозагрузить лоты</a>
+    {{ ingest_range_form() }}
+    {% else %}
+    <div class="dim" style="font-size:13px">У организации не заполнен БИН — дозагрузить по ней нечем.</div>
     {% endif %}
   </div>
 </div>
+{% endif %}
 
 {% set share = (kpis.n_ok * 100 / kpis.n_lots)|round|int if kpis.n_lots else 0 %}
 <div class="grid-4 mb-3" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px">
@@ -163,8 +217,8 @@
 
 <div class="dim" style="font-size:12.5px; max-width:92ch">
   Отчёт считается по лотам, уже загруженным в трекер (заказчик или организатор — эта организация,
-  записи объединены по БИН/имени). Чтобы получить полную историю, сначала догрузите лоты по БИН
-  через «Дозагрузить лоты» — с деталями приедут договоры и победители. «Не состоялась» чаще всего
+  записи объединены по БИН/имени). Чтобы получить полную историю, сначала догрузите лоты по БИН —
+  форма «Дозагрузить» с выбором лет вверху страницы; с деталями приедут договоры и победители. «Не состоялась» чаще всего
   означает отсутствие участников: закупка публикуется повторно. Где договора нет, в топе
   победителей учтена плановая сумма.
 </div>
