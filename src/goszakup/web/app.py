@@ -787,7 +787,9 @@ def lot_chat(
             selectinload(Lot.announcement).selectinload(Announcement.documents),
         )
     )
-    if lot is None:
+    # Тот же гейт, что и на /lot/{id}: чат отдаёт полный текст ТЗ и тратит
+    # токены, доступ к нему обязан совпадать с доступом к карточке.
+    if lot is None or not _lot_in_scope(lot, user):
         raise HTTPException(404, "лот не найден")
     if body.messages[-1].role != "user":
         raise HTTPException(400, "последнее сообщение должно быть от user")
@@ -850,7 +852,9 @@ def lot_toggle_star(
     next: str = Form(""),
 ):
     lot = db.get(Lot, lot_id)
-    if lot is None:
+    # `is_starred` — общий флаг на лоте, поэтому вне scope его не переключаем:
+    # иначе чужой лот всплыл бы в «Избранном» у тех, кто его видит.
+    if lot is None or not _lot_in_scope(lot, user):
         raise HTTPException(404, "лот не найден")
     lot.is_starred = not lot.is_starred
     db.commit()
