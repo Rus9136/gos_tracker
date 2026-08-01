@@ -127,6 +127,10 @@ class DocumentRow:
     attribute: str  # «Да»/«Нет»
     file_type_id: int | None  # параметр для actionModalShowFiles(anno, type)
     direct_url: str | None  # прямая ссылка <a href>, если есть
+    # Имя файла с расширением (API `Files.originalName`). Без него файл
+    # ложится на диск под хешем из URL без расширения, и pick_tz_document
+    # его не видит. HTML-путь имени не знает — остаётся None.
+    suggested_name: str | None = None
 
 
 @dataclass

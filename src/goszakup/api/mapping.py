@@ -165,6 +165,7 @@ def _document_row(f: dict) -> DocumentRow:
         attribute="",
         file_type_id=None,
         direct_url=(f.get("filePath") or None) if tz_like else None,
+        suggested_name=f.get("originalName") or None,
     )
 
 

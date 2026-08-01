@@ -54,3 +54,21 @@ def test_falls_back_to_any_downloaded_when_no_tz_like():
     chosen = pick_tz_document(docs)
     assert chosen is not None
     assert chosen.local_path == "/tmp/x.pdf"
+
+
+def test_sniffs_pdf_without_extension(tmp_path):
+    # API-путь сохранял файлы под хешем без расширения — формат определяется
+    # по магическим байтам, файл не должен отсеиваться.
+    f = tmp_path / "1a15a187495f2c781e6e4dd6f6a7311e"
+    f.write_bytes(b"%PDF-1.4 fake body")
+    docs = [_doc(name="Техническая спецификация", local_path=str(f))]
+    chosen = pick_tz_document(docs)
+    assert chosen is not None
+    assert chosen.local_path == str(f)
+
+
+def test_skips_unknown_binary_without_extension(tmp_path):
+    f = tmp_path / "deadbeefdeadbeef"
+    f.write_bytes(b"\x00\x01\x02\x03 not a document")
+    docs = [_doc(name="Техническая спецификация", local_path=str(f))]
+    assert pick_tz_document(docs) is None

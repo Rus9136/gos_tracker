@@ -242,12 +242,47 @@ def _ext(path: str | None) -> str:
     return (path or "").lower().rsplit(".", 1)[-1] if path and "." in path else ""
 
 
+def _detect_format(path: str | None) -> str:
+    """'pdf' / 'docx' / 'doc' / ''. Расширение первично; без него — магические
+    байты: API-путь до фикса suggested_name сохранял файлы под хешем из URL
+    без расширения, и такие лежат на диске тысячами."""
+    ext = _ext(path)
+    if ext.isalnum() and len(ext) <= 5:
+        return ext
+    if not path:
+        return ""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+    except OSError:
+        return ""
+    if head == b"%PDF":
+        return "pdf"
+    if head == b"PK\x03\x04":
+        # zip-контейнер — docx только если внутри word/document.xml
+        # (xlsx/обычный zip нам не нужны).
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(path) as zf:
+                if any(n.startswith("word/") for n in zf.namelist()):
+                    return "docx"
+        except Exception:
+            return ""
+    return ""
+
+
 def pick_tz_document(documents: Iterable[Document]) -> Document | None:
     """Финальный выбор файла для подачи в LLM: ТЗ, со скачанным телом."""
-    downloaded = [
-        d for d in documents
-        if d.local_path and d.sha256 and _ext(d.local_path) in {"pdf", "docx"}
-    ]
+    formats: dict[int, str] = {}
+    downloaded = []
+    for d in documents:
+        if not (d.local_path and d.sha256):
+            continue
+        fmt = _detect_format(d.local_path)
+        if fmt in {"pdf", "docx"}:
+            formats[id(d)] = fmt
+            downloaded.append(d)
     if not downloaded:
         return None
 
@@ -275,7 +310,7 @@ def pick_tz_document(documents: Iterable[Document]) -> Document | None:
 
     # PDF > DOCX; крупнее > мельче (внутри той же специфичности).
     def sort_key(d: Document) -> tuple[int, int, int]:
-        ext_score = 0 if _ext(d.local_path) == "pdf" else 1
+        ext_score = 0 if formats[id(d)] == "pdf" else 1
         return (specificity(d), ext_score, -(d.size or 0))
 
     candidates.sort(key=sort_key)
@@ -287,7 +322,7 @@ def pick_tz_document(documents: Iterable[Document]) -> Document | None:
 
 def extract_text(path: str) -> str | None:
     """Возвращает текст документа или None, если содержимого нет / формат не поддержан."""
-    ext = _ext(path)
+    ext = _detect_format(path)
     if ext == "pdf":
         text = _extract_pdf_text(path)
     elif ext == "docx":

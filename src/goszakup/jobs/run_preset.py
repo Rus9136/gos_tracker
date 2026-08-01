@@ -270,7 +270,8 @@ def _save_documents(
     for d in detail.documents:
         if d.direct_url:
             if _save_one_document(
-                session, announcement, d.name, d.attribute, d.direct_url, source
+                session, announcement, d.name, d.attribute, d.direct_url, source,
+                suggested_name=d.suggested_name,
             ):
                 new_count += 1
             continue
