@@ -63,7 +63,101 @@
         {{ label }} <span class="dim">({{ items|length }})</span>
       </button>
       {% endfor %}
+      <button class="btn sm ghost" type="button"
+              data-tab-btn="plan" onclick="orgTab('plan')"
+              title="Что заказчик собирается купить в {{ plan_year }} году">
+        План закупок <span class="dim">({{ plan.total_n|n }})</span>
+      </button>
     </div>
+  </div>
+
+  {# Годовой план заказчика: то, что он только собирается купить #}
+  <div data-tab-pane="plan" style="display:none">
+    {% if plan.total_n %}
+    {% set plan_months_max = (plan.by_month | map(attribute='total') | max) if plan.by_month else 0 %}
+    <div class="card-body" style="border-bottom:1px solid var(--bd-1)">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px">
+        <div>
+          <div class="strong mono" style="font-size:20px">{{ plan.total_sum|n }} ₸</div>
+          <div class="dim" style="font-size:12.5px">запланировано на {{ plan_year }} год</div>
+        </div>
+        <div>
+          <div class="strong mono" style="font-size:20px; color:var(--accent-hi)">{{ plan.planned_sum|n }} ₸</div>
+          <div class="dim" style="font-size:12.5px">{{ plan.planned_n|n }} пунктов — объявления ещё нет</div>
+        </div>
+        <div>
+          <div class="strong mono" style="font-size:20px">{{ plan.announced_sum|n }} ₸</div>
+          <div class="dim" style="font-size:12.5px">{{ plan.announced_n|n }} пунктов уже объявлены</div>
+        </div>
+      </div>
+      {% if plan.by_month %}
+      <div class="flex items-end gap-1 mt-3" style="height:56px">
+        {% for m in plan.by_month %}
+        <div class="flex-1" style="min-width:0" title="{{ m.label }}: {{ m.n }} пунктов на {{ m.total|n }} ₸">
+          <div style="height:{{ (38 * m.total / plan_months_max) | round(1) if plan_months_max else 2 }}px;
+                      background: color-mix(in oklch, var(--accent) 45%, transparent);
+                      border-radius:3px 3px 0 0"></div>
+          <div class="dim mono" style="font-size:10px; text-align:center; margin-top:3px">{{ m.label[:3] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <div style="overflow:auto">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Предмет закупки</th>
+          <th style="width:140px">Категория</th>
+          <th class="num" style="width:140px">Сумма ₸</th>
+          <th style="width:105px">Месяц</th>
+          <th style="width:170px">Способ</th>
+          <th style="width:150px">Стадия</th>
+          <th style="width:85px">Аванс</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in plan.top %}
+        <tr>
+          <td>
+            <div class="strong clamp-2" style="max-width:440px; font-size:13px">{{ p.name or '—' }}</div>
+            {% if p.description %}<div class="dim truncate" style="max-width:440px; font-size:12px">{{ p.description }}</div>{% endif %}
+            {% if p.enstru_code %}<div class="mono dimer" style="font-size:10.5px">{{ p.enstru_code }}</div>{% endif %}
+          </td>
+          <td>{{ cat_tag(p.category) }}</td>
+          <td class="num mono strong">{{ p.amount|n }}</td>
+          <td class="dim">{{ month_label(p.month) }}</td>
+          <td class="dim truncate" style="max-width:170px" title="{{ p.trade_method or '' }}">{{ p.trade_method or '—' }}</td>
+          <td>
+            {% if p.lots %}
+              <a class="badge accent" href="/lot/{{ p.lots[0].id }}" style="text-decoration:none">объявлен</a>
+            {% elif p.status_id in PLANNED_STATUSES %}
+              <span class="badge">{{ p.status_name or 'в плане' }}</span>
+            {% else %}
+              <span class="badge muted">{{ p.status_name or '—' }}</span>
+            {% endif %}
+          </td>
+          <td class="mono dim">{{ (p.prepayment|round|int ~ '%') if p.prepayment else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div class="card-foot flex items-center justify-between">
+      <span>
+        Показано <span class="strong">{{ plan.top|length }}</span> из {{ plan.total_n|n }} пунктов плана
+        {% if plan.total_n > plan_rows_limit %}<span class="dim">— полный список с фильтрами на вкладке «План закупок»</span>{% endif %}
+      </span>
+      {% if org.bin %}
+      <a class="btn sm" href="/plans?q={{ org.bin }}&stage=all&year={{ plan_year }}">Все пункты плана</a>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="card-body dim">
+      Плана на {{ plan_year }} год по этому заказчику в базе нет.
+      {% if not org.bin %}У записи организации не заполнен БИН — план ищется именно по нему.{% endif %}
+    </div>
+    {% endif %}
   </div>
   {% for key, label, items in tabs %}
   <div data-tab-pane="{{ key }}" {% if not loop.first %}style="display:none"{% endif %}>

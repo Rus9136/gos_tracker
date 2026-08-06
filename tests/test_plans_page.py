@@ -139,6 +139,33 @@ def test_plans_page_renders_and_filters(session):
         assert "БИН заказчика" in r.text
 
 
+def test_org_card_has_plan_tab(session):
+    org = Organization(id=7, bin="123456789012", name="ГУ Тест")
+    session.add(org)
+    _point(session, 1, name="Сопровождение ИС", amount=Decimal(9_000_000))
+    _point(session, 2, name="Уже объявленный", status_id=5, status_name="Опубликован")
+    _point(session, 3, name="Чужой пункт", customer_bin="999999999999")
+    session.commit()
+
+    with TestClient(app) as c:
+        r = c.get("/organization/7")
+        assert r.status_code == 200
+        assert "План закупок" in r.text
+        assert "Сопровождение ИС" in r.text
+        # Вкладка показывает весь план заказчика, но не чужой.
+        assert "Уже объявленный" in r.text
+        assert "Чужой пункт" not in r.text
+
+
+def test_org_without_bin_shows_empty_plan_tab(session):
+    session.add(Organization(id=8, name="Без БИН"))
+    session.commit()
+    with TestClient(app) as c:
+        r = c.get("/organization/8")
+        assert r.status_code == 200
+        assert "не заполнен БИН" in r.text
+
+
 def test_lot_card_shows_plan_point(session):
     _point(session, 87491617, name="Сопровождение ИС", prepayment=30.0)
     session.add(Announcement(id=500, url="https://x/500"))

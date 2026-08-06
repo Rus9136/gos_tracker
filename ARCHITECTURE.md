@@ -212,7 +212,7 @@ erDiagram
 | Годовой план | `/plans` (+`?format=csv`) — что заказчики только собираются купить (правило #26) | user |
 | Карточка лота | `/lot/{id}` + POST `chat`, `star`; `/document/{id}/download` | user |
 | Действия с goszakup | POST `/lot/{id}/analyze`, `/lot/{id}/fetch_documents` (правило #9) | admin |
-| Организации | `/organizations`, `/organization/{id}`; `/organization/{id}/report` (admin) | user/admin |
+| Организации | `/organizations`, `/organization/{id}` (вкладка «План закупок» — годовой план этого заказчика); `/organization/{id}/report` (admin) | user/admin |
 | Поставщики | `/suppliers` (+`?format=csv`) — кто выигрывает/проигрывает по ЕНС ТРУ, контакты для лидогенерации (правило #23) | admin |
 | Семантические запросы | `/queries` + CRUD/rematch/toggle (чужой запрос → 404) | user |
 | Прогоны и ad-hoc | `/runs`, `/runs/{id}`, `/scan`, `/presets`, `/expenses` (admin); `/ingest` — admin или роль с ключом `ingest` | admin/роль |

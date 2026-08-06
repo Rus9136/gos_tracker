@@ -266,6 +266,10 @@ CATEGORY_SLUGS = set(VERTICAL_LABELS)
 DEV_CATEGORIES = list(DEV_CATEGORY_LABELS.keys())
 VENDOR_LOCK_RISKS = list(VENDOR_LOCK_LABELS.keys())
 PAGE_SIZE = 50
+# Сколько пунктов плана рисовать на вкладке заказчика. У крупных заказчиков
+# план — тысячи строк, поэтому карточка показывает срез, а полный список
+# живёт на /plans с фильтрами и пагинацией.
+ORG_PLAN_ROWS = 100
 
 # Scope-логика вынесена в goszakup.scope (её переиспользует matcher-fan-out).
 # Локальные алиасы сохранены, чтобы не трогать многочисленные call-sites.
@@ -1200,12 +1204,29 @@ def organization_detail(
     ).all()
     last_synced = max((lt.last_synced for lt in lots), default=None)
     n_winner = sum(1 for lt in lots if lt.winner_bin)
+    # Годовой план заказчика — отдельной вкладкой рядом с лотами. Ищется по
+    # БИН (план хранится плоско, без FK), поэтому у безбиновых записей
+    # организации вкладка просто пустая. Показываем весь план, а не только
+    # неразыгранное: это карточка конкретного заказчика, а не витрина рынка.
+    org_bins = [o.bin for o in db.scalars(
+        select(Organization).where(
+            Organization.id.in_(org_ids), Organization.bin.is_not(None)
+        )
+    )]
+    plan_year = datetime.now(UTC).year
+    plan = org_plan_summary(
+        db, org_bins, year=plan_year, top_limit=ORG_PLAN_ROWS, planned_only=False
+    )
     return templates.TemplateResponse(
         request,
         "organization.html",
         {
             **_base_ctx(request, db, user),
             "org": org,
+            "plan": plan,
+            "plan_year": plan_year,
+            "plan_rows_limit": ORG_PLAN_ROWS,
+            "month_label": month_label,
             "actual": actual,
             "past": past,
             "lots": lots,

@@ -791,8 +791,9 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   `plans_sync_actor`.
 - `jobs/plan_report.py` — выборки и агрегаты по плану: `PlanFilters`/
   `plan_query` (витрина `/plans`), `by_month`, `upcoming_summary` (карточка
-  дашборда), `org_plan_summary` (секция в отчёте организации), `render_csv`.
-  Чистый SQL, к goszakup не ходит.
+  дашборда), `org_plan_summary` (вкладка «План закупок» на карточке
+  заказчика и секция в отчёте организации; `planned_only=False` — весь план,
+  `top_limit` — срез строк), `render_csv`. Чистый SQL, к goszakup не ходит.
 - `jobs/supplier_contacts.py` — обогащение контактов поставщиков из реестра
   участников OWS `Subjects` (правило #23). CLI `supplier-contacts-sync`.
 - `jobs/supplier_report.py` — отчёт «кто выигрывает/проигрывает» по кодам

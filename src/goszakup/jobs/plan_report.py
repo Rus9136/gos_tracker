@@ -194,7 +194,14 @@ def upcoming_summary(
     }
 
 
-def org_plan_summary(session: Session, bins: list[str], *, year: int) -> dict:
+def org_plan_summary(
+    session: Session,
+    bins: list[str],
+    *,
+    year: int,
+    top_limit: int = 10,
+    planned_only: bool = True,
+) -> dict:
     """Годовой план организации: сколько запланировано, объявлено, осталось.
 
     Организация ищется по БИН — план хранится плоско, без FK (см. модель
@@ -227,11 +234,12 @@ def org_plan_summary(session: Session, bins: list[str], *, year: int) -> dict:
         .group_by(PlanPoint.month)
         .order_by(PlanPoint.month)
     ).all()
+    # `planned_only` — врезка в отчёте показывает только ещё не объявленное
+    # («что тут можно взять»), вкладка на карточке заказчика — весь план,
+    # но сначала неразыгранное.
+    top_q = select(PlanPoint).where(*base, *( [planned_cond] if planned_only else [] ))
     top = session.scalars(
-        select(PlanPoint)
-        .where(*base, planned_cond)
-        .order_by(desc(PlanPoint.amount))
-        .limit(10)
+        top_q.order_by(planned_cond.desc(), desc(PlanPoint.amount)).limit(top_limit)
     ).all()
     total_n, total_sum, planned_n, planned_sum = row
     return {
