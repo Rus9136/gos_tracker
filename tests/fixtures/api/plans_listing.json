@@ -1,0 +1,197 @@
+[
+ {
+  "id": 87589888,
+  "rootrecordId": 87460941,
+  "plnPointYear": 2026,
+  "subjectBiin": "240440028805",
+  "subjectNameRu": "ГУ \"Отдел культуры, развития языков, физической культуры и спорта Панфиловского района\"",
+  "nameRu": "Жалюзи",
+  "descRu": "пластиковые",
+  "extraDescRu": "Жалюзи",
+  "refEnstruCode": "222314.700.000093",
+  "amount": 108000,
+  "price": 13500,
+  "count": 8,
+  "refMonthsId": 8,
+  "refTradeMethodsId": 60,
+  "refPlnPointStatusId": 2,
+  "prepayment": 0,
+  "supplyDateRu": "15 күнтізбелік күн",
+  "isActive": 1,
+  "dateCreate": "2026-08-06 12:23:11",
+  "timestamp": "2026-08-06 12:26:41",
+  "RefUnits": {
+   "nameRu": "Штука"
+  },
+  "RefSubjectType": {
+   "nameRu": "Товар"
+  },
+  "RefTradeMethods": {
+   "nameRu": "Электронный магазин"
+  },
+  "RefPlnPointStatus": {
+   "nameRu": "Утвержден"
+  },
+  "RefEnstru": {
+   "code": "222314.700.000093",
+   "nameRu": "Жалюзи"
+  },
+  "RefFinsource": {
+   "nameRu": "За счет бюджетных средств, за исключением средств софинансирования по правительственным внешним займам или связанным грантам"
+  },
+  "RefBudgetType": {
+   "nameRu": "Районный бюджет, города областного значения"
+  },
+  "PlanActs": {
+   "planActNumber": "33",
+   "dateApproved": "2026-08-06 12:26:41"
+  },
+  "PlansKato": [
+   {
+    "refKatoCode": "334620100",
+    "fullDeliveryPlaceNameRu": "область Жетісу, Панфиловский район, г.Жаркент "
+   }
+  ],
+  "PlansSpec": [
+   {
+    "ekrbCode": "149",
+    "ekrbNameRu": "Приобретение прочих запасов",
+    "fkrbProgramCode": "001",
+    "fkrbProgramNameRu": "Услуги по реализации государственной политики на местном уровне в области культуры, развития языков, физической культуры и спорта ",
+    "abpCode": "457",
+    "abpNameRu": "Отдел культуры, развития языков, физической культуры и спорта района (города областного значения)",
+    "amount": 108000
+   }
+  ]
+ },
+ {
+  "id": 87589801,
+  "rootrecordId": 87460967,
+  "plnPointYear": 2026,
+  "subjectBiin": "240440028805",
+  "subjectNameRu": "ГУ \"Отдел культуры, развития языков, физической культуры и спорта Панфиловского района\"",
+  "nameRu": "Стикер",
+  "descRu": "пластиковый, для заметок",
+  "extraDescRu": null,
+  "refEnstruCode": "222925.900.000017",
+  "amount": 4000,
+  "price": 400,
+  "count": 10,
+  "refMonthsId": 7,
+  "refTradeMethodsId": 60,
+  "refPlnPointStatusId": 20,
+  "prepayment": 0,
+  "supplyDateRu": "15 күнтізбелік күн",
+  "isActive": 1,
+  "dateCreate": "2026-08-06 12:19:32",
+  "timestamp": "2026-08-06 12:19:32",
+  "RefUnits": {
+   "nameRu": "Одна пачка"
+  },
+  "RefSubjectType": {
+   "nameRu": "Товар"
+  },
+  "RefTradeMethods": {
+   "nameRu": "Электронный магазин"
+  },
+  "RefPlnPointStatus": {
+   "nameRu": "Отказ от закупки"
+  },
+  "RefEnstru": {
+   "code": "222925.900.000017",
+   "nameRu": "Стикер"
+  },
+  "RefFinsource": {
+   "nameRu": "За счет бюджетных средств, за исключением средств софинансирования по правительственным внешним займам или связанным грантам"
+  },
+  "RefBudgetType": {
+   "nameRu": "Районный бюджет, города областного значения"
+  },
+  "PlanActs": {
+   "planActNumber": "33",
+   "dateApproved": "2026-08-06 12:26:41"
+  },
+  "PlansKato": [
+   {
+    "refKatoCode": "334620100",
+    "fullDeliveryPlaceNameRu": "область Жетісу, Панфиловский район, г.Жаркент "
+   }
+  ],
+  "PlansSpec": [
+   {
+    "ekrbCode": "149",
+    "ekrbNameRu": "Приобретение прочих запасов",
+    "fkrbProgramCode": "001",
+    "fkrbProgramNameRu": "Услуги по реализации государственной политики на местном уровне в области культуры, развития языков, физической культуры и спорта ",
+    "abpCode": "457",
+    "abpNameRu": "Отдел культуры, развития языков, физической культуры и спорта района (города областного значения)",
+    "amount": 4000
+   }
+  ]
+ },
+ {
+  "id": 87589707,
+  "rootrecordId": 87589707,
+  "plnPointYear": 2026,
+  "subjectBiin": "940640001272",
+  "subjectNameRu": "КГУ \"Аппарат акима поселка Жанакорган\"",
+  "nameRu": "Панель жидкокристаллическая",
+  "descRu": "одноразрядная, высота цифры 18 мм, цифро-графическая",
+  "extraDescRu": "Панель жидкокристаллическая",
+  "refEnstruCode": "279020.100.000000",
+  "amount": 999963,
+  "price": 7299,
+  "count": 137,
+  "refMonthsId": 8,
+  "refTradeMethodsId": 60,
+  "refPlnPointStatusId": 444,
+  "prepayment": 0,
+  "supplyDateRu": "в течении 15 календарных дней после подписания договора",
+  "isActive": 1,
+  "dateCreate": "2026-08-06 12:14:31",
+  "timestamp": "2026-08-06 12:15:49",
+  "RefUnits": {
+   "nameRu": "Штука"
+  },
+  "RefSubjectType": {
+   "nameRu": "Товар"
+  },
+  "RefTradeMethods": {
+   "nameRu": "Электронный магазин"
+  },
+  "RefPlnPointStatus": {
+   "nameRu": "На проверке камерального контроля"
+  },
+  "RefEnstru": {
+   "code": "279020.100.000000",
+   "nameRu": "Панель жидкокристаллическая"
+  },
+  "RefFinsource": {
+   "nameRu": "За счет бюджетных средств, за исключением средств софинансирования по правительственным внешним займам или связанным грантам"
+  },
+  "RefBudgetType": {
+   "nameRu": "Бюджет сельского округа, села, поселка, города районного значения"
+  },
+  "PlanActs": {
+   "planActNumber": "85ө",
+   "dateApproved": "2026-08-06 12:15:48"
+  },
+  "PlansKato": [
+   {
+    "refKatoCode": "434030100",
+    "fullDeliveryPlaceNameRu": "Кызылординская область, Жанакорганский район, п.Жанакорган М.Кокенов №35"
+   }
+  ],
+  "PlansSpec": [
+   {
+    "ekrbCode": "414",
+    "ekrbNameRu": "Приобретение машин, оборудования, инструментов, производственного и хозяйственного инвентаря",
+    "fkrbProgramCode": "022",
+    "fkrbProgramNameRu": "Капитальные расходы государственного органа",
+    "abpCode": "124",
+    "abpNameRu": "",
+    "amount": 999963
+   }
+  ]
+ }
+]

@@ -22,6 +22,10 @@ flowchart TD
     WATCH -.гейтит.-> LLM
     INGEST --> EXPIRE[Актуальность лотов<br/>правило 12]
     INGEST --> BIDS[Заявки поставщиков с ценами<br/>правило 22]
+    OWS --> PLANS[Годовой план закупок<br/>правило 26]
+    PLANS --> REPORTS
+    PLANS --> PLANTG[Уведомления по плану<br/>пре-фильтр, правило 26]
+    PLANS --> UI
     INGEST --> CONTRACTS[Договоры и победители]
     DOCS --> LLM[LLM-анализ ТЗ<br/>правила 7-9]
     LLM --> MATCH[Семантический подбор<br/>правило 17]
@@ -113,12 +117,12 @@ flowchart LR
 
 | Очередь | Акторы | Назначение |
 |---|---|---|
-| `goszakup_daily` | `daily_actor`, `api_daily_actor`, `contracts_sync_actor`, `bids_sync_actor`, `expire_actor`, `reconcile_actor`, `watchlist_catchup_actor` | оркестрация ежедневного цикла и служебные синки |
+| `goszakup_daily` | `daily_actor`, `api_daily_actor`, `contracts_sync_actor`, `bids_sync_actor`, `plans_sync_actor`, `expire_actor`, `reconcile_actor`, `watchlist_catchup_actor` | оркестрация ежедневного цикла и служебные синки |
 | `goszakup_listing` | `listing_actor`, `ingest_actor`, `scan_actor` | обход выдачи (preset / БИН / ad-hoc форма) |
 | `goszakup_detail` | `detail_actor` | одно объявление: детали, договоры; документы — только watchlist. `detail_scope` 'all'/'watchlist', при `api_degraded` сам сужается (правило #24) |
 | `goszakup_llm` | `analyze_actor` | LLM-анализ одного лота |
 | `goszakup_matching` | `match_actor` | матч пары (запрос × лот) |
-| `goszakup_notify` | `notify_actor`, `explain_actor` | Telegram: уведомление о матче, объяснение лота |
+| `goszakup_notify` | `notify_actor`, `plan_notify_actor`, `explain_actor` | Telegram: уведомление о матче, о новом пункте плана, объяснение лота |
 | `goszakup_autosubmit` | `autosubmit_dispatch_actor` | диспетчер задач submit-agent'у |
 
 Закрытие `ScrapeRun` — двухконтурное: Redis-счётчик
@@ -139,7 +143,7 @@ flowchart LR
 | `goszakup-autosubmit.timer` | ежеминутно | `cli autosubmit-dispatch --enqueue` |
 | `goszakup-backup.timer` | 07:00 ежедневно | бэкап SQLite (`scripts/backup_sqlite`) |
 
-## 3. Модель данных (16 таблиц)
+## 3. Модель данных (19 таблиц)
 
 ```mermaid
 erDiagram
@@ -160,6 +164,7 @@ erDiagram
     user_queries ||--o{ user_lot_matches : ""
     presets |o--o{ scrape_runs : ""
     client_credentials ||--o{ submissions : ""
+    plan_points |o--o| lots : "lots.plan_root_id (без FK)"
 ```
 
 Группы:
@@ -183,6 +188,12 @@ erDiagram
   `web/pages.py`), `user_queries` (`version` инвалидирует
   кеш), `user_lot_matches` (кеш матчей, `notified_at` — дедуп
   уведомлений).
+- **Годовой план**: `plan_points` — что заказчик только собирается купить
+  (правило #26). PK — `rootrecordId` пункта (правка в API создаёт новую
+  версию с новым id), заказчик хранится плоско по БИН без FK, связь с
+  лотом — вычисляемая: `lots.plan_root_id` из номера лота.
+  `plan_notifications` — дедуп Telegram-уведомлений о новых пунктах
+  (пара «запрос × пункт», отбор пре-фильтром, без LLM).
 - **Операционные**: `presets`, `scrape_runs` (счётчики + heartbeat).
 - **Автоподача**: `client_credentials` (секреты AES-256-GCM),
   `submissions` (статус-машина PLANNED → … → CONFIRMED; цена в `bid_enc`
@@ -190,7 +201,7 @@ erDiagram
 
 ## 4. Веб-слой
 
-46 роутов в `web/app.py`; авторизация — cookie-сессия, зависимости
+47 роутов в `web/app.py`; авторизация — cookie-сессия, зависимости
 `require_user` / `require_admin` (правило #16) + `require_page(key)`
 (вкладки по роли пользователя, `web/pages.py`), scope фильтрует чтение
 (правило #15).
@@ -198,6 +209,7 @@ erDiagram
 | Группа | Роуты | Роль |
 |---|---|---|
 | Листинги | `/` (дашборд), `/actual`, `/past`, `/starred`, `/matched` | user |
+| Годовой план | `/plans` (+`?format=csv`) — что заказчики только собираются купить (правило #26) | user |
 | Карточка лота | `/lot/{id}` + POST `chat`, `star`; `/document/{id}/download` | user |
 | Действия с goszakup | POST `/lot/{id}/analyze`, `/lot/{id}/fetch_documents` (правило #9) | admin |
 | Организации | `/organizations`, `/organization/{id}`; `/organization/{id}/report` (admin) | user/admin |
@@ -223,7 +235,7 @@ WARNING + Redis-флаг `goszakup:api_degraded`, который видит heal
 | `TrdBuy` | ✅ используем | детали объявления, файлы, `startDate`/`endDate` приёма заявок |
 | `Contract` + `ContractUnits` | ✅ используем | договоры и победители, включая закрытые лоты |
 | `TrdApp` + `AppLots` | ✅ используем | заявки поставщиков с ценами после дедлайна (правило #22) |
-| `Plans` | ⚙️ частично | сейчас — только код ЕНС ТРУ. **Потенциал: раннее предупреждение** — пункт годового плана публикуется за недели/месяцы до объявления; для автоподачи это знание о тендере до старта гонки |
+| `Plans` | ✅ берём | годовой план целиком (`plan_points`, правило #26): витрина `/plans`, врезки в карточку лота и отчёт организации. Опережение публикации — медиана 35 дней у открытых конкурсов, 5 у ЗЦП. Инкремент по id (фильтры дат у корня не работают) |
 | `Subjects` | ⚙️ частично | контакты поставщиков (email/телефон/сайт/адрес) для `/suppliers` — `jobs/supplier_contacts.py` (правило #23). Потенциал: резолв БИН по имени, склейка дублей customer-без-БИН (known issue #1 README) |
 | `Rnu` | ❌ | реестр недобросовестных: флаг на карточке организации, проверка конкурентов |
 | `qualifiedSuppliers` | ❌ | ландшафт конкурентов по нашим категориям |
@@ -258,6 +270,7 @@ recon-факты клиента — `tests/fixtures/api/NOTES.md`.
 | `daily [--sync]` | ежедневный цикл (enqueue `daily_actor`) |
 | `run-preset` / `run-once` | синхронный прогон мимо очереди |
 | `contracts-sync`, `bids-sync`, `expire` | ручные синки (enqueue, `--sync` — в процессе) |
+| `plans-sync [--full --sync]` | годовой план: инкремент по id, `--full` — стартовый залив года (~7 ч, только в процессе), `--link-only` — связать лоты с пунктами |
 | `supplier-contacts-sync` | контакты поставщиков из реестра участников OWS (всегда в процессе) |
 | `reanalyze` | LLM-бэкофилл по скачанным лотам |
 | `match-backfill` | пересчёт матчей запроса |

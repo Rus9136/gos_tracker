@@ -46,6 +46,37 @@ def build_match_message(query: UserQuery, lot: Lot, match: UserLotMatch) -> str:
     return "\n".join(lines)
 
 
+def build_plan_message(query: UserQuery, point) -> str:
+    """Уведомление о новом пункте годового плана (правило #26).
+
+    Ссылки на лот тут нет и быть не может: объявления ещё не существует —
+    ведём в витрину плана, отфильтрованную по заказчику.
+    """
+    from ..jobs.plan_report import month_label
+
+    name = (point.name or "Без названия").strip()
+    region = region_name(point.kato) or point.kato or "—"
+    plans_url = f"{PUBLIC_BASE_URL}/plans?q={point.customer_bin or ''}&stage=all"
+
+    lines = [
+        f"📋 <b>В план добавлена закупка по запросу «{escape(query.name)}»</b>",
+        "",
+        f"<b>{escape(name)}</b>",
+    ]
+    if point.description:
+        lines.append(escape(point.description.strip()))
+    lines += [
+        f"💰 {escape(_fmt_amount(point.amount))} ₸   📍 {escape(region)}",
+        f"📅 Ожидается: {escape(month_label(point.month))}"
+        + (f"   💳 аванс {int(point.prepayment)}%" if point.prepayment else ""),
+        f"🏛 {escape((point.customer_name or '—')[:120])}",
+        "",
+        "Объявления ещё нет — это намерение заказчика.",
+        f'<a href="{escape(plans_url)}">План этого заказчика</a>',
+    ]
+    return "\n".join(lines)
+
+
 def build_explain_keyboard(lot: Lot) -> dict:
     """Inline-кнопка «Подробнее»: callback уходит на наш вебхук
     (web POST /telegram/webhook), ответ готовит explain_actor."""

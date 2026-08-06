@@ -103,6 +103,81 @@
   </div></div>
 </div>
 
+{% if plan.total_n %}
+{% set plan_months_max = (plan.by_month | map(attribute='total') | max) if plan.by_month else 0 %}
+<div class="card mb-3">
+  <div class="card-head">
+    <div>
+      <div class="card-title">Годовой план {{ plan_year }} <span class="dim">({{ plan.total_n|n }} пунктов)</span></div>
+      <div class="card-sub">
+        Единственная часть отчёта, которая смотрит вперёд: что заказчик ещё
+        собирается купить в этом году
+      </div>
+    </div>
+    <a class="btn sm" href="/plans?q={{ org.bin or '' }}&stage=all&year={{ plan_year }}">Все пункты</a>
+  </div>
+  <div class="card-body">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px">
+      <div>
+        <div class="strong mono" style="font-size:20px">{{ plan.total_sum|n }} ₸</div>
+        <div class="dim" style="font-size:12.5px">запланировано всего</div>
+      </div>
+      <div>
+        <div class="strong mono" style="font-size:20px; color:var(--accent-hi)">{{ plan.planned_sum|n }} ₸</div>
+        <div class="dim" style="font-size:12.5px">{{ plan.planned_n|n }} пунктов — объявления ещё нет</div>
+      </div>
+      <div>
+        <div class="strong mono" style="font-size:20px">{{ plan.announced_sum|n }} ₸</div>
+        <div class="dim" style="font-size:12.5px">{{ plan.announced_n|n }} пунктов уже объявлены</div>
+      </div>
+    </div>
+
+    {% if plan.by_month %}
+    <div class="flex items-end gap-1 mt-3" style="height:56px">
+      {% for m in plan.by_month %}
+      <div class="flex-1" style="min-width:0" title="{{ m.label }}: {{ m.n }} пунктов на {{ m.total|n }} ₸">
+        <div style="height:{{ (38 * m.total / plan_months_max) | round(1) if plan_months_max else 2 }}px;
+                    background: color-mix(in oklch, var(--accent) 45%, transparent);
+                    border-radius:3px 3px 0 0"></div>
+        <div class="dim mono" style="font-size:10px; text-align:center; margin-top:3px">{{ m.label[:3] }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if plan.top %}
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Крупнейшее из ещё не объявленного</th>
+        <th style="width:140px">Категория</th>
+        <th class="num" style="width:150px">Сумма ₸</th>
+        <th style="width:110px">Месяц</th>
+        <th style="width:90px">Аванс</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in plan.top %}
+      <tr>
+        <td>
+          <div class="strong clamp-2" style="font-size:13px">{{ p.name or '—' }}</div>
+          {% if p.description %}<div class="dim truncate" style="font-size:12px; max-width:520px">{{ p.description }}</div>{% endif %}
+        </td>
+        <td>{{ cat_tag(p.category) }}</td>
+        <td class="num mono strong">{{ p.amount|n }}</td>
+        <td class="dim">{{ month_label(p.month) }}</td>
+        <td class="mono dim">{{ (p.prepayment|round|int ~ '%') if p.prepayment else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if actual_lots %}
 <div class="card mb-3">
   <div class="card-head"><div class="card-title">Открытые лоты сейчас <span class="dim">({{ actual_lots|length }})</span></div></div>

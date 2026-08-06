@@ -648,6 +648,44 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     промпт матчера он не идёт, пересчёт дал бы тот же ответ за деньги) —
     вместо этого удаляются непроходящие `UserLotMatch` и зовётся backfill.
 
+26. **Годовой план — единственный источник «что будет», окно синка по id,
+    ключ — rootrecordId.** Пункт плана (`plan_points`, GraphQL `Plans`)
+    появляется ДО объявления: у открытых конкурсов медиана опережения 35
+    дней, у ЗЦП — 5 (часто 0). Оттуда же поля, которых в лоте нет вовсе:
+    плановый месяц, **аванс** (`prepayment`, бывает 30%), срок поставки,
+    источник финансирования и бюджетные статьи (`spec`). Три грабли
+    источника (замерено 2026-08-06, детали — `tests/fixtures/api/NOTES.md`):
+    (а) фильтры по датам у `Plans` НЕ работают (любое непустое «от» = 0
+    записей), поэтому окно инкремента — по id: выдача идёт DESC, водяной
+    знак = `max(point_id)`; (б) правка пункта создаёт НОВУЮ строку с новым
+    id и прежним `rootrecordId` — ключ хранения root, а не id, старая
+    версия не должна затирать свежую (`upsert_plan_point` сравнивает
+    point_id); (в) обратный серверный фильтр `Lots.plnPointRootrecordId`
+    отдаёт пусто — связь лота с планом считается ЛОКАЛЬНО из номера
+    (`Lot.number` = `<root_id>-<способ><N>`, совпало на 100% номеров;
+    `plan_root_from_number`, поле `Lot.plan_root_id`). Инкремент
+    (`plans_sync_actor` из `daily_actor`, очередь `goszakup_daily`) — ~12
+    страниц в сутки на весь РК и обязан иметь потолок страниц: при пустой
+    таблице «инкремент» ушёл бы в проход по 42 млн пунктов. Стартовый залив
+    года — только вручную: `cli plans-sync --full --sync` (~2.6 млн пунктов,
+    ~7 часов, `limit` сервера жёстко 200), возобновляемый по `--resume`
+    (курсор = `min(point_id)` года, обход идёт вниз). Вертикаль ставится тем
+    же `classify_vertical`, что у лотов, а scope пользователя применяется
+    через `scope.plan_scope_conditions` — иначе на `/plans` он видел бы
+    рынок шире, чем на `/actual`. В витрине по умолчанию скрыт
+    «Электронный магазин» (`trade_method_id=60`, половина плана) — это
+    закупка из каталога, а не тендер. LLM к плану НЕ применяется: у пункта
+    нет ТЗ, только название и характеристика — поэтому **уведомления по
+    плану** (`jobs/plan_notify.py`, `plan_notify_actor`, очередь
+    `goszakup_notify`) отбирают пункты ТОЛЬКО пре-фильтром запроса
+    (`prefilter.plan_passes_prefilter`), и запрос без пре-фильтра не шлёт
+    ничего. Гейт — отдельный тумблер `User.notify_plan` (не `notify_telegram`:
+    это уведомления о намерениях, а не о лотах), дедуп — строка
+    `plan_notifications`, которая пишется и при неудачной отправке.
+    Анти-лавина: уведомляем только о пунктах, СОЗДАННЫХ в источнике за
+    последние `MAX_AGE_DAYS`=3 — иначе стартовый залив года выстрелил бы
+    пачкой; отсечка по `first_seen` этого не даёт.
+
 ## Где что лежит
 
 - `sources.py` — абстракция DataSource (правило #21): `HtmlSource` (обёртка
@@ -745,6 +783,16 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   «победителя ещё нет»); `sync_announcement_bids` — один опрос, ставит
   `bids_synced_at` даже при пустом ответе; `apply_winner_from_bid` —
   победитель из заявки, не затирая добытое раньше.
+- `jobs/plans.py` — синк годового плана (правило #26): `sync_plans` (обход
+  по id DESC со `stop_at_id`/`start_after`), `upsert_plan_point` (ключ
+  rootrecordId, старая версия не затирает свежую), `plan_watermark`,
+  `link_lots` (проставляет `Lot.plan_root_id`), `plan_root_from_number`,
+  `PLANNED_STATUSES` («объявления ещё нет»). CLI `plans-sync`, актор
+  `plans_sync_actor`.
+- `jobs/plan_report.py` — выборки и агрегаты по плану: `PlanFilters`/
+  `plan_query` (витрина `/plans`), `by_month`, `upcoming_summary` (карточка
+  дашборда), `org_plan_summary` (секция в отчёте организации), `render_csv`.
+  Чистый SQL, к goszakup не ходит.
 - `jobs/supplier_contacts.py` — обогащение контактов поставщиков из реестра
   участников OWS `Subjects` (правило #23). CLI `supplier-contacts-sync`.
 - `jobs/supplier_report.py` — отчёт «кто выигрывает/проигрывает» по кодам
@@ -818,7 +866,10 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   (отчёт на Linux), `protocol.py`/`timing.py` (зеркало `autosubmit/`), `RECON.md`
   + `recon_dump.py` (снять данные с живого конкурса). Зависит только от
   httpx+playwright+pywinauto.
-- `db/models.py` — 16 таблиц. `Organization` — общая для customer/organizer/supplier.
+- `db/models.py` — 18 таблиц. `Organization` — общая для customer/organizer/supplier.
+  `PlanPoint` — пункт годового плана (правило #26): PK — `rootrecordId`
+  (правка пункта в API создаёт новую версию с новым id), заказчик хранится
+  плоско по БИН без FK, связь с лотом — через `Lot.plan_root_id`.
   `Role` — видимость вкладок UI для не-админов (`users.role_id`, NULL = все;
   правило #16).
   `LotBid` — заявка поставщика по лоту с ценой и статусом (правило #22); PK —

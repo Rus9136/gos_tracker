@@ -33,6 +33,23 @@ setup_sentry("cli")
 app = typer.Typer(add_completion=False, help=__doc__)
 
 
+def _redis_or_none():
+    """Redis для общего rate-limit OWS; None — если его нет (dev-машина)."""
+    try:
+        import redis
+
+        from .queue.broker import REDIS_URL
+
+        client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        client.ping()
+        return client
+    except Exception as e:  # noqa: BLE001 — лимитер деградирует до локального
+        logging.getLogger(__name__).warning(
+            "redis недоступен (%s) — rate-limit только внутри процесса", e
+        )
+        return None
+
+
 def _setup_logging(verbose: bool) -> None:
     logging.basicConfig(
         level="DEBUG" if verbose else "INFO",
@@ -225,6 +242,93 @@ def bids_sync_cmd(
 
     msg = bids_sync_actor.send(limit, horizon)
     typer.echo(f"enqueued bids_sync_actor (message_id={msg.message_id})")
+
+
+@app.command("plans-sync")
+def plans_sync_cmd(
+    full: bool = typer.Option(
+        False, "--full", help="Бэкофилл всего финансового года (часы работы)."
+    ),
+    year: int = typer.Option(
+        None, "--year", help="Финансовый год бэкофилла (дефолт — текущий)."
+    ),
+    resume: bool = typer.Option(
+        True, "--resume/--no-resume", help="Продолжать бэкофилл с места обрыва."
+    ),
+    max_pages: int = typer.Option(
+        None, "--max-pages", help="Потолок страниц по 200 записей за прогон."
+    ),
+    link_only: bool = typer.Option(
+        False, "--link-only", help="Только связать лоты с пунктами плана."
+    ),
+    sync: bool = typer.Option(
+        False, "--sync", help="Прогнать в этом процессе, без очереди."
+    ),
+) -> None:
+    """Синк годового плана закупок (что заказчики только собираются купить).
+
+    Штатно инкремент идёт из daily (plans_sync_actor) по водяному знаку
+    max(point_id) — фильтров по датам у Plans нет, окно задаётся id.
+    Стартовый залив года делается один раз и только этой командой:
+
+        cli plans-sync --full --sync      # ~2.6 млн пунктов, ~7 часов
+
+    Обрыв не страшен — `--resume` продолжает с самого старого залитого
+    пункта года (обход идёт по id вниз).
+    """
+    _setup_logging(verbose=True)
+    if not sync:
+        from .queue.actors import plans_sync_actor
+
+        if full:
+            typer.echo(
+                "--full только с --sync: семичасовой проход занял бы воркер "
+                "на всю daily-очередь."
+            )
+            raise typer.Exit(code=2)
+        msg = plans_sync_actor.send(max_pages)
+        typer.echo(f"enqueued plans_sync_actor (message_id={msg.message_id})")
+        return
+
+    from .api.client import OwsClient
+    from .jobs.plans import (
+        INCREMENTAL_MAX_PAGES,
+        backfill_after,
+        current_plan_year,
+        link_lots,
+        plan_watermark,
+        sync_plans,
+    )
+
+    init_db()
+    # Бэкофилл идёт часами параллельно с daily-воркером, поэтому клиент берёт
+    # ОБЩИЙ redis-лимитер: иначе два процесса независимо держали бы по 1 rps.
+    client = OwsClient(redis_client=_redis_or_none())
+    with SessionLocal() as s:
+        if link_only:
+            typer.echo(f"связано лотов: {link_lots(s)}")
+            return
+        if full:
+            target_year = year or current_plan_year()
+            after = backfill_after(s, target_year) if resume else None
+            typer.echo(
+                f"бэкофилл плана {target_year}"
+                + (f", продолжаю с id<{after}" if after else "")
+            )
+            stats = sync_plans(
+                s, client, year=target_year, start_after=after,
+                max_pages=max_pages,
+            )
+        else:
+            stats = sync_plans(
+                s, client, stop_at_id=plan_watermark(s),
+                max_pages=max_pages or INCREMENTAL_MAX_PAGES,
+            )
+        linked = link_lots(s)
+    typer.echo(
+        f"scanned={stats.scanned} created={stats.created} "
+        f"updated={stats.updated} linked={linked} last_id={stats.last_id}"
+    )
 
 
 @app.command("supplier-contacts-sync")

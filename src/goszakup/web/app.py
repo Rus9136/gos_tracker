@@ -59,6 +59,7 @@ from ..db.models import (
     LotBid,
     LotStatusHistory,
     Organization,
+    PlanPoint,
     Preset,
     Role,
     ScrapeRun,
@@ -73,6 +74,24 @@ from ..jobs.ingest import (
     find_active_run,
 )
 from ..jobs.org_report import build_org_report, related_org_ids, render_markdown
+from ..jobs.plan_report import (
+    MONTH_NAMES,
+    STAGES,
+    PlanFilters,
+    apply_sort,
+    by_month,
+    month_label,
+    org_plan_summary,
+    plan_query,
+    plan_totals,
+    plan_years,
+    trade_methods,
+    upcoming_summary,
+)
+from ..jobs.plan_report import (
+    render_csv as render_plan_csv,
+)
+from ..jobs.plans import PLANNED_STATUSES, plan_root_from_number
 from ..jobs.run_preset import _save_announcement, _save_documents
 from ..jobs.scan import (
     ALL_MODES,
@@ -91,7 +110,7 @@ from ..jobs.supplier_report import (
 )
 from ..observability import setup_sentry
 from ..prefilter import PrefilterError, lot_passes_prefilter, normalize_prefilter
-from ..scope import lot_in_scope, scope_conditions
+from ..scope import lot_in_scope, plan_scope_conditions, scope_conditions
 from ..scraper.katos import BY_CODE, REGIONS, region_name
 from ..scraper.statuses import (
     ACTUAL_STATUSES,
@@ -134,6 +153,9 @@ templates.env.filters["vertical"] = lambda s: VERTICAL_LABELS.get(
     s, "Прочее" if s == "other" else (s or "—")
 )
 templates.env.globals["VERTICAL_HUES"] = VERTICAL_HUES
+# Статусы «пункт в плане, объявления ещё нет» — витрина /plans и врезки в
+# отчётах рисуют их иначе, чем уже объявленные.
+templates.env.globals["PLANNED_STATUSES"] = PLANNED_STATUSES
 templates.env.globals["region_name"] = region_name
 templates.env.globals["dev_category_label"] = dev_category_label
 templates.env.globals["vendor_lock_label"] = vendor_lock_label
@@ -170,6 +192,8 @@ def _nav_active(request: Request) -> str:
     if path.startswith("/lot/"):
         # Карточка лота — drill-down из «Актуальных».
         return "actual"
+    if path.startswith("/plans"):
+        return "plans"
     if path.startswith("/organization"):
         return "customers"
     if path.startswith("/suppliers"):
@@ -592,6 +616,10 @@ def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depe
             "spark_runs": spark_runs,
             "attention_lots": attention_lots,
             "quick_presets": quick_presets,
+            # «Ожидается по плану» — незаобъявленные пункты ближайших двух
+            # месяцев в scope пользователя. Пустой блок (план ещё не залит)
+            # шаблон не рисует.
+            "plan_upcoming": upcoming_summary(db, plan_scope_conditions(user)),
         },
     )
 
@@ -695,6 +723,120 @@ def starred_lots(
     )
 
 
+def _plan_lead_days(
+    plan_point: PlanPoint | None, announcement: Announcement | None
+) -> int | None:
+    """За сколько дней до публикации закупка появилась в плане.
+
+    `publish_date` HTML-путь хранит наивным (см. api/mapping), а даты плана —
+    aware UTC; сравнивать их напрямую нельзя.
+    """
+    if plan_point is None or announcement is None:
+        return None
+    created, published = plan_point.created_at, announcement.publish_date
+    if created is None or published is None:
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=UTC)
+    return (published - created).days
+
+
+@app.get("/plans", response_class=HTMLResponse)
+def plans_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_page("plans")),
+    q: str = "",
+    kato: str = "",
+    category: str = "",
+    month: str = "",
+    stage: str = "planned",
+    method: str = "",
+    emarket: str = "",
+    amount_from: str = "",
+    amount_to: str = "",
+    year: str = "",
+    sort: str = "-amount",
+    page: int = 1,
+    format: str = "",
+):
+    """Годовой план закупок: что заказчики только собираются купить.
+
+    Дефолт витрины — пункты без объявления (`stage=planned`) в scope
+    пользователя, без «Электронного магазина» (это не тендерный рынок).
+    Данные заливает jobs/plans.py; к goszakup страница не ходит.
+    """
+    years = plan_years(db)
+    f = PlanFilters(
+        q=q.strip(),
+        kato=kato.strip(),
+        category=category.strip(),
+        month=_maybe_int(month),
+        stage=stage if stage in {s for s, _ in STAGES} else "planned",
+        method=_maybe_int(method),
+        with_emarket=(emarket == "1"),
+        amount_from=_maybe_int(amount_from),
+        amount_to=_maybe_int(amount_to),
+        year=_maybe_int(year) or (years[0] if years else datetime.now(UTC).year),
+        sort=sort,
+    )
+    scope = plan_scope_conditions(user)
+    stmt = apply_sort(plan_query(f, scope), f.sort)
+
+    if format == "csv":
+        rows = db.scalars(stmt.limit(5000)).all()
+        return PlainTextResponse(
+            "﻿" + render_plan_csv(rows),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="plan.csv"'},
+        )
+
+    total, total_sum = plan_totals(db, f, scope)
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, pages))
+    rows = db.scalars(
+        stmt.options(selectinload(PlanPoint.lots)).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)
+    ).all()
+
+    filters = {
+        "q": f.q, "kato": f.kato, "category": f.category,
+        "month": f.month or "", "stage": f.stage, "method": f.method or "",
+        "emarket": "1" if f.with_emarket else "",
+        "amount_from": f.amount_from, "amount_to": f.amount_to,
+        "year": f.year or "", "sort": f.sort,
+    }
+
+    def pagination_qs(p: int) -> str:
+        d = {k: v for k, v in filters.items() if v not in (None, "")}
+        d["page"] = p
+        return urlencode(d, doseq=True)
+
+    return templates.TemplateResponse(
+        request,
+        "plans.html",
+        {
+            **_base_ctx(request, db, user),
+            "rows": rows,
+            "total": total,
+            "total_sum": total_sum,
+            "page": page,
+            "pages": pages,
+            "filters": filters,
+            "months": by_month(db, f, scope),
+            "month_options": MONTH_NAMES,
+            "stages": STAGES,
+            "methods": trade_methods(db),
+            "regions": REGIONS,
+            "categories": CATEGORY_CHOICES,
+            "years": years,
+            "month_label": month_label,
+            "pagination_qs": pagination_qs,
+        },
+    )
+
+
 @app.get("/lot/{lot_id}", response_class=HTMLResponse)
 def lot_detail(
     lot_id: int,
@@ -735,6 +877,13 @@ def lot_detail(
         .order_by(LotBid.price.nulls_last(), LotBid.date_apply)
     ).all()
     has_downloaded_doc = any(d.local_path for d in documents)
+    # Пункт годового плана, из которого объявлен лот: там аванс, срок
+    # поставки и финансирование, которых в самом лоте нет. plan_root_id у
+    # старых лотов может быть не проставлен (заполняет cli plans-sync
+    # --link-only) — тогда считаем его из номера на лету.
+    plan_root = lot.plan_root_id or plan_root_from_number(lot.number)
+    plan_point = db.get(PlanPoint, plan_root) if plan_root else None
+    plan_lead_days = _plan_lead_days(plan_point, lot.announcement)
     analyze_status = request.query_params.get("analyzed")
     fetched_docs = request.query_params.get("docs")
     fetch_error = request.query_params.get("fetch_error")
@@ -748,6 +897,9 @@ def lot_detail(
             "documents": documents,
             "contracts": contracts,
             "bids": bids,
+            "plan_point": plan_point,
+            "plan_lead_days": plan_lead_days,
+            "month_label": month_label,
             "has_downloaded_doc": has_downloaded_doc,
             # Кнопка «Переанализировать» — только админу (роут под
             # require_admin), зато на любом лоте: force=True минует
@@ -1093,12 +1245,27 @@ def organization_report(
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
     current_year = datetime.now(UTC).year
+    # Годовой план организации — единственная часть отчёта, которая смотрит
+    # вперёд: что заказчик ещё только собирается купить. Ищется по БИН
+    # (план хранится плоско, без FK на organizations).
+    org_bins = [
+        b
+        for b in db.scalars(
+            select(Organization.bin).where(
+                Organization.id.in_(related_org_ids(db, org)),
+                Organization.bin.is_not(None),
+            )
+        )
+    ]
     return templates.TemplateResponse(
         request,
         "org_report.html",
         {
             **_base_ctx(request, db, user),
             **report,
+            "plan": org_plan_summary(db, org_bins, year=current_year),
+            "plan_year": current_year,
+            "month_label": month_label,
             "active_run": find_active_run(db),
             "error": error,
             "ingest_year_from": current_year - 2,
@@ -2108,6 +2275,7 @@ def settings_save(
     request: Request,
     telegram_chat_id: str = Form(""),
     notify_telegram: str = Form(""),
+    notify_plan: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_page("settings")),
 ):
@@ -2115,6 +2283,7 @@ def settings_save(
     user.telegram_chat_id = chat_id or None
     # Включать рассылку без chat_id бессмысленно — гасим тумблер.
     user.notify_telegram = bool(notify_telegram) and bool(chat_id)
+    user.notify_plan = bool(notify_plan) and bool(chat_id)
     db.commit()
     return RedirectResponse("/settings?ok=1", status_code=303)
 

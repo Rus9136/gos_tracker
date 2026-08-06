@@ -1,0 +1,217 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import cat_tag %}
+{% block title %}План закупок — Goszakup Tracker{% endblock %}
+{% block content %}
+
+{% set months_max = (months | map(attribute='total') | max) if months else 0 %}
+
+<div class="page-head">
+  <div>
+    <div class="crumb"><a href="/">Тендеры</a><span class="sep">/</span><span class="strong">План закупок</span></div>
+    <h1 class="page-title">План закупок {{ filters.year }}</h1>
+  </div>
+  <div class="flex gap-2 items-center">
+    <span class="hint mono">пунктов {{ total|n }} • ∑ {{ total_sum|n }} ₸</span>
+    <a class="btn" href="?{{ pagination_qs(1) }}&format=csv">{{ icon("download") }} CSV</a>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body" style="padding:14px 16px">
+    <div class="dim" style="font-size:12px">
+      Пункты годового плана заказчиков: закупка внесена в план, но объявления
+      по ней ещё нет. У открытых конкурсов пункт появляется за 1–8 недель до
+      публикации, у запросов ценовых предложений — часто в тот же день.
+    </div>
+    {% if months %}
+    <div class="flex items-end gap-1 mt-3" style="height:64px">
+      {% for m in months %}
+      <a href="?{{ pagination_qs(1) }}&month={{ m.month }}"
+         class="flex-1" style="text-decoration:none; min-width:0"
+         title="{{ m.label }}: {{ m.n }} пунктов на {{ m.total|n }} ₸">
+        <div style="height:{{ (44 * m.total / months_max) | round(1) if months_max else 2 }}px;
+                    background: {{ 'var(--accent)' if filters.month and filters.month|int == m.month else 'color-mix(in oklch, var(--accent) 45%, transparent)' }};
+                    border-radius:3px 3px 0 0"></div>
+        <div class="dim mono" style="font-size:10px; text-align:center; margin-top:3px">{{ m.label[:3] }}</div>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# Фильтр-карта #}
+<form method="get" class="card mb-3">
+  <div class="card-body" style="padding:14px">
+    <div class="filterbar">
+      <div class="field">
+        <label>Поиск</label>
+        <div style="position:relative">
+          <input class="input" name="q" value="{{ filters.q }}" placeholder="предмет, заказчик, код ЕНС ТРУ"
+                 style="padding-left:32px; width:100%">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--fg-3)">{{ icon("search", 14) }}</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>Регион</label>
+        <select class="select" name="kato">
+          <option value="">— все —</option>
+          {% for r in regions %}
+          <option value="{{ r.code }}" {% if filters.kato == r.code %}selected{% endif %}>{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Категория</label>
+        <select class="select" name="category">
+          <option value="">— все —</option>
+          {% for slug, label in categories %}
+          <option value="{{ slug }}" {% if filters.category == slug %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+          <option value="other" {% if filters.category == 'other' %}selected{% endif %}>Прочее</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Стадия</label>
+        <select class="select" name="stage">
+          {% for key, label in stages %}
+          <option value="{{ key }}" {% if filters.stage == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn primary" type="submit">{{ icon("filter") }} Применить</button>
+    </div>
+    <div class="filterbar mt-2" style="grid-template-columns: repeat(5, 1fr) auto">
+      <div class="field">
+        <label>Месяц закупки</label>
+        <select class="select" name="month">
+          <option value="">— любой —</option>
+          {% for num, label in month_options.items() %}
+          <option value="{{ num }}" {% if filters.month and filters.month|int == num %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Способ закупки</label>
+        <select class="select" name="method">
+          <option value="">— все, кроме ЭМ —</option>
+          {% for mid, mname in methods %}
+          <option value="{{ mid }}" {% if filters.method and filters.method|int == mid %}selected{% endif %}>{{ mname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Сумма от, ₸</label>
+        <input class="input" type="number" name="amount_from" value="{{ filters.amount_from or '' }}" placeholder="0">
+      </div>
+      <div class="field">
+        <label>Год плана</label>
+        <select class="select" name="year">
+          {% for y in years %}
+          <option value="{{ y }}" {% if filters.year == y %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Сортировка</label>
+        <select class="select" name="sort">
+          <option value="-amount" {% if filters.sort == '-amount' %}selected{% endif %}>Сумма ↓</option>
+          <option value="amount" {% if filters.sort == 'amount' %}selected{% endif %}>Сумма ↑</option>
+          <option value="month" {% if filters.sort == 'month' %}selected{% endif %}>По месяцу</option>
+          <option value="-created_at" {% if filters.sort == '-created_at' %}selected{% endif %}>Новые в плане</option>
+        </select>
+      </div>
+      <div class="flex items-end gap-2">
+        <label class="flex items-center gap-2" style="height:36px; cursor:pointer" title="Электронный магазин — закупка из каталога, не тендер">
+          <input type="checkbox" name="emarket" value="1" {% if filters.emarket %}checked{% endif %}>
+          <span class="dim" style="font-size:12px">с ЭМ</span>
+        </label>
+        <a class="btn ghost sm" href="/plans">Сбросить</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="tbl-scroll">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Предмет / Заказчик</th>
+        <th style="width:150px">Категория</th>
+        <th class="num" style="width:140px">Сумма ₸</th>
+        <th style="width:110px">Месяц</th>
+        <th style="width:180px">Способ</th>
+        <th style="width:170px">Стадия</th>
+        <th style="width:90px">Аванс</th>
+        <th style="width:130px">Регион</th>
+        <th style="width:90px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in rows %}
+      <tr>
+        <td style="min-width:0">
+          <div class="strong clamp-2" style="font-size:13.5px; max-width:520px">{{ p.name or '—' }}</div>
+          {% if p.description %}<div class="dim truncate" style="font-size:12px; max-width:520px">{{ p.description }}</div>{% endif %}
+          <div class="dim truncate" style="font-size:12px; max-width:520px">{{ p.customer_name or '—' }}</div>
+          {% if p.enstru_code %}<div class="mono dimer" style="font-size:10.5px">{{ p.enstru_code }}</div>{% endif %}
+        </td>
+        <td>{{ cat_tag(p.category) }}</td>
+        <td class="num strong mono" style="font-size:13.5px">{{ p.amount|n }}</td>
+        <td class="dim">{{ month_label(p.month) }}</td>
+        <td class="dim truncate" style="max-width:180px" title="{{ p.trade_method or '' }}">{{ p.trade_method or '—' }}</td>
+        <td>
+          {% if p.lots %}
+            <a class="badge accent" href="/lot/{{ p.lots[0].id }}" style="text-decoration:none">
+              объявлен{% if p.lots|length > 1 %} · {{ p.lots|length }} лота{% endif %}
+            </a>
+          {% elif p.status_id in PLANNED_STATUSES %}
+            <span class="badge">{{ p.status_name or 'в плане' }}</span>
+          {% else %}
+            <span class="badge muted">{{ p.status_name or '—' }}</span>
+          {% endif %}
+        </td>
+        <td class="mono dim">{{ (p.prepayment | round | int ~ '%') if p.prepayment else '—' }}</td>
+        <td class="dim">{{ region_name(p.kato) or '—' }}</td>
+        <td>
+          <div class="row-actions">
+            {% if p.customer_bin %}
+            <a class="icon-btn" href="/organizations?q={{ p.customer_bin }}" title="Заказчик">{{ icon("list", 13) }}</a>
+            {% endif %}
+            {% if p.lots %}
+            <a class="icon-btn" href="/lot/{{ p.lots[0].id }}" title="Объявленный лот">{{ icon("file", 13) }}</a>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="dim" style="text-align:center; padding:32px">
+        Ничего не найдено. Если план ещё не залит — <span class="mono">cli plans-sync --full --sync</span>.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot flex items-center justify-between">
+    <span>Показано <span class="strong">{{ rows|length }}</span> из {{ total|n }} пунктов плана</span>
+    {% if pages > 1 %}
+    <div class="flex items-center gap-2">
+      {% if page > 1 %}<a class="btn sm" href="?{{ pagination_qs(page - 1) }}">{{ icon("chevronLeft", 12) }} Назад</a>
+      {% else %}<button class="btn sm" disabled style="opacity:0.5">{{ icon("chevronLeft", 12) }} Назад</button>{% endif %}
+      <span class="mono">{{ page }} / {{ pages }}</span>
+      {% if page < pages %}<a class="btn sm" href="?{{ pagination_qs(page + 1) }}">Вперёд {{ icon("chevronRight", 12) }}</a>
+      {% else %}<button class="btn sm" disabled style="opacity:0.5">Вперёд {{ icon("chevronRight", 12) }}</button>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="hint mt-3">
+  Источник — реестр годовых планов OWS. Пункт плана публикуется не для каждой
+  закупки, а суммы и сроки заказчик правит до объявления, поэтому план — это
+  намерение, а не обязательство.
+</div>
+
+{% endblock %}

@@ -203,15 +203,18 @@ class OwsClient:
         limit: int = 200,
         max_pages: int | None = None,
         cache_ttl: int | None = None,
+        start_after: int | None = None,
     ) -> Iterator[dict]:
         """Курсорная пагинация: у query обязан быть аргумент `$after: Int`.
 
         Курсор — pageInfo.lastId предыдущей страницы; конец — hasNextPage=false
         или пустая страница (страховка от зацикливания на одном lastId).
+        `start_after` продолжает обход с сохранённого курсора — им бэкофилл
+        плана возобновляется после обрыва, не проходя пройденное заново.
         """
         variables = dict(variables or {})
         variables.setdefault("limit", limit)
-        after: int | None = None
+        after: int | None = start_after
         pages = 0
         while True:
             variables["after"] = after

@@ -47,6 +47,18 @@
     <div class="k-value num">{{ stats.orgs|n }}</div>
     <div class="k-delta">уникальных по БИН/имени</div>
   </div>
+  {% if plan_upcoming and plan_upcoming.n %}
+  <a class="kpi" href="/plans" style="text-decoration:none; color:inherit">
+    <div class="flex justify-between items-center">
+      <div class="k-label">Ожидается по плану</div>
+      {{ icon("pin", 14) }}
+    </div>
+    <div class="k-value num">{{ plan_upcoming.n|n }}</div>
+    <div class="k-delta">
+      {{ plan_upcoming.total|compact }} ₸ · {{ plan_upcoming.months|join(' и ') }} · объявлений ещё нет
+    </div>
+  </a>
+  {% else %}
   <div class="kpi">
     <div class="flex justify-between items-center">
       <div class="k-label">Документов</div>
@@ -55,6 +67,7 @@
     <div class="k-value num">{{ stats.docs|n }}</div>
     <div class="k-delta">{{ spark_runs.docs | sum }} скачано за последние прогоны</div>
   </div>
+  {% endif %}
 </div>
 
 {% if quick_presets %}

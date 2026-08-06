@@ -50,6 +50,48 @@ query($f: ContractFiltersInput, $limit: Int, $after: Int) {
 }
 """
 
+# Пункты годового плана (plans_sync_actor). Фильтры по датам у корня Plans
+# не работают вовсе (любое непустое «от» отдаёт 0 записей), поэтому окно
+# задаётся курсором: выдача идёт по id DESC, а водяной знак — max(point_id)
+# в нашей БД (см. jobs/plans.py). Ref*-объекты дают человекочитаемые имена
+# сразу, без похода в /v3/refs.
+PLANS_QUERY = """
+query($f: PlansFiltersInput, $limit: Int, $after: Int) {
+  Plans(filter: $f, limit: $limit, after: $after) {
+    id
+    rootrecordId
+    plnPointYear
+    subjectBiin
+    subjectNameRu
+    nameRu
+    descRu
+    extraDescRu
+    refEnstruCode
+    amount
+    price
+    count
+    refMonthsId
+    refTradeMethodsId
+    refPlnPointStatusId
+    prepayment
+    supplyDateRu
+    isActive
+    dateCreate
+    timestamp
+    RefUnits { nameRu }
+    RefSubjectType { nameRu }
+    RefTradeMethods { nameRu }
+    RefPlnPointStatus { nameRu }
+    RefEnstru { code nameRu }
+    RefFinsource { nameRu }
+    RefBudgetType { nameRu }
+    PlanActs { planActNumber dateApproved }
+    PlansKato { refKatoCode fullDeliveryPlaceNameRu }
+    PlansSpec { ekrbCode ekrbNameRu fkrbProgramCode fkrbProgramNameRu abpCode abpNameRu amount }
+  }
+}
+"""
+
 # Заявки поставщиков по одному объявлению (bids_sync_actor). Фильтр TrdApp
 # принимает только скалярный buyId (массив, в отличие от TrdBuy.id, не берёт),
 # поэтому запрос — на объявление. Цены живут в AppLots: price за единицу,

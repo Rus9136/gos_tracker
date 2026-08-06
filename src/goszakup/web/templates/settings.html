@@ -75,6 +75,14 @@
              {{ 'checked' if user.notify_telegram else '' }}>
       <span>Присылать уведомления о новых подходящих лотах</span>
     </label>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" name="notify_plan" value="1"
+             {{ 'checked' if user.notify_plan else '' }}>
+      <span>Присылать новые пункты годового плана
+        <span class="dim">— закупки, по которым объявления ещё нет; отбираются
+        пре-фильтром запроса (вертикаль, коды, ключевые слова, сумма)</span>
+      </span>
+    </label>
     <div>
       <button type="submit" class="btn">{{ icon("check", 14) }} Сохранить</button>
     </div>

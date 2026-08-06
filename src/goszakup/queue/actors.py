@@ -148,6 +148,10 @@ def daily_actor() -> None:
         api_daily_actor.send()
         contracts_sync_actor.send()
         bids_sync_actor.send()
+        # Годовой план: то, что заказчики только собираются купить. Дешёвый
+        # проход (десяток страниц в сутки на весь РК), но идёт после
+        # объявлений — они важнее, если API вдруг тормозит.
+        plans_sync_actor.send()
     else:
         with SessionLocal() as session:
             ids = [
@@ -370,6 +374,76 @@ def api_daily_actor() -> None:
         _set_pending(r, run_id, len(targets))
         for anno_id in targets:
             detail_actor.send(anno_id, run_id)
+
+
+@dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=60 * 60 * 1000)
+def plans_sync_actor(max_pages: int | None = None) -> None:
+    """Инкрементальный синк годового плана (jobs/plans.py).
+
+    Окно — по id: фильтры дат у корня Plans не работают вовсе, зато выдача
+    идёт по id DESC. Водяной знак — max(point_id) в БД. Потолок страниц
+    обязателен: при пустой таблице «инкремент» иначе ушёл бы в проход по
+    всему реестру (42 млн пунктов) — стартовый объём заливает бэкофилл
+    `cli plans-sync --full --sync`.
+    """
+    if not OWS_TOKEN:
+        return
+    from ..jobs.plans import (
+        INCREMENTAL_MAX_PAGES,
+        link_lots,
+        plan_watermark,
+        sync_plans,
+    )
+
+    r = _redis_client()
+    with SessionLocal() as session:
+        watermark = plan_watermark(session)
+        if watermark is None:
+            log.warning(
+                "plans-sync: план ещё не залит — прогон возьмёт только %d "
+                "свежих страниц. Полный год: cli plans-sync --full --sync",
+                max_pages or INCREMENTAL_MAX_PAGES,
+            )
+        run = ScrapeRun(
+            preset_id=None,
+            note=f"plans-sync: пункты плана свежее id={watermark or '—'}",
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        client = OwsClient(redis_client=r)
+        try:
+            stats = sync_plans(
+                session,
+                client,
+                stop_at_id=watermark,
+                max_pages=max_pages or INCREMENTAL_MAX_PAGES,
+                on_progress=lambda s: _touch_run(session, run_id),
+            )
+        except OwsApiError as e:
+            # Водяной знак не двигается — следующий прогон возьмёт то же окно.
+            log.warning("plans-sync: OWS недоступен (%s) — доберём позже", e)
+            _increment_run(session, run_id, errors=1)
+            _close_run(session, run_id)
+            return
+        linked = link_lots(session)
+        if stats.created:
+            from .notify import plan_notify_actor
+
+            plan_notify_actor.send()
+        _update_run(
+            session,
+            run_id,
+            listing_count=stats.scanned,
+            new_lots=stats.created,
+            updated_lots=stats.updated,
+        )
+        _close_run(session, run_id)
+        log.info(
+            "plans-sync: scanned=%d created=%d updated=%d linked=%d",
+            stats.scanned, stats.created, stats.updated, linked,
+        )
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0)

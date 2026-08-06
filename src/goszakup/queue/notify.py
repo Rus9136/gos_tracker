@@ -76,6 +76,31 @@ def notify_actor(match_id: int) -> None:
 
 @dramatiq.actor(
     queue_name="goszakup_notify",
+    # Без ретраев: строка PlanNotification пишется и на неудачной отправке,
+    # поэтому повтор задачи всё равно ничего не дошлёт — а дубли в чате даст.
+    max_retries=0,
+    time_limit=10 * 60 * 1000,
+)
+def plan_notify_actor(limit: int | None = None) -> None:
+    """Уведомления о новых пунктах годового плана (правило #26).
+
+    Ставится из `plans_sync_actor` после инкремента. Отбор — только
+    пре-фильтром запроса (у пункта плана нет ТЗ), гейт — отдельный тумблер
+    `User.notify_plan`.
+    """
+    from ..jobs.plan_notify import DEFAULT_LIMIT, notify_new_plan_points
+
+    with SessionLocal() as session:
+        stats = notify_new_plan_points(session, limit=limit or DEFAULT_LIMIT)
+    if stats.candidates:
+        log.info(
+            "plan_notify_actor: кандидатов=%d отправлено=%d пропущено=%d",
+            stats.candidates, stats.sent, stats.skipped,
+        )
+
+
+@dramatiq.actor(
+    queue_name="goszakup_notify",
     # Без ретраев: при ошибке пользователю сразу уходит fallback-сообщение,
     # повтор задачи привёл бы к дублям в чате.
     max_retries=0,

@@ -36,7 +36,7 @@ from decimal import Decimal
 from sqlalchemy import or_
 
 from .classify.verticals import VERTICAL_BY_SLUG
-from .db.models import Lot
+from .db.models import Lot, PlanPoint
 
 # Слишком короткое слово ловит пол-рынка («и», «с») — почти наверняка опечатка
 # или мусор от разделителя, поэтому это ошибка ввода, а не тихий скип.
@@ -121,34 +121,70 @@ def normalize_prefilter(raw: dict | None) -> dict | None:
     return out or None
 
 
-def lot_passes_prefilter(pf: dict | None, lot: Lot) -> bool:
-    """Авторитетный предикат пре-фильтра. `pf is None` = ограничений нет."""
+def _passes(
+    pf: dict | None,
+    *,
+    category: str | None,
+    enstru_code: str | None,
+    text: str,
+    amount: Decimal | float | None,
+) -> bool:
+    """Предикат на плоских значениях — общий для лота и пункта плана."""
     if not pf:
         return True
 
     categories = pf.get("categories")
-    if categories and lot.category not in categories:
+    if categories and category not in categories:
         return False
 
     prefixes = pf.get("code_prefixes")
     if prefixes:
         # Код вида "192021.530.000001" — раздел КПВЭД в первом сегменте.
-        head = (lot.enstru_code or "").split(".", 1)[0]
+        head = (enstru_code or "").split(".", 1)[0]
         if not head or not any(head.startswith(p) for p in prefixes):
             return False
 
     keywords = pf.get("keywords")
     if keywords:
-        haystack = f"{lot.name or ''} || {lot.enstru or ''}".lower()
+        haystack = text.lower()
         if not any(word in haystack for word in keywords):
             return False
 
     max_amount = pf.get("max_amount")
     if max_amount is not None:
-        if lot.plan_amount is None or lot.plan_amount > Decimal(max_amount):
+        if amount is None or Decimal(str(amount)) > Decimal(max_amount):
             return False
 
     return True
+
+
+def lot_passes_prefilter(pf: dict | None, lot: Lot) -> bool:
+    """Авторитетный предикат пре-фильтра. `pf is None` = ограничений нет."""
+    return _passes(
+        pf,
+        category=lot.category,
+        enstru_code=lot.enstru_code,
+        text=f"{lot.name or ''} || {lot.enstru or ''}",
+        amount=lot.plan_amount,
+    )
+
+
+def plan_passes_prefilter(pf: dict | None, point) -> bool:
+    """Тот же пре-фильтр по пункту годового плана (правило #26).
+
+    Поля плана называются иначе, чем у лота (`amount`, `enstru_name`), а
+    характеристика (`description`) идёт в поиск по ключевым словам: у пункта
+    плана название часто односложное («Ноутбук»), и без неё keywords почти
+    не срабатывают.
+    """
+    return _passes(
+        pf,
+        category=point.category,
+        enstru_code=point.enstru_code,
+        text=f"{point.name or ''} || {point.description or ''} "
+        f"|| {point.enstru_name or ''}",
+        amount=point.amount,
+    )
 
 
 def prefilter_conditions(pf: dict | None) -> list:
@@ -166,4 +202,19 @@ def prefilter_conditions(pf: dict | None) -> list:
         conds.append(or_(*[Lot.enstru_code.like(f"{p}%") for p in prefixes]))
     if (max_amount := pf.get("max_amount")) is not None:
         conds.append(Lot.plan_amount <= Decimal(max_amount))
+    return conds
+
+
+def plan_prefilter_conditions(pf: dict | None) -> list:
+    """То же надмножество для пунктов плана (дофильтровать
+    `plan_passes_prefilter`)."""
+    if not pf:
+        return []
+    conds = []
+    if categories := pf.get("categories"):
+        conds.append(PlanPoint.category.in_(categories))
+    if prefixes := pf.get("code_prefixes"):
+        conds.append(or_(*[PlanPoint.enstru_code.like(f"{p}%") for p in prefixes]))
+    if (max_amount := pf.get("max_amount")) is not None:
+        conds.append(PlanPoint.amount <= Decimal(max_amount))
     return conds

@@ -19,6 +19,7 @@ from .auth import require_user
 PAGES: list[tuple[str, str, str]] = [
     ("dashboard", "Дашборд", "/"),
     ("actual", "Актуальные", "/actual"),
+    ("plans", "План закупок", "/plans"),
     ("past", "Прошедшие", "/past"),
     ("starred", "Избранное", "/starred"),
     ("organizations", "Заказчики", "/organizations"),

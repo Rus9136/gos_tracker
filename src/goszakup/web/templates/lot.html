@@ -110,6 +110,68 @@
       </div>
     </div>
 
+    {% if plan_point %}
+    {% set pp = plan_point %}
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Пункт годового плана</div>
+          <div class="card-sub">
+            Что заказчик планировал: аванс, срок поставки и источник денег —
+            этих полей в самом лоте нет
+          </div>
+        </div>
+        <a class="btn sm ghost" href="/plans?q={{ pp.customer_bin or '' }}&stage=all">План заказчика</a>
+      </div>
+      <div class="card-body" style="padding-top:0; padding-bottom:0">
+        <dl class="dl">
+          <dt>В плане с</dt>
+          <dd>
+            {{ pp.created_at|dt if pp.created_at else '—' }}
+            {% if plan_lead_days is not none %}
+            <span class="badge {{ 'ok' if plan_lead_days >= 7 else '' }}">
+              объявлен через {{ plan_lead_days }} дн.
+            </span>
+            {% endif %}
+          </dd>
+          <dt>Плановый месяц</dt><dd>{{ month_label(pp.month) }}</dd>
+          <dt>Аванс</dt>
+          <dd class="mono {{ 'strong' if pp.prepayment else 'dim' }}">
+            {{ (pp.prepayment|round|int ~ ' %') if pp.prepayment else 'без аванса' }}
+          </dd>
+          <dt>Срок поставки</dt><dd>{{ pp.supply_date or '—' }}</dd>
+          <dt>Сумма по плану</dt>
+          <dd class="mono">
+            {{ pp.amount|n }} ₸
+            {% if pp.amount and lot.plan_amount and pp.amount != lot.plan_amount %}
+            <span class="badge warn">в лоте {{ lot.plan_amount|n }}</span>
+            {% endif %}
+            {% if pp.versions > 1 and pp.amount_initial and pp.amount_initial != pp.amount %}
+            <span class="dim" style="font-size:11.5px">
+              изначально {{ pp.amount_initial|n }} ₸, правок: {{ pp.versions - 1 }}
+            </span>
+            {% endif %}
+          </dd>
+          <dt>Финансирование</dt><dd class="dim">{{ pp.finsource or '—' }}</dd>
+          {% if pp.spec %}
+          {% set sp = pp.spec[0] %}
+          <dt>Бюджет</dt>
+          <dd class="dim" style="font-size:12px">
+            {% if sp.abp_name %}{{ sp.abp_name }}{% endif %}
+            {% if sp.program_name %}<div>программа {{ sp.program_code }} · {{ sp.program_name }}</div>{% endif %}
+            {% if sp.ekrb_name %}<div>статья {{ sp.ekrb_code }} · {{ sp.ekrb_name }}</div>{% endif %}
+          </dd>
+          {% endif %}
+          <dt>Место поставки</dt><dd class="dim">{{ pp.place or '—' }}</dd>
+          <dt>Акт плана</dt>
+          <dd class="mono dim" style="font-size:12px">
+            {{ pp.plan_act_number or '—' }}{% if pp.plan_act_approved_at %} от {{ pp.plan_act_approved_at|dt }}{% endif %}
+          </dd>
+        </dl>
+      </div>
+    </div>
+    {% endif %}
+
     {% if lot.announcement_id %}
     <div class="card">
       <div class="card-head">

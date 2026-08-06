@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .db.models import Lot, User
+from .db.models import Lot, PlanPoint, User
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,39 @@ def lot_in_scope_of(scope: Scope, lot: Lot) -> bool:
 def scope_conditions(user: User | None) -> list:
     """SQLAlchemy-условия для WHERE: ограничить выборку лотов scope'ом."""
     return scope_conditions_of(user_scope(user))
+
+
+def plan_scope_conditions_of(scope: Scope) -> list:
+    """Тот же scope, но для пунктов годового плана (/plans, уведомления).
+
+    Поля-аналоги: kato → регион, category → вертикаль (классификатор общий
+    с лотами), amount → сумма. Иначе пользователь видел бы на /plans рынок
+    шире, чем на /actual.
+    """
+    conds = []
+    if scope.regions:
+        conds.append(PlanPoint.kato.in_(scope.regions))
+    if scope.categories:
+        conds.append(PlanPoint.category.in_(scope.categories))
+    if scope.min_amount:
+        conds.append(PlanPoint.amount >= scope.min_amount)
+    return conds
+
+
+def plan_in_scope_of(scope: Scope, point: PlanPoint) -> bool:
+    if scope.regions and point.kato not in scope.regions:
+        return False
+    if scope.categories and point.category not in scope.categories:
+        return False
+    if scope.min_amount and (
+        point.amount is None or float(point.amount) < scope.min_amount
+    ):
+        return False
+    return True
+
+
+def plan_scope_conditions(user: User | None) -> list:
+    return plan_scope_conditions_of(user_scope(user))
 
 
 def lot_in_scope(lot: Lot, user: User | None) -> bool:

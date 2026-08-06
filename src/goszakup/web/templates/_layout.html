@@ -27,7 +27,7 @@
     </a>
 
     <nav class="nav">
-      {% if 'dashboard' in perms or 'actual' in perms or 'past' in perms or 'starred' in perms or 'organizations' in perms %}
+      {% if 'dashboard' in perms or 'actual' in perms or 'plans' in perms or 'past' in perms or 'starred' in perms or 'organizations' in perms %}
       <div class="nav-group-label">Тендеры</div>
       {% endif %}
       {% if 'dashboard' in perms %}
@@ -41,6 +41,12 @@
         <span class="nav-ic">{{ icon("flame", 15) }}</span>
         <span class="nav-label">Актуальные</span>
         <span class="nav-count">{{ _counts.actual }}</span>
+      </a>
+      {% endif %}
+      {% if 'plans' in perms %}
+      <a href="/plans"        class="{{ 'active' if _active == 'plans' else '' }}">
+        <span class="nav-ic">{{ icon("pin", 15) }}</span>
+        <span class="nav-label">План закупок</span>
       </a>
       {% endif %}
       {% if 'past' in perms %}

@@ -124,6 +124,12 @@ class User(Base):
     notify_telegram: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
     )
+    # Отдельный тумблер для годового плана (правило #26): это уведомления не
+    # о лотах, а о намерениях заказчика, и поток у них другой — включается
+    # осознанно, поверх notify_telegram.
+    notify_plan: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
 
@@ -233,6 +239,11 @@ class Lot(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # lot_id с сайта
     number: Mapped[str | None] = mapped_column(String(50), index=True)
+    # rootrecordId пункта годового плана, из которого объявлен лот. Номер лота
+    # на goszakup собран как «<rootrecordId>-<способ><N>» (проверено на всех
+    # номерах в БД), поэтому связь считается локально из number, без запроса
+    # к API. Пустой — у лотов, чей пункт плана в реестре не публикуется.
+    plan_root_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     announcement_id: Mapped[int | None] = mapped_column(
         ForeignKey("announcements.id"), index=True
     )
@@ -291,6 +302,15 @@ class Lot(Base):
         uselist=False,
         cascade="all, delete-orphan",
         foreign_keys="LotAnalysis.lot_id",
+    )
+    # Связь по вычисленному из номера plan_root_id, а не по FK: пункт плана
+    # приходит отдельным синком и может появиться в БД позже лота (или не
+    # появиться вовсе — план публикуется не для всех закупок).
+    plan_point: Mapped[PlanPoint | None] = relationship(
+        "PlanPoint",
+        primaryjoin="foreign(Lot.plan_root_id) == PlanPoint.root_id",
+        uselist=False,
+        viewonly=True,
     )
 
 
@@ -395,6 +415,106 @@ class LotBid(Base):
 
     lot: Mapped[Lot] = relationship(back_populates="bids")
     supplier: Mapped[Organization | None] = relationship(foreign_keys=[supplier_id])
+
+
+class PlanPoint(Base):
+    """Пункт годового плана закупок (GraphQL Plans → PlnPoint).
+
+    План — это то, что заказчик СОБИРАЕТСЯ купить: пункт появляется до
+    объявления (у открытых конкурсов — за 1–8 недель, у ЗЦП часто в тот же
+    день) и несёт то, чего в лоте нет вовсе: плановый месяц закупки, размер
+    аванса, срок поставки, источник финансирования и бюджетные статьи.
+
+    Ключ — `root_id` (rootrecordId), а не id: правка пункта не обновляет
+    строку в API, а создаёт НОВУЮ с новым id и прежним rootrecordId. Храним
+    последнюю версию, а факт правок — в `versions`/`amount_initial`.
+
+    Синк — jobs/plans.py. Связь с лотом — Lot.plan_root_id (см. там же).
+    """
+
+    __tablename__ = "plan_points"
+    __table_args__ = (
+        # Витрина /plans: WHERE year=? AND status_id=? [AND month=?]
+        # ORDER BY amount DESC — на 2.5М строк одноколоночные индексы дают
+        # bitmap-and и отдельный Sort.
+        Index("ix_plan_points_year_status", "year", "status_id", "amount"),
+        Index("ix_plan_points_year_category", "year", "category"),
+    )
+
+    root_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+    # id последней увиденной версии пункта. Он же — водяной знак синка:
+    # выдача Plans идёт по id DESC, фильтры по датам в OWS не работают.
+    point_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    year: Mapped[int | None] = mapped_column(Integer, index=True)
+    # Заказчик хранится плоско (БИН + имя), без FK на organizations:
+    # план покрывает ~20 тыс. заказчиков РК, из которых лоты есть у малой
+    # части, и заведение их всех засорило бы /organizations. Связь на
+    # чтение — по БИН.
+    customer_bin: Mapped[str | None] = mapped_column(String(20), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(500))
+    name: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    extra_description: Mapped[str | None] = mapped_column(Text)
+    enstru_code: Mapped[str | None] = mapped_column(String(40), index=True)
+    enstru_name: Mapped[str | None] = mapped_column(String(500))
+    # Слаг вертикали (classify/verticals.py) — тот же классификатор, что у
+    # лотов, поэтому scope пользователя применяется к плану без переучёта.
+    category: Mapped[str | None] = mapped_column(String(50), index=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY_TYPE, index=True)
+    price: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    quantity: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(100))
+    # Планируемый срок закупки (refMonthsId, 1–12) — главный сигнал «когда
+    # ждать объявление».
+    month: Mapped[int | None] = mapped_column(Integer, index=True)
+    trade_method_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    trade_method: Mapped[str | None] = mapped_column(String(200))
+    # refPlnPointStatusId: 2 «Утвержден» (объявления ещё нет), 5 «Опубликован»,
+    # 9 «Закупка состоялась», 310 «Проект договора» и т.д.
+    status_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    status_name: Mapped[str | None] = mapped_column(String(200))
+    subject_type: Mapped[str | None] = mapped_column(String(50))  # Товар/Работа/Услуга
+    prepayment: Mapped[float | None] = mapped_column(Float)  # аванс, %
+    supply_date: Mapped[str | None] = mapped_column(Text)  # срок поставки, текст
+    finsource: Mapped[str | None] = mapped_column(String(300))
+    budget_type: Mapped[str | None] = mapped_column(String(300))
+    # Специфики (PlansSpec): статья расходов ЕКРБ, бюджетная программа и АБП.
+    # Списком в JSON — у пункта их бывает несколько, а в UI показываем как есть.
+    spec: Mapped[list[dict] | None] = mapped_column(JSON_TYPE)
+    # Код региона (katos.REGIONS) из мест поставки — как Lot.kato, чтобы
+    # scope и фильтры работали одинаково на лотах и на плане.
+    kato: Mapped[str | None] = mapped_column(String(20), index=True)
+    place: Mapped[str | None] = mapped_column(Text)
+    plan_act_number: Mapped[str | None] = mapped_column(String(50))
+    plan_act_approved_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
+    # Сколько версий пункта мы видели и с чего он начинался: заказчики двигают
+    # сумму и срок до публикации, а история версий из API не восстанавливается
+    # (старые версии в выдаче не ищутся по rootrecordId).
+    versions: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    amount_initial: Mapped[Decimal | None] = mapped_column(MONEY_TYPE)
+    month_initial: Mapped[int | None] = mapped_column(Integer)
+    # dateCreate/timestamp из API (алматинское время → UTC).
+    created_at: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
+    changed_at: Mapped[datetime | None] = mapped_column(TS_TYPE)
+    first_seen: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    last_synced: Mapped[datetime] = mapped_column(TS_TYPE, default=_now, onupdate=_now)
+
+    # Лотов на один пункт бывает несколько: объявление может разбить пункт
+    # плана на части (номера «<root>-ОК1», «<root>-ОК2»), а перезапуск
+    # несостоявшейся закупки добавляет ещё лоты к тому же пункту.
+    lots: Mapped[list[Lot]] = relationship(
+        "Lot",
+        primaryjoin="foreign(Lot.plan_root_id) == PlanPoint.root_id",
+        viewonly=True,
+        order_by="Lot.id",
+    )
 
 
 class Preset(Base):
@@ -553,6 +673,33 @@ class UserLotMatch(Base):
 
     query: Mapped[UserQuery] = relationship(back_populates="matches")
     lot: Mapped[Lot] = relationship()
+
+
+class PlanNotification(Base):
+    """Дедуп Telegram-уведомлений о новых пунктах годового плана.
+
+    Отдельно от `UserLotMatch.notified_at`: там пара «запрос × лот» с
+    LLM-вердиктом, здесь — «запрос × пункт плана», отобранный ТОЛЬКО
+    пре-фильтром (у пункта нет ТЗ, звать LLM не на чем; правило #26).
+    """
+
+    __tablename__ = "plan_notifications"
+    __table_args__ = (
+        UniqueConstraint("user_query_id", "plan_root_id", name="uq_plan_notif"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_query_id: Mapped[int] = mapped_column(
+        ForeignKey("user_queries.id", ondelete="CASCADE"), index=True
+    )
+    plan_root_id: Mapped[int] = mapped_column(
+        ForeignKey("plan_points.root_id", ondelete="CASCADE"), index=True
+    )
+    notified_at: Mapped[datetime] = mapped_column(TS_TYPE, default=_now)
+    # Пустой — уведомление отправлено; текст — почему не ушло (выключено,
+    # нет chat_id, ошибка Bot API). Строка пишется в любом случае, иначе
+    # следующий прогон дёргал бы тот же пункт снова.
+    error: Mapped[str | None] = mapped_column(Text)
 
 
 class LlmCall(Base):

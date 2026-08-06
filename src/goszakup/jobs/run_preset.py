@@ -24,6 +24,7 @@ from ..db.models import (
     Preset,
     ScrapeRun,
 )
+from ..jobs.plans import plan_root_from_number
 from ..scraper.announce import AnnouncementDetail
 from ..scraper.modal_files import is_tz_like_name
 from ..scraper.search import ListingHit, SearchParams
@@ -171,6 +172,10 @@ def _upsert_lot_from_listing(
     customer = _get_or_create_org(session, bin_=None, name=hit.customer_name)
 
     lot.number = hit.lot_number or lot.number
+    # Пункт годового плана, из которого объявлен лот, — вычисляется из номера
+    # (см. jobs/plans.plan_root_from_number), сам пункт приезжает отдельным
+    # синком и может появиться позже лота.
+    lot.plan_root_id = plan_root_from_number(lot.number) or lot.plan_root_id
     lot.announcement_id = hit.announcement_id
     lot.customer_id = customer.id if customer else lot.customer_id
     lot.enstru = hit.enstru or lot.enstru
