@@ -74,17 +74,15 @@
 <div class="card mt-4">
   <div class="card-head">
     <div class="flex items-center gap-3">
-      <div class="card-title">Быстрый старт по preset'ам</div>
-      <span class="dim">— активные сохранённые фильтры</span>
+      <div class="card-title">Быстрый переход по регионам</div>
+      <span class="dim">— актуальные лоты выбранного региона</span>
     </div>
-    <a class="btn sm ghost" href="/presets">Управлять preset'ами</a>
   </div>
   <div class="card-body" style="display:flex; flex-wrap:wrap; gap:8px">
     {% for p in quick_presets %}
-      {% set hue = VERTICAL_HUES.get(p.categories[0], 200) if p.categories else 200 %}
       <a class="chip" href="/actual{% if p.kato %}?kato={{ p.kato }}{% endif %}" title="{{ p.name }}">
-        <span class="swatch" style="width:8px;height:8px;border-radius:2px;background: oklch(0.7 0.14 {{ hue }})"></span>
-        {{ p.name }}
+        <span class="swatch" style="width:8px;height:8px;border-radius:2px;background: oklch(0.7 0.14 200)"></span>
+        {{ region_name(p.kato) or p.name }}
       </a>
     {% endfor %}
   </div>

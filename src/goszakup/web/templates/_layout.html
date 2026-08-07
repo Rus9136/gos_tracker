@@ -99,12 +99,11 @@
       {% if user and user.is_admin %}
       <a href="/presets"      class="{{ 'active' if _active == 'presets' else '' }}">
         <span class="nav-ic">{{ icon("star", 15) }}</span>
-        <span class="nav-label">Preset'ы</span>
-        <span class="nav-count">{{ _counts.presets }}</span>
+        <span class="nav-label">Покрытие сбора</span>
       </a>
       <a href="/runs"         class="{{ 'active' if _active == 'runs' else '' }}">
         <span class="nav-ic">{{ icon("refresh", 15) }}</span>
-        <span class="nav-label">Прогоны</span>
+        <span class="nav-label">Синхронизации</span>
       </a>
       <a href="/scan"         class="{{ 'active' if _active == 'scan' else '' }}">
         <span class="nav-ic">{{ icon("play", 15) }}</span>

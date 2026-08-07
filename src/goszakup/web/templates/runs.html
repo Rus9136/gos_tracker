@@ -1,13 +1,16 @@
 {% extends "_layout.html" %}
 {% from "_macros/icons.html" import icon %}
-{% block title %}Прогоны — Goszakup Tracker{% endblock %}
+{% block title %}Синхронизации — Goszakup Tracker{% endblock %}
 {% block content %}
 
 <div class="page-head">
   <div>
-    <div class="crumb"><span class="strong">Прогоны</span></div>
-    <h1 class="page-title">Журнал прогонов</h1>
-    <div class="page-sub">{{ runs|length }} последних • ежедневный launchd-агент + ad-hoc запуски</div>
+    <div class="crumb"><span class="strong">Синхронизации</span></div>
+    <h1 class="page-title">Журнал синхронизаций</h1>
+    <div class="page-sub">
+      {{ runs|length }} последних • ночной прогон (лоты, договоры, заявки, план) + ручные запуски.
+      От отметки об успешном прогоне отсчитывается окно следующего — записи не чистить.
+    </div>
   </div>
   <div class="flex gap-2">
     <a class="btn primary" href="/ingest">{{ icon("plus") }} Догрузка по БИН</a>

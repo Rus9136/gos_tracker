@@ -1,27 +1,111 @@
 {% extends "_layout.html" %}
 {% from "_macros/icons.html" import icon %}
-{% block title %}Preset'ы — Goszakup Tracker{% endblock %}
+{% block title %}Покрытие сбора — Goszakup Tracker{% endblock %}
 {% block content %}
 
 <div class="page-head">
   <div>
-    <div class="crumb"><span class="strong">Preset'ы</span></div>
-    <h1 class="page-title">Preset'ы <span class="dim">({{ presets|length }})</span></h1>
-    <div class="page-sub">Сохранённые наборы фильтров для ежедневного launchd-агента.</div>
+    <div class="crumb"><span class="strong">Покрытие сбора</span></div>
+    <h1 class="page-title">Покрытие ежедневного сбора</h1>
+    <div class="page-sub">
+      Какие лоты вообще попадают в базу на ночном прогоне.
+      {% if api_mode %}
+      Сбор идёт через официальный API одним общереспубликанским проходом —
+      регион в отборе не участвует, лоты приезжают по всему РК.
+      {% else %}
+      Токен API не задан — сбор идёт по HTML, регион за регионом,
+      по включённым ниже preset'ам.
+      {% endif %}
+    </div>
   </div>
 </div>
 
-<div class="card">
+{% if saved %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--ok) 30%, transparent); background: var(--ok-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--ok)">
+    Сохранено. Новые параметры применятся на ближайшем ночном прогоне.
+  </div>
+</div>
+{% elif error == "no_statuses" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">
+    Нужен хотя бы один статус — с пустым списком ежедневный прогон ослепнет.
+  </div>
+</div>
+{% elif error == "amount_negative" %}
+<div class="card mb-3" style="border-color: color-mix(in oklch, var(--bad) 30%, transparent); background: var(--bad-bg)">
+  <div class="card-body" style="padding:12px 16px; color: var(--bad)">Сумма не может быть отрицательной.</div>
+</div>
+{% endif %}
+
+<form method="post" action="/presets/coverage" class="card mb-3">
+  <div class="card-body" style="display:grid; gap:16px">
+
+    <div class="field" style="max-width:260px">
+      <label>Минимальная сумма лота, ₸</label>
+      <input class="input" type="number" name="amount_from" min="0" value="{{ coverage.amount_from }}">
+      <div class="dim" style="font-size:12px; margin-top:6px">
+        Всё, что дешевле, не сохраняется вовсе.
+      </div>
+    </div>
+
+    <div>
+      <div class="flex items-center" style="justify-content: space-between; margin-bottom:8px">
+        <div class="uc">Статусы, которые собираем</div>
+        <div class="flex gap-2">
+          <button type="button" class="btn sm" onclick="covSetStatuses(this.form, 'actual')">Все актуальные</button>
+          <button type="button" class="btn sm" onclick="covSetStatuses(this.form, 'past')">Все прошедшие</button>
+          <button type="button" class="btn sm" onclick="covSetStatuses(this.form, 'none')">Снять</button>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px">
+        {% for group_name, items in status_groups %}
+        <div>
+          <div class="uc mb-2">{{ group_name }}</div>
+          {% for code, name in items %}
+          <label class="flex items-start gap-2 cov-status" style="font-size:12px; margin-bottom:6px; cursor:pointer"
+                 data-group="{{ group_name }}">
+            <input type="checkbox" name="status" value="{{ code }}"
+                   {% if code in coverage.status_codes %}checked{% endif %}>
+            <span><span class="dim mono">{{ code }}</span> {{ name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:12px; padding-top:4px">
+      <button type="submit" class="btn primary">Сохранить</button>
+      <span class="dim" style="font-size:12px">
+        Применяется ко всем preset'ам сразу — ночной прогон берёт объединение статусов
+        и минимальную из сумм.
+      </span>
+    </div>
+  </div>
+</form>
+
+<details class="card" {% if not api_mode %}open{% endif %}>
+  <summary style="padding:14px 16px; cursor:pointer; font-weight:600">
+    Резервный HTML-обход по регионам
+    <span class="dim" style="font-weight:400; font-size:12.5px">
+      — {{ coverage.active_count }} из {{ presets|length }} включено
+    </span>
+  </summary>
+  <div class="card-body dim" style="font-size:13px; padding-top:0">
+    Preset — регион плюс те же фильтры. В обычный день не используется:
+    при живом API проход идёт сразу по всему РК. Этот список включается сам,
+    когда API недоступен (или когда токен не задан) — тогда сбор идёт постранично
+    по HTML, по одному включённому региону за раз. Выключенный регион в такой
+    день не собирается вовсе, поэтому держать их включёнными — норма.
+  </div>
   <div style="overflow:auto">
   <table class="tbl">
     <thead>
       <tr>
         <th style="width:48px">#</th>
-        <th>Название</th>
+        <th>Регион</th>
         <th style="width:200px">КАТО</th>
-        <th class="num" style="width:140px">Сумма от</th>
-        <th>Статусы</th>
-        <th>Вертикали</th>
         <th style="width:90px">Активен</th>
         <th style="width:120px"></th>
       </tr>
@@ -37,9 +121,6 @@
           <span class="dim">{{ region_lookup[p.kato].name if p.kato in region_lookup else '' }}</span>
           {% else %}<span class="dim">—</span>{% endif %}
         </td>
-        <td class="num mono">{{ p.amount_from|n }}</td>
-        <td class="dim mono" style="font-size:12px">{{ p.status_codes|join(', ') if p.status_codes else '—' }}</td>
-        <td class="dim" style="font-size:12px">{{ p.categories|map('vertical')|join(', ') if p.categories else '—' }}</td>
         <td>
           {% if p.active %}<span class="badge ok"><span class="dot"></span>да</span>
           {% else %}<span class="badge muted">нет</span>{% endif %}
@@ -55,8 +136,24 @@
   </table>
   </div>
   <div class="card-foot dim" style="font-size:12px">
-    CRUD добавим позже. Сейчас preset'ы создаются командой <span class="mono">python -m goszakup.cli seed-presets</span>.
+    Список регионов заводится командой <span class="mono">python -m goszakup.cli seed-presets</span>.
   </div>
-</div>
+</details>
+
+<script>
+function covSetStatuses(form, kind) {
+  form.querySelectorAll('.cov-status').forEach(label => {
+    const group = label.dataset.group;
+    const cb = label.querySelector('input[type=checkbox]');
+    if (kind === 'none') {
+      cb.checked = false;
+    } else if (kind === 'actual') {
+      cb.checked = (group === 'Актуальные');
+    } else if (kind === 'past') {
+      cb.checked = (group === 'Прошедшие');
+    }
+  });
+}
+</script>
 
 {% endblock %}

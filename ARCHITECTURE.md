@@ -199,7 +199,9 @@ erDiagram
   лотом — вычисляемая: `lots.plan_root_id` из номера лота.
   `plan_notifications` — дедуп Telegram-уведомлений о новых пунктах
   (пара «запрос × пункт», отбор пре-фильтром, без LLM).
-- **Операционные**: `presets`, `scrape_runs` (счётчики + heartbeat).
+- **Операционные**: `presets` (покрытие сбора + резервный HTML-обход по
+  регионам), `scrape_runs` (счётчики + heartbeat; плюс водяной знак окна
+  инкрементальных синков — чистить нельзя, правило #21).
 - **Автоподача**: `client_credentials` (секреты AES-256-GCM),
   `submissions` (статус-машина PLANNED → … → CONFIRMED; цена в `bid_enc`
   шифрованная — sealed-bid; `anno_id` — мягкая ссылка без FK).
@@ -220,7 +222,7 @@ erDiagram
 | Организации | `/organizations`, `/organization/{id}` (вкладка «План закупок» — годовой план этого заказчика); `/organization/{id}/report` (admin) | user/admin |
 | Поставщики | `/suppliers` (+`?format=csv`) — кто выигрывает/проигрывает по ЕНС ТРУ, контакты для лидогенерации (правило #23) | admin |
 | Семантические запросы | `/queries` + CRUD/rematch/toggle (чужой запрос → 404) | user |
-| Прогоны и ad-hoc | `/runs`, `/runs/{id}`, `/scan`, `/presets`, `/expenses` (admin); `/ingest` — admin или роль с ключом `ingest` | admin/роль |
+| Синхронизации и ad-hoc | `/runs`, `/runs/{id}` (журнал = водяной знак инкремента, правило #21), `/scan`, `/presets` (форма «Покрытие сбора» + POST `/presets/coverage`), `/expenses` (admin); `/ingest` — admin или роль с ключом `ingest` | admin/роль |
 | Автоподача | `/submissions` (admin); `POST /autosubmit/result` — машинный токен `X-Autosubmit-Token` | admin/машина |
 | Telegram | `POST /telegram/webhook` — машинный секрет заголовка | машина |
 | Auth и профиль | `/login`, `/logout`, `/settings` (+test), `/users` CRUD (admin), `/roles` CRUD (admin — видимость вкладок для не-админов) | публичный/user/admin |

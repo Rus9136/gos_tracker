@@ -523,8 +523,12 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     (`jobs/incremental.sync_window`); потолок окна 7 дней — при простое
     дольше окно обрезается с WARNING, дозаполнять ручным прогоном preset'ов.
     Фолбэк: OwsApiError в api_daily → авто-fan-out прежних 20 listing_actor.
-    Preset'ы остаются конфигурацией покрытия и ручным путём (/presets →
-    «Запустить сейчас»). `_upsert_lot_from_listing` НЕ затирает `Lot.kato`
+    Preset'ы остаются конфигурацией покрытия: страница `/presets` — это форма
+    «Покрытие сбора» (статусы + мин. сумма пишутся сразу во ВСЕ preset'ы,
+    включая выключенные — иначе включённый позже регион принёс бы в фолбэк
+    устаревший набор), а список 20 регионов свёрнут в блок резервного
+    HTML-обхода с тумблерами `active`. Ручной прогон preset'а — только CLI
+    (`cli run-preset`), кнопки в UI нет. `_upsert_lot_from_listing` НЕ затирает `Lot.kato`
     пустым (persona-scope, правило #15). **Договоры/победители** приезжают
     из `contracts_sync_actor` (GraphQL `Contract`+`ContractUnits.lotId`,
     только для уже известных лотов, ВКЛЮЧАЯ закрытые — это закрывает пробел

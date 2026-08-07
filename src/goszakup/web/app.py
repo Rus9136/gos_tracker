@@ -42,6 +42,7 @@ from ..config import (
     GZ_TELEGRAM_BOT_TOKEN,
     LLM_PRICE_INPUT_PER_MTOK,
     LLM_PRICE_OUTPUT_PER_MTOK,
+    OWS_TOKEN,
     PUBLIC_BASE_URL,
     SECRET_KEY,
     TELEGRAM_WEBHOOK_SECRET,
@@ -68,6 +69,7 @@ from ..db.models import (
     UserLotMatch,
     UserQuery,
 )
+from ..jobs.incremental import daily_scan_params
 from ..jobs.ingest import (
     close_stale_runs,
     create_ingest_run,
@@ -330,7 +332,6 @@ def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
             select(func.count(Organization.id)).where(buyer_condition())
         )
         or 0,
-        "presets": db.scalar(select(func.count(Preset.id))) or 0,
     }
     _nav_cache[uid] = {"at": now, "data": data}
     return data
@@ -1413,18 +1414,64 @@ def suppliers_report(
     )
 
 
+# === /presets — покрытие ежедневного сбора ===
+#
+# После перехода на API (правило #21) ежедневный проход общереспубликанский,
+# и от preset'ов в нём остаются ровно две величины — объединение статусов и
+# min(amount_from), см. jobs/incremental.daily_scan_params. Поэтому страница
+# показывает не 20 региональных строк, а эти два параметра; сами preset'ы
+# остаются конфигурацией аварийного HTML-фолбэка и живут в блоке ниже.
+
+
 @app.get("/presets", response_class=HTMLResponse)
 def presets_list(
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
+    error: str = "",
+    saved: str = "",
 ):
     presets = db.scalars(select(Preset).order_by(Preset.id)).all()
+    status_codes, amount_from = daily_scan_params(db)
     return templates.TemplateResponse(
         request,
         "presets.html",
-        {**_base_ctx(request, db, user), "presets": presets, "region_lookup": BY_CODE},
+        {
+            **_base_ctx(request, db, user),
+            "presets": presets,
+            "region_lookup": BY_CODE,
+            "status_groups": _STATUS_GROUPS,
+            "coverage": {
+                "status_codes": status_codes,
+                "amount_from": amount_from,
+                "active_count": sum(1 for p in presets if p.active),
+            },
+            "api_mode": bool(OWS_TOKEN),
+            "error": error,
+            "saved": bool(saved),
+        },
     )
+
+
+@app.post("/presets/coverage")
+def presets_coverage_save(
+    status: list[int] = Form(default=[]),
+    amount_from: int = Form(0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    status_clean = sorted({c for c in status if c in STATUS_NAMES})
+    if not status_clean:
+        return RedirectResponse("/presets?error=no_statuses", status_code=303)
+    if amount_from < 0:
+        return RedirectResponse("/presets?error=amount_negative", status_code=303)
+    # Пишем во ВСЕ preset'ы, а не только в активные: иначе включённый позже
+    # регион принёс бы в фолбэк давно устаревшие статусы.
+    for p in db.scalars(select(Preset)).all():
+        p.status_codes = status_clean
+        p.amount_from = amount_from
+    db.commit()
+    return RedirectResponse("/presets?saved=1", status_code=303)
 
 
 @app.post("/presets/{preset_id}/toggle")

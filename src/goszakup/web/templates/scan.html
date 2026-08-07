@@ -9,9 +9,10 @@
     <h1 class="page-title">Ad-hoc прогон по фильтрам</h1>
     <div class="page-sub">
       Разовый прогон с произвольными KATO / суммой / статусами / категориями.
-      Результат — на странице прогона <a href="/runs">/runs</a>.
-      <span class="strong">Не запускайте параллельно с ежедневным прогоном</span> —
-      на goszakup глобальный Crawl-delay 5с.
+      Результат — в <a href="/runs">журнале синхронизаций</a>.
+      Идёт через официальный API; если он недоступен — фолбэк на HTML с
+      Crawl-delay 5с, поэтому <span class="strong">параллельно с ночным прогоном
+      лучше не запускать</span>.
     </div>
   </div>
 </div>
@@ -138,7 +139,7 @@
       <button type="submit" class="btn primary" {% if active_run %}disabled{% endif %}>
         {{ icon("play", 13) }} Запустить прогон
       </button>
-      <span class="dim" style="font-size:12px">Crawl-delay 5с между запросами. На «весь РК» listing идёт ~15–20 мин на каждые ~10 000 лотов в выдаче.</span>
+      <span class="dim" style="font-size:12px">По API — ~1 запрос в секунду; на HTML-фолбэке те же данные идут впятеро дольше (Crawl-delay 5с).</span>
     </div>
   </div>
 </form>
