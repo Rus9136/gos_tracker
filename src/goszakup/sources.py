@@ -5,8 +5,9 @@ DataSource и не знает, откуда пришли dataclasses. Выбор
 GZ_OWS_TOKEN (make_source): токен есть → API с прозрачным HTML-фолбэком,
 нет → чистый HTML, поведение бит-в-бит прежнее.
 
-Деградация API не молчит (правило #20): каждый фолбэк пишет WARNING и
-выставляет Redis-флаг goszakup:api_degraded с TTL — его читает health-check.
+Деградация API не молчит (правило #20): каждый фолбэк пишет WARNING, а с
+третьего за 10 минут выставляется Redis-флаг goszakup:api_degraded с TTL —
+его читает health-check и по нему detail_actor сужается до watchlist.
 """
 
 from __future__ import annotations
@@ -38,16 +39,33 @@ from .scraper.search import ListingHit, SearchParams, iter_listing
 log = logging.getLogger(__name__)
 
 API_DEGRADED_KEY = "goszakup:api_degraded"
-_DEGRADED_TTL = 6 * 3600
+# Час, а не шесть: при настоящей поломке флаг продлевает каждый следующий
+# фолбэк, а после восстановления полный режим возвращается за час.
+_DEGRADED_TTL = 3600
+# Флаг взводится не с первого фолбэка: пока он висит, detail_actor сужается
+# до watchlist по всему рынку, и одна транзиентная ошибка стоила бы суток
+# неполных данных. Три промаха за 10 минут — уже не случайность.
+_FALLBACK_KEY = "goszakup:api_fallbacks"
+_FALLBACK_WINDOW = 600
+_DEGRADED_THRESHOLD = 3
 
 
 def mark_api_degraded(redis_client, op: str, exc: Exception) -> None:
-    """Флаг деградации для health-check (правило #20): API отвалился,
-    работаем медленнее/неполно. Best-effort — без Redis просто лог."""
-    log.warning("OWS %s: %s — деградация", op, exc)
+    """Учёт фолбэка и флаг деградации для health-check (правило #20).
+
+    Best-effort — без Redis просто лог (порог тогда не считается, и это
+    честнее, чем взвести флаг, который некому снять).
+    """
+    log.warning("OWS %s: %s — фолбэк на HTML", op, exc)
     if redis_client is None:
         return
     try:
+        misses = redis_client.incr(_FALLBACK_KEY)
+        if misses == 1:
+            redis_client.expire(_FALLBACK_KEY, _FALLBACK_WINDOW)
+        if misses < _DEGRADED_THRESHOLD:
+            return
+        log.warning("OWS: %d фолбэка за %dс — деградация", misses, _FALLBACK_WINDOW)
         redis_client.set(API_DEGRADED_KEY, f"{op}: {exc}", ex=_DEGRADED_TTL)
     except Exception:  # noqa: BLE001
         pass

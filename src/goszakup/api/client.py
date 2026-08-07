@@ -27,6 +27,28 @@ API_LIMIT_KEY = "goszakup:api_rate_limit"
 _RETRY_STATUSES = {429, 502, 503, 504}
 _RETRY_DELAYS = (2, 5, 15)
 
+# Перегрузку своего Elasticsearch OWS отдаёт как HTTP 500 с телом
+# «Elasticsearch Database Exception … request failed with code 429» — по сути
+# тот же throttle, что и честный 429, и лечится ретраем (проверено: те же
+# объявления отдаются мгновенно минутой позже). Без этого одиночный всплеск
+# на их стороне уводил конвейер в HTML-фолбэк. Прочие 500 — настоящая ошибка
+# запроса, их ретраить незачем.
+_TRANSIENT_500_MARKERS = (
+    "Elasticsearch Database Exception",
+    "search_phase_execution_exception",
+    "failed with code 429",
+)
+
+
+def _should_retry(r: requests.Response, stream: bool) -> bool:
+    if r.status_code in _RETRY_STATUSES:
+        return True
+    if r.status_code != 500 or stream:
+        # У stream-ответа тело трогать нельзя — обращение к .text выкачает
+        # файл в память и сломает последующий iter_content.
+        return False
+    return any(m in r.text[:1000] for m in _TRANSIENT_500_MARKERS)
+
 
 class OwsApiError(RuntimeError):
     pass
@@ -70,6 +92,7 @@ class OwsClient:
         timeout = kwargs["timeout"]
         req_s = timeout if isinstance(timeout, (int, float)) else 60
         hold = int(self._limiter.delay + req_s + 5)
+        stream = bool(kwargs.get("stream"))
         last_exc: Exception | None = None
         for attempt, retry_delay in enumerate((*_RETRY_DELAYS, None)):
             self._limiter.acquire(hold)
@@ -80,7 +103,7 @@ class OwsClient:
                 r = None
             finally:
                 self._limiter.release()
-            if r is not None and r.status_code not in _RETRY_STATUSES:
+            if r is not None and not _should_retry(r, stream):
                 if r.status_code == 404 and "Invalid Route" in r.text[:500]:
                     raise OwsAuthError(
                         f"OWS ответил 404 «Invalid Route» на {url} — "

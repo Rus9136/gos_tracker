@@ -84,6 +84,46 @@ def test_retry_on_429(monkeypatch):
     assert sleeps == [2]
 
 
+_ES_THROTTLE_BODY = (
+    '{"name":"Elasticsearch Database Exception","message":"Elasticsearch request '
+    'failed with code 429. Response body:\\n{\\"error\\":{\\"root_cause\\":[],'
+    '\\"type\\":\\"search_phase_execution_exception\\"}}"}'
+)
+
+
+def test_retry_on_elasticsearch_500(monkeypatch):
+    """Перегрузку своего ES OWS отдаёт как 500 — это throttle, а не ошибка."""
+    sleeps: list[float] = []
+    monkeypatch.setattr("goszakup.api.client.time.sleep", sleeps.append)
+    c = _client()
+    c.session.request = MagicMock(
+        side_effect=[_resp(500, text=_ES_THROTTLE_BODY), _resp(payload={"ok": 1})]
+    )
+    assert c.get_json("/v3/x") == {"ok": 1}
+    assert sleeps == [2]
+
+
+def test_plain_500_is_not_retried(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("goszakup.api.client.time.sleep", sleeps.append)
+    c = _client()
+    c.session.request = MagicMock(return_value=_resp(500, text="Internal Server Error"))
+    with pytest.raises(OwsApiError):
+        c.get_json("/v3/x")
+    assert sleeps == []
+
+
+def test_stream_500_body_not_touched(monkeypatch):
+    """У stream-ответа .text выкачал бы файл в память — тело не читаем."""
+    monkeypatch.setattr("goszakup.api.client.time.sleep", lambda *_: None)
+    r = MagicMock()
+    r.status_code = 500
+    type(r).text = property(lambda self: pytest.fail("тело stream-ответа прочитано"))
+    c = _client()
+    c.session.request = MagicMock(return_value=r)
+    assert c.get("https://ows.goszakup.gov.kz/download/x", stream=True) is r
+
+
 def test_refs_error_payload():
     c = _client()
     c.session.request = MagicMock(

@@ -43,7 +43,17 @@ def test_fallback_detail_on_api_error(fallback):
     html.fetch_announcement.return_value = "html-detail"
     assert src.fetch_announcement(123) == "html-detail"
     html.fetch_announcement.assert_called_once_with(123)
-    # Деградация не молчит — флаг для health-check выставлен.
+    # Одиночный промах фолбэк отрабатывает, но деградацией не объявляет:
+    # по флагу detail_actor сужается до watchlist на весь рынок.
+    assert not r.exists(API_DEGRADED_KEY)
+
+
+def test_degraded_flag_after_threshold(fallback):
+    src, api, html, r = fallback
+    api.fetch_announcement.side_effect = OwsApiError("boom")
+    html.fetch_announcement.return_value = "html-detail"
+    for _ in range(3):
+        src.fetch_announcement(123)
     assert r.exists(API_DEGRADED_KEY)
     assert "boom" in r.get(API_DEGRADED_KEY)
 
@@ -66,7 +76,6 @@ def test_fallback_listing_on_api_error(fallback):
     api.iter_listing.side_effect = boom
     html.iter_listing.return_value = iter(["hit1", "hit2"])
     assert list(src.iter_listing(SearchParams())) == ["hit1", "hit2"]
-    assert r.exists(API_DEGRADED_KEY)
 
 
 def test_download_routes_by_url(fallback):

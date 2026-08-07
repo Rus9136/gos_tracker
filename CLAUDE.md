@@ -509,9 +509,18 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     (`ListingHit.enstru_code`, фаза A) — по нему `classify_vertical` ставит
     вертикаль; у свежих ЗЦП плана нет → код приезжает с деталями (категория
     NULL-дозаполняется), HTML-добор subpriceoffer — только watchlist. Каждый
-    уход на фолбэк пишет WARNING + Redis-флаг `goszakup:api_degraded` — его
-    видит health-check (плюс живой пинг OWS и предупреждение об истечении
-    токена по `GZ_OWS_TOKEN_EXPIRES`). Откат: закомментировать `GZ_OWS_TOKEN`
+    уход на фолбэк пишет WARNING, а **с третьего за 10 минут**
+    (`_DEGRADED_THRESHOLD`, счётчик `goszakup:api_fallbacks`) выставляется
+    Redis-флаг `goszakup:api_degraded` (TTL 1ч) — его видит health-check и по
+    нему `detail_actor` сужается до watchlist (плюс живой пинг OWS и
+    предупреждение об истечении токена по `GZ_OWS_TOKEN_EXPIRES`). Порог и
+    короткий TTL — не косметика: 2026-08-07 один транзиентный сбой увёл
+    конвейер в сужённый режим на 6 часов. **Перегрузку своего Elasticsearch
+    OWS отдаёт как HTTP 500** с телом «Elasticsearch Database Exception …
+    failed with code 429» — это throttle, а не ошибка запроса, и
+    `api/client._should_retry` ретраит его как 429 (2/5/15с); прочие 500
+    остаются фатальными. У stream-ответа тело при этом не читаем — `.text`
+    выкачал бы файл в память. Откат: закомментировать `GZ_OWS_TOKEN`
     в `.env` + рестарт worker/web.
     **Daily с токеном — инкрементальный** (фаза 5, 2026-07-27): вместо 20
     региональных listing_actor'ов `daily_actor` шлёт `api_daily_actor` (один
