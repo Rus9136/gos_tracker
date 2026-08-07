@@ -14,7 +14,7 @@ import pytest
 
 from goszakup.db.models import ScrapeRun
 from goszakup.jobs.ingest import active_run_of_kind
-from goszakup.queue.actors import _run_scope, _skip_duplicate
+from goszakup.queue.actors import _skip_duplicate, _sync_run
 
 
 def _ago(**kw) -> datetime:
@@ -55,11 +55,11 @@ def test_finished_and_stale_runs_do_not_block(db_session):
     assert active_run_of_kind(db_session, "bids-sync") is None
 
 
-def test_run_scope_closes_on_exception(db_session):
+def test_sync_run_closes_on_exception(db_session):
     # TimeLimitExceeded у dramatiq прилетает исключением в середину работы —
     # без finally прогон оставался с finished_at=NULL и висел в UI «идущим».
     with pytest.raises(RuntimeError):
-        with _run_scope(db_session, "bids-sync: тест") as run_id:
+        with _sync_run(db_session, "bids-sync", "bids-sync: тест") as run_id:
             captured = run_id
             raise RuntimeError("time limit")
 
@@ -67,8 +67,29 @@ def test_run_scope_closes_on_exception(db_session):
     assert db_session.get(ScrapeRun, captured).finished_at is not None
 
 
-def test_run_scope_closes_on_success(db_session):
-    with _run_scope(db_session, "plans-sync: тест") as run_id:
-        pass
+def test_sync_run_closes_on_success(db_session):
+    with _sync_run(db_session, "plans-sync", "plans-sync: тест") as run_id:
+        assert run_id is not None
     db_session.expire_all()
     assert db_session.get(ScrapeRun, run_id).finished_at is not None
+
+
+def test_sync_run_yields_none_when_same_kind_alive(db_session):
+    _run(db_session, "bids-sync: горизонт 45д, лимит 500",
+         started_at=_ago(minutes=3), last_progress_at=_ago(seconds=30))
+    before = db_session.query(ScrapeRun).count()
+    with _sync_run(db_session, "bids-sync", "bids-sync: дубль") as run_id:
+        assert run_id is None
+    # дубль не должен даже заводить строку прогона
+    assert db_session.query(ScrapeRun).count() == before
+
+
+def test_race_loser_yields_older_run(db_session):
+    # Залп после рестарта: два потока прошли первую проверку до коммита друг
+    # друга (замерено — 10 мс). Проигравший узнаёт об этом по before_id.
+    older = _run(db_session, "bids-sync: первый",
+                 started_at=_ago(seconds=2), last_progress_at=_ago(seconds=2))
+    younger = _run(db_session, "bids-sync: второй")
+    assert active_run_of_kind(db_session, "bids-sync", before_id=younger.id).id == older.id
+    # у самого старшего впереди никого нет — он и работает
+    assert active_run_of_kind(db_session, "bids-sync", before_id=older.id) is None

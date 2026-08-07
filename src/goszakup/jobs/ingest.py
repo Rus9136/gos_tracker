@@ -108,7 +108,9 @@ def find_active_run(session: Session) -> ScrapeRun | None:
     )
 
 
-def active_run_of_kind(session: Session, note_prefix: str) -> ScrapeRun | None:
+def active_run_of_kind(
+    session: Session, note_prefix: str, *, before_id: int | None = None
+) -> ScrapeRun | None:
     """Живой прогон того же вида (по префиксу note) — защита от дублей.
 
     Синки (bids/contracts/plans) идут десятками минут: bids-sync — это 500
@@ -118,15 +120,23 @@ def active_run_of_kind(session: Session, note_prefix: str) -> ScrapeRun | None:
     крона), второй прогон возьмёт ТУ ЖЕ выборку: отметка `bids_synced_at`
     ставится в конце опроса объявления, поэтому дубль не «продвигает» работу,
     а удваивает нагрузку на OWS и на потоки воркера. Плюс в UI такие прогоны
-    наслаиваются и «идёт прогон #N» не гаснет никогда."""
+    наслаиваются и «идёт прогон #N» не гаснет никогда.
+
+    `before_id` — добор гонки: проверка «не идёт ли уже» и вставка своей строки
+    не атомарны, и при залпе (после рестарта воркер разбирает накопленную
+    очередь) два потока успевают пройти проверку до коммита друг друга —
+    замерено, разница 10 мс. Поэтому после вставки прогон переспрашивает,
+    нет ли живого прогона СТАРШЕ него, и если есть — уступает."""
     threshold = datetime.now(UTC) - _STALE_RUN_AFTER
-    return session.scalar(
+    q = (
         select(ScrapeRun)
         .where(ScrapeRun.finished_at.is_(None))
         .where(ScrapeRun.note.startswith(note_prefix))
         .where(_progress_ts() >= threshold)
-        .order_by(ScrapeRun.started_at.desc())
     )
+    if before_id is not None:
+        q = q.where(ScrapeRun.id < before_id)
+    return session.scalar(q.order_by(ScrapeRun.started_at.desc()))
 
 
 def create_ingest_run(

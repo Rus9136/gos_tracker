@@ -133,12 +133,12 @@ def _close_run(session, run_id: int) -> None:
     session.commit()
 
 
-def _skip_duplicate(session, note_prefix: str) -> bool:
+def _skip_duplicate(session, note_prefix: str, *, before_id: int | None = None) -> bool:
     """True, если такой синк уже идёт — тогда актор молча выходит.
 
-    Дубли реальны: 2026-08-07 в очереди одновременно висели шесть сообщений
+    Дубли реальны: 2026-08-07 в очереди одновременно висели девять сообщений
     bids_sync_actor, и каждое перемалывало те же 500 объявлений."""
-    dup = active_run_of_kind(session, note_prefix)
+    dup = active_run_of_kind(session, note_prefix, before_id=before_id)
     if dup is None:
         return False
     log.warning(
@@ -149,16 +149,25 @@ def _skip_duplicate(session, note_prefix: str) -> bool:
 
 
 @contextmanager
-def _run_scope(session, note: str):
-    """ScrapeRun, который закрывается в любом случае.
+def _sync_run(session, note_prefix: str, note: str):
+    """Прогон синхронного синка: отсечка дублей + гарантированное закрытие.
 
-    Синхронные синки (bids/contracts/plans) закрывают прогон сами — но только
-    на успешном пути. Падение (чаще всего TimeLimitExceeded: у dramatiq лимит
-    считается по потоку и прилетает как исключение прямо в середину работы)
-    оставляло finished_at=NULL, и прогон висел в UI «идущим» до reaper'а."""
+    Отдаёт None, если работать не надо (такой синк уже идёт) — вызывающий
+    актор на этом выходит. Проверка двойная: до вставки и после (гонка залпа,
+    см. active_run_of_kind). Закрытие — в finally: падение (чаще всего
+    TimeLimitExceeded, у dramatiq лимит считается по потоку и прилетает
+    исключением прямо в середину работы) иначе оставляло finished_at=NULL, и
+    прогон висел в UI «идущим» до reaper'а."""
+    if _skip_duplicate(session, note_prefix):
+        yield None
+        return
     run = ScrapeRun(preset_id=None, note=note)
     session.add(run)
     session.commit()
+    if _skip_duplicate(session, note_prefix, before_id=run.id):
+        _close_run(session, run.id)
+        yield None
+        return
     try:
         yield run.id
     finally:
@@ -227,7 +236,7 @@ def contracts_sync_actor(days_back: int | None = None) -> None:
     r = _redis_client()
     with SessionLocal() as session:
         if _skip_duplicate(session, NOTE_PREFIX_CONTRACTS):
-            return
+            return  # окно ещё не считаем — оно зависит от прошлых прогонов
         if days_back is not None:
             dt_to = datetime.now(UTC)
             dt_from = dt_to - timedelta(days=days_back)
@@ -240,7 +249,9 @@ def contracts_sync_actor(days_back: int | None = None) -> None:
                 "источника потеряна", dt_from,
             )
         note = f"{NOTE_PREFIX_CONTRACTS}: {dt_from:%Y-%m-%d %H:%M}—{dt_to:%H:%M} UTC"
-        with _run_scope(session, note) as run_id:
+        with _sync_run(session, NOTE_PREFIX_CONTRACTS, note) as run_id:
+            if run_id is None:
+                return
             client = OwsClient(redis_client=r)
             try:
                 stats = sync_contracts(
@@ -284,10 +295,10 @@ def bids_sync_actor(limit: int = 500, horizon_days: int | None = None) -> None:
     r = _redis_client()
     horizon = horizon_days if horizon_days is not None else RETRY_HORIZON_DAYS
     with SessionLocal() as session:
-        if _skip_duplicate(session, "bids-sync"):
-            return
         note = f"bids-sync: горизонт {horizon}д, лимит {limit}"
-        with _run_scope(session, note) as run_id:
+        with _sync_run(session, "bids-sync", note) as run_id:
+            if run_id is None:
+                return
             client = OwsClient(redis_client=r)
             try:
                 stats = sync_bids(
@@ -426,7 +437,7 @@ def plans_sync_actor(max_pages: int | None = None) -> None:
     r = _redis_client()
     with SessionLocal() as session:
         if _skip_duplicate(session, "plans-sync"):
-            return
+            return  # водяной знак не трогаем — его считает идущий прогон
         watermark = plan_watermark(session)
         if watermark is None:
             log.warning(
@@ -435,7 +446,9 @@ def plans_sync_actor(max_pages: int | None = None) -> None:
                 max_pages or INCREMENTAL_MAX_PAGES,
             )
         note = f"plans-sync: пункты плана свежее id={watermark or '—'}"
-        with _run_scope(session, note) as run_id:
+        with _sync_run(session, "plans-sync", note) as run_id:
+            if run_id is None:
+                return
             client = OwsClient(redis_client=r)
             try:
                 stats = sync_plans(
