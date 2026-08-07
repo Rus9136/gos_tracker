@@ -48,12 +48,19 @@
 
 {% if own_run %}
 <div class="card mb-3" style="border-color: color-mix(in oklch, var(--warn) 30%, transparent); background: var(--warn-bg)">
-  <div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 16px; color: var(--warn)">
-    {{ icon("clock", 16) }}
-    <span>Идёт дозагрузка по этой организации — прогон <a href="/runs/{{ own_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ own_run.id }}</a>{% if own_run.note %} ({{ own_run.note }}){% endif %}.
-      Когда он закончится, обновите страницу — отчёт пересчитается по свежим данным.</span>
+  <div class="card-body" style="padding:12px 16px; color: var(--warn)">
+    <div style="display:flex; align-items:center; gap:10px">
+      {{ icon("clock", 16) }}
+      <span>Идёт дозагрузка по этой организации — прогон <a href="/runs/{{ own_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ own_run.id }}</a>{% if own_run.note %} ({{ own_run.note }}){% endif %}.
+        Страница обновится сама, когда он закончится.</span>
+    </div>
+    <div id="run-progress" data-run="{{ own_run.id }}" class="mt-2">
+      <div class="bar thin skel-bar" id="run-progress-bar"><i style="width:0"></i></div>
+      <div class="dim mt-1" id="run-progress-text" style="font-size:12px">получаем статус…</div>
+    </div>
   </div>
 </div>
+<script src="/static/js/progress.js" defer></script>
 {% endif %}
 
 {% if error == "year_range" %}

@@ -25,6 +25,7 @@ fire-and-forget относительно run-жизненного цикла, п
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -81,6 +82,15 @@ def _set_pending(r, run_id: int, count: int) -> None:
     # TTL 24h на случай, если последний DECR не сработает (worker умер) —
     # ключ всё равно протухнет, не будем держать мусор вечно.
     r.set(_pending_key(run_id), count, ex=24 * 3600)
+    # Для индикатора прогресса в UI: сам pending-счётчик говорит, сколько
+    # ОСТАЛОСЬ, а знаменатель и точка отсчёта времени нужны отдельно —
+    # details_fetched растёт и от ретраев, по нему знаменатель не восстановить.
+    # Redis непёрсистентный: потеря этих ключей делает индикатор
+    # неопределённым и только (на пайплайн не влияет).
+    pipe = r.pipeline()
+    pipe.set(f"goszakup:run:{run_id}:total", count, ex=24 * 3600)
+    pipe.set(f"goszakup:run:{run_id}:details_started", int(time.time()), ex=24 * 3600)
+    pipe.execute()
 
 
 def _decrement_pending_and_maybe_close(r, run_id: int) -> None:

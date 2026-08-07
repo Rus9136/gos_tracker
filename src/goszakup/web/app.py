@@ -74,6 +74,7 @@ from ..jobs.ingest import (
     close_stale_runs,
     create_ingest_run,
     find_active_run,
+    run_progress,
 )
 from ..jobs.org_report import build_org_report, related_org_ids, render_markdown
 from ..jobs.plan_report import (
@@ -2089,6 +2090,29 @@ def expenses(
             "window_days": 400,
         },
     )
+
+
+@app.get("/runs/{run_id}/progress")
+def run_progress_json(
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Прогресс прогона для индикатора на странице отчёта (опрос раз в 4с).
+
+    Отдельный лёгкий эндпоинт, а не мета-refresh всей страницы: отчёт по
+    организации — это десяток агрегирующих запросов, гонять их каждые
+    несколько секунд ради полоски незачем."""
+    from ..queue.actors import _redis_client
+
+    run = db.get(ScrapeRun, run_id)
+    if run is None:
+        raise HTTPException(404, "прогон не найден")
+    try:
+        r = _redis_client()
+    except Exception:
+        r = None
+    return JSONResponse(run_progress(run, r))
 
 
 @app.get("/runs/{run_id}", response_class=HTMLResponse)

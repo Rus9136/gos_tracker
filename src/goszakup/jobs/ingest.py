@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -106,6 +107,52 @@ def find_active_run(session: Session) -> ScrapeRun | None:
         .where(_progress_ts() >= threshold)
         .order_by(ScrapeRun.started_at.desc())
     )
+
+
+def run_progress(run: ScrapeRun, r=None) -> dict:
+    """Прогресс прогона для индикатора в UI.
+
+    Прогон двухфазный, и знаменатель есть только у второй фазы: сперва обход
+    выдачи (сколько всего объявлений — заранее неизвестно, goszakup отдаёт
+    страницы до первой пустой), затем детали по собранному списку. Поэтому
+    фаза `listing` честно неопределённая, а `details` считается от
+    pending-счётчика: он говорит, сколько ОСТАЛОСЬ, знаменатель и точку
+    отсчёта кладёт рядом `_set_pending`. По details_fetched знаменатель не
+    восстановить — он растёт и от ретраев.
+
+    Redis недоступен или ключи протухли — отдаём `unknown`: индикатор станет
+    крутилкой без цифр. Ошибку наружу не пускаем, это украшение страницы."""
+    if run.finished_at is not None:
+        return {"finished": True, "phase": "done", "percent": 100}
+
+    base = {"finished": False, "listing_count": run.listing_count or 0}
+    try:
+        left = r.get(f"goszakup:run:{run.id}:pending") if r is not None else None
+        total = r.get(f"goszakup:run:{run.id}:total") if r is not None else None
+        started = r.get(f"goszakup:run:{run.id}:details_started") if r is not None else None
+    except Exception:  # redis лёг — не роняем страницу отчёта
+        left = total = started = None
+
+    if left is None or total is None:
+        # Либо ещё идёт обход выдачи, либо Redis потерял счётчики.
+        return {**base, "phase": "listing"}
+
+    total, left = int(total), max(int(left), 0)
+    done = max(total - left, 0)
+    eta = None
+    if started and done >= 3:
+        # Средний темп по уже сделанным. Первые пара деталей не показательны
+        # (прогрев соединения, кеш справочников) — отсюда порог.
+        elapsed = max(time.time() - int(started), 0)
+        eta = int(elapsed / done * left)
+    return {
+        **base,
+        "phase": "details",
+        "done": done,
+        "total": total,
+        "percent": int(done * 100 / total) if total else 0,
+        "eta_seconds": eta,
+    }
 
 
 def active_run_of_kind(
