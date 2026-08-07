@@ -220,7 +220,7 @@ erDiagram
 | Карточка лота | `/lot/{id}` + POST `chat`, `star`; `/document/{id}/download` | user |
 | Действия с goszakup | POST `/lot/{id}/analyze`, `/lot/{id}/fetch_documents` (правило #9) | admin |
 | Организации | `/organizations`, `/organization/{id}` (вкладка «План закупок» — годовой план этого заказчика); `/organization/{id}/report` (admin) | user/admin |
-| Поставщики | `/suppliers` (+`?format=csv`) — кто выигрывает/проигрывает по ЕНС ТРУ, контакты для лидогенерации (правило #23) | admin |
+| Поставщики | `/suppliers` (+`?format=csv`) — кто выигрывает/проигрывает по ЕНС ТРУ, контакты для лидогенерации (правило #23); `/supplier/{bin}` — карточка одного: победы с суммой договора, проигранные заявки со своей и победившей ценой (`jobs/supplier_card.py`) | admin |
 | Семантические запросы | `/queries` + CRUD/rematch/toggle (чужой запрос → 404) | user |
 | Синхронизации и ad-hoc | `/runs`, `/runs/{id}` (журнал = водяной знак инкремента, правило #21), `/scan`, `/presets` (форма «Покрытие сбора» + POST `/presets/coverage`), `/expenses` (admin); `/ingest` — admin или роль с ключом `ingest` | admin/роль |
 | Автоподача | `/submissions` (admin); `POST /autosubmit/result` — машинный токен `X-Autosubmit-Token` | admin/машина |

@@ -1,0 +1,195 @@
+{% extends "_layout.html" %}
+{% from "_macros/icons.html" import icon %}
+{% from "_macros/pills.html" import cat_tag %}
+{% block title %}{{ card.name[:80] }} — поставщик{% endblock %}
+{% block content %}
+
+<div class="crumb">
+  <a href="/suppliers">{{ icon("arrowLeft", 12) }} Поставщики</a>
+  <span class="sep">/</span>
+  <span class="strong">{{ card.name[:80] }}</span>
+</div>
+
+<div class="page-head">
+  <div style="min-width:0">
+    <h1 class="page-title">{{ card.name }}</h1>
+    <div class="page-sub">
+      БИН/ИИН: <span class="mono strong" style="color: var(--accent-hi)">{{ card.bin }}</span>
+      {% if card.first_win %}• победы с {{ card.first_win|dt }}{% endif %}
+      {% if card.last_win %}• последняя {{ card.last_win|dt }}{% endif %}
+    </div>
+    {% if card.org and (card.org.phone or card.org.email or card.org.website or card.org.address) %}
+    <div class="dim mt-1" style="font-size:12.5px">
+      {% if card.org.phone %}тел.: <span class="mono">{{ card.org.phone }}</span>{% endif %}
+      {% if card.org.email %}• <a href="mailto:{{ card.org.email }}">{{ card.org.email }}</a>{% endif %}
+      {% if card.org.website %}• <span class="mono">{{ card.org.website }}</span>{% endif %}
+      {% if card.org.address %}<div class="mt-1">{{ card.org.address }}</div>{% endif %}
+    </div>
+    {% else %}
+    <div class="dim mt-1" style="font-size:12px">
+      Контактов нет — реестр участников по этому БИН ещё не опрашивали или его там нет:
+      <span class="mono">cli supplier-contacts-sync</span>
+    </div>
+    {% endif %}
+  </div>
+  <div class="flex gap-2">
+    <button class="btn" type="button"
+            onclick="navigator.clipboard.writeText('{{ card.bin }}'); this.textContent='✓ скопирован'">{{ icon("copy", 13) }} Скопировать БИН</button>
+  </div>
+</div>
+
+<div class="kpi-grid mb-3">
+  <div class="kpi">
+    <div class="k-label">Побед</div>
+    <div class="k-value num">{{ card.wins_n|n }}</div>
+    <div class="k-delta">лотов, где он победитель</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Сумма побед</div>
+    <div class="k-value num">{{ card.won_total|n }} ₸</div>
+    <div class="k-delta">договор, где есть; иначе план</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Заявок в базе</div>
+    <div class="k-value num">{{ card.bid_lots_n|n }}</div>
+    <div class="k-delta">лотов с известной заявкой</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Вторых мест</div>
+    <div class="k-value num">{{ card.seconds_n|n }}</div>
+    <div class="k-delta">отклонено: {{ card.rejected_n|n }}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Побед из заявок</div>
+    <div class="k-value num">{% if card.win_rate is not none %}{{ card.win_rate }}%{% else %}—{% endif %}</div>
+    <div class="k-delta">только по лотам с заявкой</div>
+  </div>
+</div>
+
+{% if card.top_customers or card.top_enstru %}
+<div class="card mb-3">
+  <div class="card-head"><div class="card-title">Где выигрывает</div></div>
+  <div class="card-body">
+    {% if card.top_customers %}
+    <div class="dim mb-1" style="font-size:12px">Заказчики</div>
+    <div class="flex gap-2 mb-2" style="flex-wrap:wrap">
+      {% for name, n, total in card.top_customers %}
+      <span class="badge muted">{{ name[:60] }} <span class="mono strong">{{ n }}</span> · {{ total|n }} ₸</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if card.top_enstru %}
+    <div class="dim mb-1" style="font-size:12px">Предметы закупки (ЕНС ТРУ)</div>
+    <div class="flex gap-2" style="flex-wrap:wrap">
+      {% for name, n, total in card.top_enstru %}
+      <span class="badge muted">{{ name[:60] }} <span class="mono strong">{{ n }}</span> · {{ total|n }} ₸</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+  <div class="card-head">
+    <div class="card-title">Победы <span class="dim">({{ card.wins_n|n }})</span></div>
+    {% if card.wins_n > card.wins_shown %}
+    <div class="dim" style="font-size:12px">показаны {{ card.wins_shown }} свежих</div>
+    {% endif %}
+  </div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Лот</th>
+        <th style="width:220px">Заказчик</th>
+        <th style="width:110px">Опубликован</th>
+        <th class="num" style="width:170px">Сумма ₸</th>
+        <th style="width:170px">Договор</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in card.wins %}
+      <tr onclick="window.location='/lot/{{ r.lot_id }}'">
+        <td>
+          <div class="strong clamp-2" style="font-size:13px; max-width:420px">{{ r.name }}</div>
+          <div class="flex gap-1 mt-1 items-center">
+            <span class="mono dim" style="font-size:11.5px">{{ r.number }}</span>
+            {% if r.category %}{{ cat_tag(r.category) }}{% endif %}
+          </div>
+        </td>
+        <td class="dim" style="font-size:12px">{{ r.customer_name[:70] }}</td>
+        <td class="mono dim" style="font-size:12px">{% if r.published %}{{ r.published|dt }}{% else %}—{% endif %}</td>
+        <td class="num mono strong">{{ r.amount|n }}
+          <div class="dim" style="font-size:11px">{{ 'по договору' if r.amount_source == 'contract' else 'план' }}</div>
+        </td>
+        <td style="font-size:12px">
+          {% if r.contract_number %}<span class="mono">{{ r.contract_number }}</span>{% endif %}
+          {% if r.contract_status %}<div class="dim">{{ r.contract_status }}</div>{% endif %}
+          {% if not r.contract_number and not r.contract_status %}<span class="dimer">договора в базе нет</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="dim" style="text-align:center; padding:28px">Побед в базе нет</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Участвовал, но не выиграл <span class="dim">({{ card.losses_shown|n }})</span></div>
+  </div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Лот</th>
+        <th style="width:200px">Заказчик</th>
+        <th class="num" style="width:150px">Его цена ₸</th>
+        <th style="width:120px">Статус заявки</th>
+        <th style="width:230px">Победитель</th>
+        <th class="num" style="width:150px">Цена победы ₸</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in card.losses %}
+      <tr onclick="window.location='/lot/{{ r.lot_id }}'">
+        <td>
+          <div class="strong clamp-2" style="font-size:13px; max-width:360px">{{ r.name }}</div>
+          <div class="mono dim mt-1" style="font-size:11.5px">{{ r.number }}</div>
+        </td>
+        <td class="dim" style="font-size:12px">{{ r.customer_name[:60] }}</td>
+        <td class="num mono">{% if r.my_bid is not none %}{{ r.my_bid|n }}{% else %}<span class="dimer">цены нет</span>{% endif %}</td>
+        <td style="font-size:12px">{{ r.my_bid_status or '—' }}</td>
+        <td style="font-size:12px">
+          {% if r.winner_bin %}
+          <a href="/supplier/{{ r.winner_bin }}" onclick="event.stopPropagation()">{{ (r.winner_name or r.winner_bin)[:50] }}</a>
+          {% else %}<span class="dimer">не определён</span>{% endif %}
+        </td>
+        <td class="num mono">
+          {% if r.winner_amount is not none %}{{ r.winner_amount|n }}
+            {% if r.my_bid and r.winner_amount %}
+            <div class="dim" style="font-size:11px">
+              {{ 'дешевле на' if r.winner_amount < r.my_bid else 'дороже на' }}
+              {{ ((r.winner_amount - r.my_bid) / r.my_bid * 100)|abs|round(1) }}%
+            </div>
+            {% endif %}
+          {% else %}<span class="dimer">—</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="dim" style="text-align:center; padding:28px">Проигранных заявок в базе нет</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="card-foot dim" style="font-size:12px">
+    Заявки с ценами OWS отдаёт только после окончания приёма и только по опрошенным
+    объявлениям (правило #22), поэтому «заявок нет» значит «нет данных», а не
+    «не участвовал». Победы полнее: они приходят и из договоров, и из карточки лота.
+  </div>
+</div>
+
+{% endblock %}

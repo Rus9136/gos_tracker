@@ -288,8 +288,9 @@
           {% for b in bids %}
           <tr>
             <td>
-              {% if b.supplier %}<a href="/organization/{{ b.supplier.id }}">{{ b.supplier.name }}</a>
-              {% else %}{{ b.supplier_name or '—' }}{% endif %}
+              {% if b.supplier_bin and user and user.is_admin %}
+              <a href="/supplier/{{ b.supplier_bin }}">{{ b.supplier_name or (b.supplier.name if b.supplier else b.supplier_bin) }}</a>
+              {% else %}{{ b.supplier_name or (b.supplier.name if b.supplier else '—') }}{% endif %}
               {% if b.supplier_bin %}<div class="mono dim" style="font-size:11px">{{ b.supplier_bin }}</div>{% endif %}
             </td>
             <td class="num mono {{ 'strong' if b.status == 'Победитель' else '' }}">{{ b.price|n }}</td>
@@ -308,7 +309,9 @@
     <div class="card">
       <div class="card-head"><div class="card-title">Победитель</div></div>
       <div class="card-body">
-        <div class="strong">{{ lot.winner_name or '—' }}</div>
+        {% if lot.winner_bin and user and user.is_admin %}
+        <a class="strong" href="/supplier/{{ lot.winner_bin }}">{{ lot.winner_name or lot.winner_bin }}</a>
+        {% else %}<div class="strong">{{ lot.winner_name or '—' }}</div>{% endif %}
         {% if lot.winner_bin %}<div class="mt-1 mono dim" style="font-size:11.5px">БИН: {{ lot.winner_bin }}</div>{% endif %}
         {% if not contracts %}<div class="mt-1 dim" style="font-size:11.5px">Договор ещё не заключён / не публикуется — сумма по плану: {{ lot.plan_amount|n }}</div>{% endif %}
       </div>

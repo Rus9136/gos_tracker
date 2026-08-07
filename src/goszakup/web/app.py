@@ -103,6 +103,7 @@ from ..jobs.scan import (
     create_scan_run,
     mode_flags,
 )
+from ..jobs.supplier_card import build_supplier_card
 from ..jobs.supplier_report import (
     SupplierFilters,
     build_supplier_report,
@@ -1411,6 +1412,28 @@ def suppliers_report(
             "years": years,
             "with_contacts": with_contacts,
         },
+    )
+
+
+@app.get("/supplier/{supplier_bin}", response_class=HTMLResponse)
+def supplier_detail(
+    supplier_bin: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Карточка поставщика: что выиграл и по какой сумме, где участвовал и
+    чья заявка оказалась дешевле (jobs/supplier_card.py). Отдельно от
+    `/organization/{id}`: та карточка — про закупки заказчика (лоты по
+    `customer_id`), у поставщика их нет, и страница выходила пустой."""
+    supplier_bin = supplier_bin.strip()
+    card = build_supplier_card(db, supplier_bin)
+    if card.wins_n == 0 and card.bid_lots_n == 0 and card.org is None:
+        raise HTTPException(404, "поставщик не найден")
+    return templates.TemplateResponse(
+        request,
+        "supplier.html",
+        {**_base_ctx(request, db, user), "card": card},
     )
 
 

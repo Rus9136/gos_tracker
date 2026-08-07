@@ -68,7 +68,7 @@
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr {% if r.org_id %}onclick="window.location='/organization/{{ r.org_id }}'"{% endif %}>
+      <tr onclick="window.location='/supplier/{{ r.bin }}'">
         <td class="dim mono" style="font-size:12px">{{ "%02d"|format(loop.index) }}</td>
         <td>
           <div class="strong clamp-2" style="font-size:13.5px; max-width:420px">{{ r.name or '—' }}</div>
@@ -88,9 +88,7 @@
           {% else %}<span class="dimer">—</span>{% endif %}
         </td>
         <td onclick="event.stopPropagation()">
-          {% if r.org_id %}
-          <a class="icon-btn" href="/organization/{{ r.org_id }}" title="Открыть">{{ icon("chevronRight", 13) }}</a>
-          {% endif %}
+          <a class="icon-btn" href="/supplier/{{ r.bin }}" title="Открыть карточку поставщика">{{ icon("chevronRight", 13) }}</a>
         </td>
       </tr>
       {% else %}
