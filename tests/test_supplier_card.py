@@ -49,26 +49,30 @@ def data(db_session):
 
     # 1: победа по winner_bin + договор на 700к (сумма договора важнее плана).
     won = _lot(db_session, 1, customer=customer, winner_bin=ALPHA,
-               winner_name="ТОО Альфа", enstru="Компьютеры")
+               winner_name="ТОО Альфа", enstru="Компьютеры",
+               enstru_code="262013.000.000012")
     db_session.add(
         Contract(lot_id=won.id, contract_number="c-1", contract_amount=700_000,
                  status="Исполнен")
     )
     # 2: победа только через заявку со статусом «Победитель» — winner_bin пуст.
-    by_bid = _lot(db_session, 2, customer=customer, enstru="Компьютеры")
+    by_bid = _lot(db_session, 2, customer=customer, enstru="Компьютеры",
+                  enstru_code="262013.000.000012")
     db_session.add(
         LotBid(id=201, lot_id=by_bid.id, supplier_bin=ALPHA,
                supplier_name="ТОО Альфа", amount=900_000, status="Победитель")
     )
     # 3: победа только через FK договора (так приходит contracts-sync).
-    by_fk = _lot(db_session, 3, customer=customer, enstru="Серверы")
+    by_fk = _lot(db_session, 3, customer=customer, enstru="Серверы",
+                 enstru_code="262020.000.000001")
     db_session.add(
         Contract(lot_id=by_fk.id, contract_number="c-3", contract_amount=500_000,
                  supplier_id=alpha.id)
     )
     # 4: проигрыш — его заявка дороже победившей.
     lost = _lot(db_session, 4, customer=customer, winner_bin=BETA,
-                winner_name="ТОО Бета", enstru="Компьютеры")
+                winner_name="ТОО Бета", enstru="Компьютеры",
+                enstru_code="262013.000.000012")
     db_session.add_all([
         LotBid(id=401, lot_id=lost.id, supplier_bin=ALPHA,
                supplier_name="ТОО Альфа", amount=1_000_000, status="Второй победитель"),
@@ -114,6 +118,35 @@ def test_stats_cover_all_lots_but_tables_are_capped(db_session, data):
     assert card.wins_n == 3
     assert card.won_total == pytest.approx(2_200_000)
     assert card.wins_shown == 1
+
+
+def test_group_tables_split_customers_and_subjects(db_session, data):
+    card = build_supplier_card(db_session, ALPHA)
+    # Все три победы — у одного заказчика, поэтому строка одна.
+    assert card.customers_n == 1
+    customer = card.top_customers[0]
+    assert customer.name == "ГУ Заказчик"
+    assert customer.bin == "900000000001"
+    assert customer.wins == 3
+    assert customer.total == pytest.approx(2_200_000)
+    # Заявок у этого заказчика известно две (лоты 2 и 4) — это не победы,
+    # а знаменатель «сколько раз заходил» (правило #22).
+    assert customer.bids == 2
+
+    by_name = {r.name: r for r in card.top_enstru}
+    assert card.enstru_n == 2
+    assert by_name["Компьютеры"].wins == 2
+    assert by_name["Компьютеры"].code == "262013.000.000012"
+    assert by_name["Серверы"].wins == 1
+    assert by_name["Серверы"].total == pytest.approx(500_000)
+
+
+def test_group_tables_capped_but_count_is_full(db_session, data):
+    card = build_supplier_card(db_session, ALPHA, group_rows=1)
+    assert card.enstru_n == 2
+    assert len(card.top_enstru) == 1
+    # Обрезаем по числу побед, поэтому наверху «Компьютеры» (2), не «Серверы».
+    assert card.top_enstru[0].name == "Компьютеры"
 
 
 def test_unknown_bin_is_404(db_session, data):

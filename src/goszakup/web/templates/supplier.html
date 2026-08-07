@@ -66,26 +66,103 @@
   </div>
 </div>
 
-{% if card.top_customers or card.top_enstru %}
+{% if card.top_customers %}
+{% set cust_max = card.top_customers | map(attribute='total') | list | max %}
 <div class="card mb-3">
-  <div class="card-head"><div class="card-title">Где выигрывает</div></div>
-  <div class="card-body">
-    {% if card.top_customers %}
-    <div class="dim mb-1" style="font-size:12px">Заказчики</div>
-    <div class="flex gap-2 mb-2" style="flex-wrap:wrap">
-      {% for name, n, total in card.top_customers %}
-      <span class="badge muted">{{ name[:60] }} <span class="mono strong">{{ n }}</span> · {{ total|n }} ₸</span>
-      {% endfor %}
-    </div>
+  <div class="card-head">
+    <div class="card-title">Заказчики, у которых выигрывал
+      <span class="dim">({{ card.customers_n|n }})</span></div>
+    {% if card.customers_n > card.top_customers|length %}
+    <div class="dim" style="font-size:12px">показаны {{ card.top_customers|length }} с наибольшим числом побед</div>
     {% endif %}
-    {% if card.top_enstru %}
-    <div class="dim mb-1" style="font-size:12px">Предметы закупки (ЕНС ТРУ)</div>
-    <div class="flex gap-2" style="flex-wrap:wrap">
-      {% for name, n, total in card.top_enstru %}
-      <span class="badge muted">{{ name[:60] }} <span class="mono strong">{{ n }}</span> · {{ total|n }} ₸</span>
+  </div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:36px">#</th>
+        <th>Заказчик</th>
+        <th style="width:130px">БИН</th>
+        <th class="num" style="width:80px">Побед</th>
+        <th class="num" style="width:80px" title="Лотов этого заказчика, где известна его заявка (правило #22)">Заявок</th>
+        <th class="num" style="width:190px">Сумма побед ₸</th>
+        <th style="width:110px">Последняя</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in card.top_customers %}
+      <tr {% if r.org_id %}onclick="window.location='/organization/{{ r.org_id }}'"{% endif %}>
+        <td class="dim mono" style="font-size:12px">{{ "%02d"|format(loop.index) }}</td>
+        <td><div class="strong clamp-2" style="font-size:13px; max-width:520px">{{ r.name }}</div></td>
+        <td>{% if r.bin %}<span class="mono" style="font-size:12px; color: var(--accent-hi)">{{ r.bin }}</span>{% else %}<span class="dimer">—</span>{% endif %}</td>
+        <td class="num mono strong">{{ r.wins|n }}</td>
+        <td class="num mono">{{ r.bids|n if r.bids else '—' }}</td>
+        <td>
+          <div class="flex items-center gap-3 justify-end">
+            <div class="bar org-bar">
+              <i style="width: {{ (r.total / cust_max * 100) if cust_max else 0 }}%"></i>
+            </div>
+            <div class="mono strong" style="min-width:120px; text-align:right">{{ r.total|n }}</div>
+          </div>
+        </td>
+        <td class="mono dim" style="font-size:12px">{% if r.last_win %}{{ r.last_win|dt }}{% else %}—{% endif %}</td>
+      </tr>
       {% endfor %}
-    </div>
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% if card.top_enstru %}
+{% set enstru_max = card.top_enstru | map(attribute='total') | list | max %}
+<div class="card mb-3">
+  <div class="card-head">
+    <div class="card-title">Что выигрывал (ЕНС ТРУ)
+      <span class="dim">({{ card.enstru_n|n }})</span></div>
+    {% if card.enstru_n > card.top_enstru|length %}
+    <div class="dim" style="font-size:12px">показаны {{ card.top_enstru|length }} с наибольшим числом побед</div>
     {% endif %}
+  </div>
+  <div style="overflow:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:36px">#</th>
+        <th>Предмет закупки</th>
+        <th style="width:170px">Код ЕНС ТРУ</th>
+        <th class="num" style="width:80px">Побед</th>
+        <th class="num" style="width:80px" title="Лотов с этим предметом, где известна его заявка (правило #22)">Заявок</th>
+        <th class="num" style="width:190px">Сумма побед ₸</th>
+        <th style="width:110px">Последняя</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in card.top_enstru %}
+      <tr>
+        <td class="dim mono" style="font-size:12px">{{ "%02d"|format(loop.index) }}</td>
+        <td><div class="strong clamp-2" style="font-size:13px; max-width:520px">{{ r.name }}</div></td>
+        <td>
+          {% if r.code %}
+          <a class="mono" style="font-size:12px" href="/suppliers?enstru_code={{ r.code }}"
+             title="Кто ещё играет по этому коду">{{ r.code }}</a>
+          {% else %}<span class="dimer">—</span>{% endif %}
+        </td>
+        <td class="num mono strong">{{ r.wins|n }}</td>
+        <td class="num mono">{{ r.bids|n if r.bids else '—' }}</td>
+        <td>
+          <div class="flex items-center gap-3 justify-end">
+            <div class="bar org-bar">
+              <i style="width: {{ (r.total / enstru_max * 100) if enstru_max else 0 }}%"></i>
+            </div>
+            <div class="mono strong" style="min-width:120px; text-align:right">{{ r.total|n }}</div>
+          </div>
+        </td>
+        <td class="mono dim" style="font-size:12px">{% if r.last_win %}{{ r.last_win|dt }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   </div>
 </div>
 {% endif %}

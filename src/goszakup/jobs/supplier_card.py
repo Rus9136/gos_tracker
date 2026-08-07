@@ -34,7 +34,7 @@ WINNER_STATUS = "Победитель"
 SECOND_STATUS = "Второй победитель"
 REJECTED_STATUS = "Отклонено"
 ROWS_LIMIT = 200
-TOP_LIMIT = 6
+GROUP_ROWS = 20
 
 
 @dataclass
@@ -61,6 +61,23 @@ class SupplierLotRow:
 
 
 @dataclass
+class SupplierGroupRow:
+    """Строка разбивки побед — по заказчику или по предмету закупки."""
+
+    name: str
+    wins: int = 0
+    total: float = 0.0
+    last_win: datetime | None = None
+    # Сколько лотов этой группы известно с его заявкой (включая победные):
+    # знаменатель для «сколько раз заходил, столько выиграл». Данных меньше,
+    # чем побед (правило #22), поэтому это отдельная колонка, а не win-rate.
+    bids: int = 0
+    org_id: int | None = None
+    bin: str = ""
+    code: str = ""
+
+
+@dataclass
 class SupplierCard:
     bin: str
     name: str = ""
@@ -77,8 +94,10 @@ class SupplierCard:
     losses: list[SupplierLotRow] = field(default_factory=list)
     wins_shown: int = 0
     losses_shown: int = 0
-    top_customers: list[tuple[str, int, float]] = field(default_factory=list)
-    top_enstru: list[tuple[str, int, float]] = field(default_factory=list)
+    top_customers: list[SupplierGroupRow] = field(default_factory=list)
+    top_enstru: list[SupplierGroupRow] = field(default_factory=list)
+    customers_n: int = 0
+    enstru_n: int = 0
 
 
 def _f(value: Decimal | float | None) -> float:
@@ -139,8 +158,113 @@ def _bid_amount(bid: LotBid) -> float | None:
     return None
 
 
+def _by_customer(
+    session: Session,
+    wins: set[int],
+    bid_lots: set[int],
+    amount_expr,
+    group_rows: int,
+) -> tuple[list[SupplierGroupRow], int]:
+    rows: list[SupplierGroupRow] = []
+    result = session.execute(
+        select(
+            Organization.id,
+            Organization.name,
+            Organization.bin,
+            func.count(Lot.id),
+            func.coalesce(func.sum(amount_expr), 0),
+            func.max(Announcement.publish_date),
+        )
+        .select_from(Lot)
+        .join(Organization, Organization.id == Lot.customer_id, isouter=True)
+        .join(Announcement, Announcement.id == Lot.announcement_id, isouter=True)
+        .where(Lot.id.in_(wins))
+        .group_by(Organization.id, Organization.name, Organization.bin)
+        .order_by(func.count(Lot.id).desc(), func.sum(amount_expr).desc())
+    )
+    for org_id, name, bin_, n, total, last in result:
+        rows.append(
+            SupplierGroupRow(
+                name=name or "— заказчик не определён —",
+                wins=n,
+                total=_f(total),
+                last_win=last,
+                org_id=org_id,
+                bin=bin_ or "",
+            )
+        )
+    bids_by_org = dict(
+        session.execute(
+            select(Lot.customer_id, func.count(Lot.id))
+            .where(Lot.id.in_(bid_lots))
+            .group_by(Lot.customer_id)
+        ).all()
+        if bid_lots
+        else []
+    )
+    for row in rows:
+        row.bids = bids_by_org.get(row.org_id, 0)
+    return rows[:group_rows], len(rows)
+
+
+def _by_enstru(
+    session: Session,
+    wins: set[int],
+    bid_lots: set[int],
+    amount_expr,
+    group_rows: int,
+) -> tuple[list[SupplierGroupRow], int]:
+    """Группировка по имени ЕНС ТРУ, код — представитель группы.
+
+    Имя стабильнее кода: у одного и того же предмета в разных лотах код
+    приезжает то из плана, то из деталей, а бывает и пустым."""
+    rows: list[SupplierGroupRow] = []
+    raw_keys: list[str | None] = []
+    result = session.execute(
+        select(
+            Lot.enstru,
+            func.max(Lot.enstru_code),
+            func.count(Lot.id),
+            func.coalesce(func.sum(amount_expr), 0),
+            func.max(Announcement.publish_date),
+        )
+        .select_from(Lot)
+        .join(Announcement, Announcement.id == Lot.announcement_id, isouter=True)
+        .where(Lot.id.in_(wins))
+        .group_by(Lot.enstru)
+        .order_by(func.count(Lot.id).desc(), func.sum(amount_expr).desc())
+    )
+    for name, code, n, total, last in result:
+        raw_keys.append(name)
+        rows.append(
+            SupplierGroupRow(
+                name=name or "— предмет не указан —",
+                code=code or "",
+                wins=n,
+                total=_f(total),
+                last_win=last,
+            )
+        )
+    bids_by_enstru = dict(
+        session.execute(
+            select(Lot.enstru, func.count(Lot.id))
+            .where(Lot.id.in_(bid_lots))
+            .group_by(Lot.enstru)
+        ).all()
+        if bid_lots
+        else []
+    )
+    for key, row in zip(raw_keys, rows, strict=True):
+        row.bids = bids_by_enstru.get(key, 0)
+    return rows[:group_rows], len(rows)
+
+
 def build_supplier_card(
-    session: Session, bin_: str, *, rows_limit: int = ROWS_LIMIT
+    session: Session,
+    bin_: str,
+    *,
+    rows_limit: int = ROWS_LIMIT,
+    group_rows: int = GROUP_ROWS,
 ) -> SupplierCard:
     card = SupplierCard(bin=bin_)
     card.org = session.scalars(
@@ -185,35 +309,12 @@ def build_supplier_card(
                 )
             )
         )
-        card.top_customers = [
-            (name or "— без имени —", n, _f(total))
-            for name, n, total in session.execute(
-                select(
-                    Organization.name,
-                    func.count(Lot.id),
-                    func.coalesce(func.sum(amount_expr), 0),
-                )
-                .join(Organization, Organization.id == Lot.customer_id, isouter=True)
-                .where(Lot.id.in_(wins))
-                .group_by(Organization.name)
-                .order_by(func.count(Lot.id).desc())
-                .limit(TOP_LIMIT)
-            )
-        ]
-        card.top_enstru = [
-            (name or "— без ЕНС ТРУ —", n, _f(total))
-            for name, n, total in session.execute(
-                select(
-                    Lot.enstru,
-                    func.count(Lot.id),
-                    func.coalesce(func.sum(amount_expr), 0),
-                )
-                .where(Lot.id.in_(wins))
-                .group_by(Lot.enstru)
-                .order_by(func.count(Lot.id).desc())
-                .limit(TOP_LIMIT)
-            )
-        ]
+        card.top_customers, card.customers_n = _by_customer(
+            session, wins, set(my_bids), amount_expr, group_rows
+        )
+        card.top_enstru, card.enstru_n = _by_enstru(
+            session, wins, set(my_bids), amount_expr, group_rows
+        )
         first_last = session.execute(
             select(
                 func.min(Announcement.publish_date),
