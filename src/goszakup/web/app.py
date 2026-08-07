@@ -109,6 +109,7 @@ from ..jobs.supplier_report import (
     render_csv as render_suppliers_csv,
 )
 from ..observability import setup_sentry
+from ..orgs import buyer_condition, role_condition, supplier_condition
 from ..prefilter import PrefilterError, lot_passes_prefilter, normalize_prefilter
 from ..scope import lot_in_scope, plan_scope_conditions, scope_conditions
 from ..scraper.katos import BY_CODE, REGIONS, region_name
@@ -322,7 +323,13 @@ def _nav_counts(db: Session, user: User | None) -> dict[str, int]:
         "past": _count(Lot.is_actual.is_(False)),
         "starred": _count(Lot.is_starred.is_(True)),
         "matched": matched,
-        "customers": db.scalar(select(func.count(Organization.id))) or 0,
+        # Только закупающие: в organizations живут и поставщики (победители и
+        # участники заявок) — их там больше, чем заказчиков, и в счётчике
+        # вкладки «Заказчики» они врали втрое (правило про роли — orgs.py).
+        "customers": db.scalar(
+            select(func.count(Organization.id)).where(buyer_condition())
+        )
+        or 0,
         "presets": db.scalar(select(func.count(Preset.id))) or 0,
     }
     _nav_cache[uid] = {"at": now, "data": data}
@@ -528,7 +535,8 @@ def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depe
             _scoped(select(func.count(Lot.id)).where(Lot.is_actual.is_(True)))
         )
         or 0,
-        "orgs": db.scalar(select(func.count(Organization.id))) or 0,
+        "orgs": db.scalar(select(func.count(Organization.id)).where(buyer_condition()))
+        or 0,
         "docs": db.scalar(select(func.count(Document.id))) or 0,
     }
     # Sparkline-серии для KPI: последние 14 прогонов по возрастанию времени.
@@ -1099,8 +1107,13 @@ def organizations_list(
     user: User = Depends(require_page("organizations")),
     q: str = "",
     sort: str = "-total",
+    role: str = "",
     page: int = 1,
 ):
+    # Страница про закупающих: колонки «Лотов / Актуальных / Сумма» считаются
+    # по роли заказчика, поэтому поставщик дал бы строку из нулей. Роль —
+    # производная от данных, см. orgs.py.
+    role_cond = role_condition(role)
     base = (
         select(
             Organization.id,
@@ -1113,6 +1126,7 @@ def organizations_list(
             func.sum(case((Lot.is_actual, 1), else_=0)).label("actual_cnt"),
         )
         .join(Lot, Lot.customer_id == Organization.id, isouter=True)
+        .where(role_cond)
         .group_by(Organization.id)
     )
     if q:
@@ -1128,7 +1142,12 @@ def organizations_list(
     col = cols.get(sort.lstrip("-"), cols["total"])
     base = base.order_by(desc(col) if desc_ else col)
 
-    total = db.scalar(select(func.count()).select_from(Organization))
+    count_stmt = select(func.count()).select_from(Organization).where(role_cond)
+    if q:
+        count_stmt = count_stmt.where(
+            or_(Organization.name.ilike(f"%{q}%"), Organization.bin.ilike(f"%{q}%"))
+        )
+    total = db.scalar(count_stmt)
     pages = max(1, ((total or 0) + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(1, min(page, pages))
     rows = db.execute(base.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
@@ -1141,6 +1160,7 @@ def organizations_list(
         select(func.coalesce(func.sum(Lot.plan_amount), 0).label("total"))
         .select_from(Organization)
         .join(Lot, Lot.customer_id == Organization.id, isouter=True)
+        .where(role_cond)
         .group_by(Organization.id)
         .order_by(desc(func.coalesce(func.sum(Lot.plan_amount), 0)))
         .limit(10)
@@ -1156,10 +1176,19 @@ def organizations_list(
             "rows": rows,
             "q": q,
             "sort": sort,
+            "role": role,
             "page": page,
             "pages": pages,
             "total": total,
             "top10_share": top10_share,
+            # Сколько организаций в базе — только поставщики (их место в
+            # отчёте /suppliers, здесь они дали бы строки из нулей).
+            "suppliers_only": db.scalar(
+                select(func.count(Organization.id)).where(
+                    supplier_condition(), ~buyer_condition()
+                )
+            )
+            or 0,
         },
     )
 

@@ -54,6 +54,7 @@ def db_session():
         "contracts",
         "lot_status_history",
         "documents",
+        "lot_bids",
         "lots",
         "announcements",
         "organizations",

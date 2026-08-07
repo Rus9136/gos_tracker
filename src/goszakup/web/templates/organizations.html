@@ -10,6 +10,12 @@
     <div class="page-sub">{{ total|n }} организаций
       {% if top10_share %}• топ-10 держат {{ top10_share }}% бюджета{% endif %}
     </div>
+    {% if suppliers_only %}
+    <div class="dim mt-1" style="font-size:12px">
+      Ещё {{ suppliers_only|n }} организаций встречаются только как поставщики —
+      {% if user and user.is_admin %}<a href="/suppliers">отчёт по поставщикам</a>{% else %}они в отчёте по поставщикам{% endif %}
+    </div>
+    {% endif %}
   </div>
   <div class="flex gap-2 items-center">
     <a class="btn" href="?{{ q and 'q=' + q + '&' or '' }}export=csv" onclick="alert('Экспорт — скоро'); return false;">{{ icon("download") }} Экспорт CSV</a>
@@ -18,7 +24,7 @@
 </div>
 
 <form method="get" class="card mb-3">
-  <div class="card-body" style="display:grid; grid-template-columns: 2fr 1fr auto; gap:10px; align-items:end; padding:14px">
+  <div class="card-body" style="display:grid; grid-template-columns: 2fr 1fr 1fr auto; gap:10px; align-items:end; padding:14px">
     <div class="field">
       <label>Поиск (название / БИН)</label>
       <div style="position:relative">
@@ -27,6 +33,14 @@
                style="padding-left:32px">
         <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--fg-3)">{{ icon("search", 14) }}</span>
       </div>
+    </div>
+    <div class="field">
+      <label>Роль</label>
+      <select class="select" name="role">
+        <option value=""          {% if not role %}selected{% endif %}>Все закупающие</option>
+        <option value="customer"  {% if role == 'customer'  %}selected{% endif %}>Заказчики</option>
+        <option value="organizer" {% if role == 'organizer' %}selected{% endif %}>Организаторы</option>
+      </select>
     </div>
     <div class="field">
       <label>Сортировка</label>
@@ -110,9 +124,9 @@
     <span>Показано <span class="strong">{{ rows|length }}</span> из {{ total|n }} организаций</span>
     {% if pages > 1 %}
     <div class="flex items-center gap-2">
-      {% if page > 1 %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&page={{ page - 1 }}">{{ icon("chevronLeft", 12) }} Назад</a>{% endif %}
+      {% if page > 1 %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&role={{ role }}&page={{ page - 1 }}">{{ icon("chevronLeft", 12) }} Назад</a>{% endif %}
       <span class="mono">{{ page }} / {{ pages }}</span>
-      {% if page < pages %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&page={{ page + 1 }}">Вперёд {{ icon("chevronRight", 12) }}</a>{% endif %}
+      {% if page < pages %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&role={{ role }}&page={{ page + 1 }}">Вперёд {{ icon("chevronRight", 12) }}</a>{% endif %}
     </div>
     {% endif %}
   </div>

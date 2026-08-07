@@ -845,6 +845,17 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 - `notify/telegram.py` — defensive-обёртка над Bot API `sendMessage`
   (`send_message(chat_id, text) -> (ok, error)`); `notify/render.py` —
   сборка HTML-текста уведомления по лоту/матчу (с экранированием).
+- `orgs.py` — роль организации как производная от связей, а не колонка:
+  `customer_condition` / `organizer_condition` / `buyer_condition` /
+  `supplier_condition` / `role_condition(role)`. `organizations` — одна
+  таблица на все роли (в реестре OWS `subject` тоже флаги `customer`/
+  `organizer`/`supplier`, и они пересекаются), поэтому витрину
+  `/organizations` и счётчики вкладки «Заказчики» надо фильтровать: без
+  этого в них попадали 6k чистых поставщиков со строками из нулей. Флаги
+  реестра как признак роли НЕ использовать — `supplier` там стоит почти у
+  всех, включая госорганы. Поставщик матчится по трём путям
+  (`lots.winner_bin`, `lot_bids.supplier_bin` — строкой БИН;
+  `contracts.supplier_id` — FK), пропуск любого теряет часть поставщиков.
 - `scope.py` — `scope_conditions(user)` / `lot_in_scope(lot, user)` — единый
   источник правды для read-time scope (правило #15); используется и web,
   и matcher-fan-out'ом. `Scope`/`user_scope`/`*_of` — те же правила на
