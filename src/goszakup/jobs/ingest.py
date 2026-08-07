@@ -108,6 +108,27 @@ def find_active_run(session: Session) -> ScrapeRun | None:
     )
 
 
+def active_run_of_kind(session: Session, note_prefix: str) -> ScrapeRun | None:
+    """Живой прогон того же вида (по префиксу note) — защита от дублей.
+
+    Синки (bids/contracts/plans) идут десятками минут: bids-sync — это 500
+    отдельных GraphQL-запросов, `TrdApp.buyId` не принимает массив. Если за
+    это время в очередь попадёт второе такое же сообщение (лишний enqueue,
+    редоставка после обрыва соединения с Redis, ручной запуск с CLI поверх
+    крона), второй прогон возьмёт ТУ ЖЕ выборку: отметка `bids_synced_at`
+    ставится в конце опроса объявления, поэтому дубль не «продвигает» работу,
+    а удваивает нагрузку на OWS и на потоки воркера. Плюс в UI такие прогоны
+    наслаиваются и «идёт прогон #N» не гаснет никогда."""
+    threshold = datetime.now(UTC) - _STALE_RUN_AFTER
+    return session.scalar(
+        select(ScrapeRun)
+        .where(ScrapeRun.finished_at.is_(None))
+        .where(ScrapeRun.note.startswith(note_prefix))
+        .where(_progress_ts() >= threshold)
+        .order_by(ScrapeRun.started_at.desc())
+    )
+
+
 def create_ingest_run(
     *,
     customer_bin: str,

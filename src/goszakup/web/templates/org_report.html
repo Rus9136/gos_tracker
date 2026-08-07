@@ -12,9 +12,14 @@
   <span class="dim">—</span>
   <input class="input" type="number" name="year_to" required min="2010" max="2030"
          value="{{ ingest_year_to }}" style="width:88px" title="Год до">
-  <button type="submit" class="btn" {% if active_run %}disabled{% endif %}>
+  <button type="submit" class="btn" {% if active_run %}disabled{% endif %}
+          {% if active_run and not own_run %}title="Занято фоновой синхронизацией (прогон #{{ active_run.id }}) — одновременно идёт только один прогон"{% endif %}>
     {{ icon("refresh", 13) }} Дозагрузить
   </button>
+  {% if active_run and not own_run %}
+  <span class="dim" style="font-size:12px">занято прогоном
+    <a href="/runs/{{ active_run.id }}">#{{ active_run.id }}</a></span>
+  {% endif %}
 </form>
 {% endmacro %}
 
@@ -41,11 +46,11 @@
   </div>
 </div>
 
-{% if active_run %}
+{% if own_run %}
 <div class="card mb-3" style="border-color: color-mix(in oklch, var(--warn) 30%, transparent); background: var(--warn-bg)">
   <div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 16px; color: var(--warn)">
     {{ icon("clock", 16) }}
-    <span>Идёт прогон <a href="/runs/{{ active_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ active_run.id }}</a>{% if active_run.note %} ({{ active_run.note }}){% endif %}.
+    <span>Идёт дозагрузка по этой организации — прогон <a href="/runs/{{ own_run.id }}" class="strong" style="color:inherit; text-decoration:underline">#{{ own_run.id }}</a>{% if own_run.note %} ({{ own_run.note }}){% endif %}.
       Когда он закончится, обновите страницу — отчёт пересчитается по свежим данным.</span>
   </div>
 </div>
@@ -65,7 +70,7 @@
 </div>
 {% endif %}
 
-{% if not kpis.n_lots and not active_run %}
+{% if not kpis.n_lots and not own_run %}
 <div class="card mb-3">
   <div class="card-body" style="padding:24px 20px">
     <div class="strong mb-2" style="font-size:15px">По этой организации ещё нет загруженных лотов</div>

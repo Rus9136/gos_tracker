@@ -25,6 +25,7 @@ fire-and-forget относительно run-жизненного цикла, п
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import dramatiq
@@ -38,7 +39,7 @@ from ..config import MIN_AMOUNT, OWS_TOKEN
 from ..db.engine import SessionLocal
 from ..db.models import Lot, Preset, ScrapeRun
 from ..jobs.expire import expire_actual_lots
-from ..jobs.ingest import close_stale_runs
+from ..jobs.ingest import active_run_of_kind, close_stale_runs
 from ..jobs.reconcile import find_orphan_stub_annos
 from ..jobs.retention import cleanup_old_documents
 from ..jobs.run_preset import (
@@ -132,6 +133,42 @@ def _close_run(session, run_id: int) -> None:
     session.commit()
 
 
+def _skip_duplicate(session, note_prefix: str) -> bool:
+    """True, если такой синк уже идёт — тогда актор молча выходит.
+
+    Дубли реальны: 2026-08-07 в очереди одновременно висели шесть сообщений
+    bids_sync_actor, и каждое перемалывало те же 500 объявлений."""
+    dup = active_run_of_kind(session, note_prefix)
+    if dup is None:
+        return False
+    log.warning(
+        "%s: уже идёт прогон #%d (старт %s) — пропускаю дубль",
+        note_prefix, dup.id, dup.started_at,
+    )
+    return True
+
+
+@contextmanager
+def _run_scope(session, note: str):
+    """ScrapeRun, который закрывается в любом случае.
+
+    Синхронные синки (bids/contracts/plans) закрывают прогон сами — но только
+    на успешном пути. Падение (чаще всего TimeLimitExceeded: у dramatiq лимит
+    считается по потоку и прилетает как исключение прямо в середину работы)
+    оставляло finished_at=NULL, и прогон висел в UI «идущим» до reaper'а."""
+    run = ScrapeRun(preset_id=None, note=note)
+    session.add(run)
+    session.commit()
+    try:
+        yield run.id
+    finally:
+        try:
+            session.rollback()  # после падения сессия может быть в failed-транзакции
+            _close_run(session, run.id)
+        except Exception:
+            log.warning("не удалось закрыть прогон #%s", run.id, exc_info=True)
+
+
 # === Actors ===
 
 
@@ -189,6 +226,8 @@ def contracts_sync_actor(days_back: int | None = None) -> None:
 
     r = _redis_client()
     with SessionLocal() as session:
+        if _skip_duplicate(session, NOTE_PREFIX_CONTRACTS):
+            return
         if days_back is not None:
             dt_to = datetime.now(UTC)
             dt_from = dt_to - timedelta(days=days_back)
@@ -200,39 +239,31 @@ def contracts_sync_actor(days_back: int | None = None) -> None:
                 "contracts-sync: окно обрезано потолком %s — часть изменений "
                 "источника потеряна", dt_from,
             )
-        run = ScrapeRun(
-            preset_id=None,
-            note=f"{NOTE_PREFIX_CONTRACTS}: {dt_from:%Y-%m-%d %H:%M}—{dt_to:%H:%M} UTC",
-        )
-        session.add(run)
-        session.commit()
-        run_id = run.id
-
-        client = OwsClient(redis_client=r)
-        try:
-            stats = sync_contracts(
-                session, client, dt_from=dt_from, dt_to=dt_to,
-                on_progress=lambda s: _touch_run(session, run_id),
+        note = f"{NOTE_PREFIX_CONTRACTS}: {dt_from:%Y-%m-%d %H:%M}—{dt_to:%H:%M} UTC"
+        with _run_scope(session, note) as run_id:
+            client = OwsClient(redis_client=r)
+            try:
+                stats = sync_contracts(
+                    session, client, dt_from=dt_from, dt_to=dt_to,
+                    on_progress=lambda s: _touch_run(session, run_id),
+                )
+            except OwsApiError as e:
+                # Фолбэка в HTML здесь нет и не нужно: HTML-путь договоров живёт
+                # в detail-фазе; окно доберёт следующий daily.
+                log.warning("contracts-sync: OWS недоступен (%s) — окно доберём позже", e)
+                _increment_run(session, run_id, errors=1)
+                return
+            _update_run(
+                session, run_id,
+                listing_count=stats.scanned,
+                new_lots=stats.created,
+                updated_lots=stats.updated,
             )
-        except OwsApiError as e:
-            # Фолбэка в HTML здесь нет и не нужно: HTML-путь договоров живёт
-            # в detail-фазе; окно доберёт следующий daily.
-            log.warning("contracts-sync: OWS недоступен (%s) — окно доберём позже", e)
-            _increment_run(session, run_id, errors=1)
-            _close_run(session, run_id)
-            return
-        _update_run(
-            session, run_id,
-            listing_count=stats.scanned,
-            new_lots=stats.created,
-            updated_lots=stats.updated,
-        )
-        _close_run(session, run_id)
-        log.info(
-            "contracts-sync: scanned=%d matched=%d created=%d updated=%d winners=%d",
-            stats.scanned, stats.matched, stats.created, stats.updated,
-            stats.winners_filled,
-        )
+            log.info(
+                "contracts-sync: scanned=%d matched=%d created=%d updated=%d winners=%d",
+                stats.scanned, stats.matched, stats.created, stats.updated,
+                stats.winners_filled,
+            )
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=60 * 60 * 1000)
@@ -253,37 +284,32 @@ def bids_sync_actor(limit: int = 500, horizon_days: int | None = None) -> None:
     r = _redis_client()
     horizon = horizon_days if horizon_days is not None else RETRY_HORIZON_DAYS
     with SessionLocal() as session:
-        run = ScrapeRun(
-            preset_id=None, note=f"bids-sync: горизонт {horizon}д, лимит {limit}"
-        )
-        session.add(run)
-        session.commit()
-        run_id = run.id
-
-        client = OwsClient(redis_client=r)
-        try:
-            stats = sync_bids(
-                session, client, horizon_days=horizon, limit=limit,
-                on_progress=lambda s: _touch_run(session, run_id),
-            )
-        except OwsApiError as e:
-            log.warning("bids-sync: OWS недоступен (%s) — доберём следующим daily", e)
-            _increment_run(session, run_id, errors=1)
-            _close_run(session, run_id)
+        if _skip_duplicate(session, "bids-sync"):
             return
-        _update_run(
-            session, run_id,
-            listing_count=stats.bids_seen,
-            new_lots=stats.created,
-            updated_lots=stats.updated,
-            errors=stats.errors,
-        )
-        _close_run(session, run_id)
-        log.info(
-            "bids-sync: объявлений=%d заявок=%d created=%d updated=%d winners=%d errors=%d",
-            stats.announcements, stats.bids_seen, stats.created, stats.updated,
-            stats.winners_filled, stats.errors,
-        )
+        note = f"bids-sync: горизонт {horizon}д, лимит {limit}"
+        with _run_scope(session, note) as run_id:
+            client = OwsClient(redis_client=r)
+            try:
+                stats = sync_bids(
+                    session, client, horizon_days=horizon, limit=limit,
+                    on_progress=lambda s: _touch_run(session, run_id),
+                )
+            except OwsApiError as e:
+                log.warning("bids-sync: OWS недоступен (%s) — доберём следующим daily", e)
+                _increment_run(session, run_id, errors=1)
+                return
+            _update_run(
+                session, run_id,
+                listing_count=stats.bids_seen,
+                new_lots=stats.created,
+                updated_lots=stats.updated,
+                errors=stats.errors,
+            )
+            log.info(
+                "bids-sync: объявлений=%d заявок=%d created=%d updated=%d winners=%d errors=%d",
+                stats.announcements, stats.bids_seen, stats.created, stats.updated,
+                stats.winners_filled, stats.errors,
+            )
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0, time_limit=30 * 60 * 1000)
@@ -301,6 +327,8 @@ def api_daily_actor() -> None:
 
     r = _redis_client()
     with SessionLocal() as session:
+        if _skip_duplicate(session, NOTE_PREFIX_DAILY):
+            return
         dt_from, dt_to, clamped = sync_window(session, NOTE_PREFIX_DAILY)
         if clamped:
             log.warning(
@@ -397,6 +425,8 @@ def plans_sync_actor(max_pages: int | None = None) -> None:
 
     r = _redis_client()
     with SessionLocal() as session:
+        if _skip_duplicate(session, "plans-sync"):
+            return
         watermark = plan_watermark(session)
         if watermark is None:
             log.warning(
@@ -404,46 +434,38 @@ def plans_sync_actor(max_pages: int | None = None) -> None:
                 "свежих страниц. Полный год: cli plans-sync --full --sync",
                 max_pages or INCREMENTAL_MAX_PAGES,
             )
-        run = ScrapeRun(
-            preset_id=None,
-            note=f"plans-sync: пункты плана свежее id={watermark or '—'}",
-        )
-        session.add(run)
-        session.commit()
-        run_id = run.id
+        note = f"plans-sync: пункты плана свежее id={watermark or '—'}"
+        with _run_scope(session, note) as run_id:
+            client = OwsClient(redis_client=r)
+            try:
+                stats = sync_plans(
+                    session,
+                    client,
+                    stop_at_id=watermark,
+                    max_pages=max_pages or INCREMENTAL_MAX_PAGES,
+                    on_progress=lambda s: _touch_run(session, run_id),
+                )
+            except OwsApiError as e:
+                # Водяной знак не двигается — следующий прогон возьмёт то же окно.
+                log.warning("plans-sync: OWS недоступен (%s) — доберём позже", e)
+                _increment_run(session, run_id, errors=1)
+                return
+            linked = link_lots(session)
+            if stats.created:
+                from .notify import plan_notify_actor
 
-        client = OwsClient(redis_client=r)
-        try:
-            stats = sync_plans(
+                plan_notify_actor.send()
+            _update_run(
                 session,
-                client,
-                stop_at_id=watermark,
-                max_pages=max_pages or INCREMENTAL_MAX_PAGES,
-                on_progress=lambda s: _touch_run(session, run_id),
+                run_id,
+                listing_count=stats.scanned,
+                new_lots=stats.created,
+                updated_lots=stats.updated,
             )
-        except OwsApiError as e:
-            # Водяной знак не двигается — следующий прогон возьмёт то же окно.
-            log.warning("plans-sync: OWS недоступен (%s) — доберём позже", e)
-            _increment_run(session, run_id, errors=1)
-            _close_run(session, run_id)
-            return
-        linked = link_lots(session)
-        if stats.created:
-            from .notify import plan_notify_actor
-
-            plan_notify_actor.send()
-        _update_run(
-            session,
-            run_id,
-            listing_count=stats.scanned,
-            new_lots=stats.created,
-            updated_lots=stats.updated,
-        )
-        _close_run(session, run_id)
-        log.info(
-            "plans-sync: scanned=%d created=%d updated=%d linked=%d",
-            stats.scanned, stats.created, stats.updated, linked,
-        )
+            log.info(
+                "plans-sync: scanned=%d created=%d updated=%d linked=%d",
+                stats.scanned, stats.created, stats.updated, linked,
+            )
 
 
 @dramatiq.actor(queue_name="goszakup_daily", max_retries=0)
@@ -453,8 +475,13 @@ def watchlist_catchup_actor(limit: int | None = None) -> None:
     max_retries=0: следующий daily всё равно повторит проход, а ретрай дал бы
     дубль ScrapeRun и повторные скачивания.
     """
-    from ..jobs.watchlist_catchup import DEFAULT_LIMIT, run_catchup
+    from ..jobs.watchlist_catchup import DEFAULT_LIMIT, NOTE_PREFIX, run_catchup
 
+    with SessionLocal() as session:
+        # Дубль взял бы те же объявления: выборка идёт по «нет строки в
+        # lot_analyses», а она появится только когда отработает detail+LLM.
+        if _skip_duplicate(session, NOTE_PREFIX):
+            return
     n = run_catchup(limit=limit or DEFAULT_LIMIT)
     log.info("watchlist_catchup_actor: поставлено %d объявлений", n)
 

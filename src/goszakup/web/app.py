@@ -1309,6 +1309,17 @@ def organization_report(
             )
         )
     ]
+    # Прогон прогону рознь. Дозагрузка по БИН этой организации меняет цифры
+    # отчёта — про неё стоит сказать громко. Любой другой фоновый синк (bids,
+    # plans, api-daily) к отчёту отношения не имеет и пугать им не надо; он
+    # важен лишь тем, что запрещает запуск дозагрузки (create_ingest_run
+    # отказывает, пока идёт другой прогон — Crawl-delay один на всех).
+    active = find_active_run(db)
+    own_run = (
+        active
+        if active and org.bin and f"БИН {org.bin}" in (active.note or "")
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "org_report.html",
@@ -1318,7 +1329,8 @@ def organization_report(
             "plan": org_plan_summary(db, org_bins, year=current_year),
             "plan_year": current_year,
             "month_label": month_label,
-            "active_run": find_active_run(db),
+            "active_run": active,
+            "own_run": own_run,
             "error": error,
             "ingest_year_from": current_year - 2,
             "ingest_year_to": current_year,
