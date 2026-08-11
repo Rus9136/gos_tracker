@@ -119,8 +119,11 @@ def test_alert_is_sent_and_deduped(seeded, monkeypatch):
         lambda chat_id, text, **kw: (sent.append((chat_id, text)), (True, None))[1],
     )
 
-    allowed = iter([True, False])
-    monkeypatch.setattr(health, "_alert_allowed", lambda: next(allowed))
+    seen: set[str] = set()
+    monkeypatch.setattr(
+        health, "_alertable",
+        lambda ps: [p for p in ps if p.code not in seen and not seen.add(p.code)],
+    )
 
     health.run_health_check(seeded, notify=True)
     assert len(sent) == 1  # ушло админу
@@ -129,10 +132,82 @@ def test_alert_is_sent_and_deduped(seeded, monkeypatch):
     assert len(sent) == 1  # второй раз подавлен cooldown'ом — не спамим
 
 
+def test_new_problem_breaks_cooldown_of_another(seeded, monkeypatch):
+    """Регрессия 2026-08-11: общий ключ дедупа на весь прогон означал, что
+    вторая, независимая проблема попадала под чужой cooldown и не уходила
+    вовсе. Окно cooldown у каждого вида проблемы своё."""
+    monkeypatch.setattr(health, "GZ_TELEGRAM_BOT_TOKEN", "token")
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "goszakup.notify.telegram.send_message",
+        lambda chat_id, text, **kw: (sent.append(text), (True, None))[1],
+    )
+    # Redis недоступен → _alertable пропускает всё; дедуп эмулируем сами.
+    seen: set[str] = set()
+    monkeypatch.setattr(
+        health, "_alertable",
+        lambda ps: [p for p in ps if p.code not in seen and not seen.add(p.code)],
+    )
+
+    monkeypatch.setattr(health, "check_llm", lambda: (False, "402"))
+    health.run_health_check(seeded, notify=True)
+    assert len(sent) == 1 and "Cerebras" in sent[0]
+
+    # LLM всё ещё лежит (о ней уже сообщили), но добавилась вторая проблема.
+    monkeypatch.setattr(health, "check_redis", lambda: (False, "ConnectionError"))
+    health.run_health_check(seeded, notify=True)
+    assert len(sent) == 2, "новая проблема обязана пробить чужой cooldown"
+    assert "Redis" in sent[1] and "Cerebras" not in sent[1]
+
+
+def test_cooldown_not_burned_without_recipients(seeded, monkeypatch):
+    """Без админов с chat_id слать некуда — ключи cooldown ставить нельзя,
+    иначе проблема замолчала бы на всё окно, никого не разбудив."""
+    monkeypatch.setattr(health, "check_llm", lambda: (False, "402"))
+    monkeypatch.setattr(health, "GZ_TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr(health, "_admin_chat_ids", lambda s: [])
+    monkeypatch.setattr(
+        health, "_alertable", lambda ps: pytest.fail("дедуп до проверки получателей")
+    )
+    assert health.run_health_check(seeded, notify=True)
+
+
+def test_alertable_keys_cooldown_per_problem_code(monkeypatch):
+    keys: dict[str, str] = {}
+
+    class _FakeRedis:
+        def set(self, key, value, nx=False, ex=None):  # noqa: ARG002
+            if nx and key in keys:
+                return None
+            keys[key] = value
+            return True
+
+    monkeypatch.setattr(
+        "redis.Redis.from_url", staticmethod(lambda *a, **kw: _FakeRedis())
+    )
+    llm = health.Problem("llm-down", "❌ LLM лежит")
+    redis_down = health.Problem("redis-down", "❌ Redis лежит")
+
+    assert health._alertable([llm]) == [llm]
+    assert list(keys) == [f"{health._ALERT_KEY}:llm-down"]
+    # Повтор той же проблемы молчит, соседняя проходит своим ключом.
+    assert health._alertable([llm, redis_down]) == [redis_down]
+
+
+def test_alertable_sends_everything_when_redis_is_down(monkeypatch):
+    # Тишина дороже лишнего сообщения: без дедупа шлём всё.
+    def _boom(*a, **kw):
+        raise ConnectionError("нет redis")
+
+    monkeypatch.setattr("redis.Redis.from_url", staticmethod(_boom))
+    problems = [health.Problem("llm-down", "❌ LLM лежит")]
+    assert health._alertable(problems) == problems
+
+
 def test_notify_false_never_sends(seeded, monkeypatch):
     monkeypatch.setattr(health, "check_llm", lambda: (False, "402"))
     monkeypatch.setattr(health, "GZ_TELEGRAM_BOT_TOKEN", "token")
-    monkeypatch.setattr(health, "_alert_allowed", lambda: pytest.fail("не должно дойти до дедупа"))
+    monkeypatch.setattr(health, "_alertable", lambda ps: pytest.fail("не должно дойти до дедупа"))
     problems = health.run_health_check(seeded, notify=False)
     assert problems  # проблему вернул…
 

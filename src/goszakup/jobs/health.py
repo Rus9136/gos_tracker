@@ -207,74 +207,102 @@ def match_age_hours(session: Session) -> float | None:
     return (datetime.now(UTC) - last).total_seconds() / 3600
 
 
+class Problem(str):
+    """Текст проблемы + стабильный код для дедупа алертов.
+
+    Именно str, а не dataclass: текст уходит в Telegram и в CLI как есть, и
+    все вызывающие продолжают работать со списком строк. Дедуп же не может
+    ключеваться текстом — в нём плавают числа («94ч назад» → «95ч назад»), и
+    ключ менялся бы каждый час, обнуляя cooldown.
+    """
+
+    __slots__ = ("code",)
+
+    def __new__(cls, code: str, text: str) -> "Problem":
+        obj = super().__new__(cls, text)
+        obj.code = code
+        return obj
+
+
 def collect_problems(session: Session) -> list[str]:
-    problems: list[str] = []
+    problems: list[Problem] = []
 
     ok, err = check_llm()
     if not ok:
-        problems.append(f"❌ LLM (Cerebras) не отвечает: {err}")
+        problems.append(Problem("llm-down", f"❌ LLM (Cerebras) не отвечает: {err}"))
 
     ok, err = check_redis()
     if not ok:
-        problems.append(
-            f"❌ Redis недоступен: {err} — очередь, rate-limit и прогоны стоят"
-        )
+        problems.append(Problem(
+            "redis-down",
+            f"❌ Redis недоступен: {err} — очередь, rate-limit и прогоны стоят",
+        ))
 
     free = disk_free_gb(DOCS_DIR)
     if free is not None and free < DISK_MIN_FREE_GB:
-        problems.append(
+        problems.append(Problem(
+            "disk-low",
             f"⚠️ Мало места под документы: {free:.1f} ГБ свободно "
-            f"(порог {DISK_MIN_FREE_GB} ГБ) — скачивание ТЗ может встать"
-        )
+            f"(порог {DISK_MIN_FREE_GB} ГБ) — скачивание ТЗ может встать",
+        ))
 
     # Пустой watchlist — тихая смерть дорогих стадий: ошибок нет, счётчики
     # просто нули (документы не качаются, LLM не зовётся). Случается, когда
     # у всех активных пользователей пустой `categories` и ни у одного
     # запроса нет пре-фильтра.
     if not watchlist_rules(session):
-        problems.append(
+        problems.append(Problem(
+            "watchlist-empty",
             "❌ Watchlist пуст: ни одной вертикали у активных пользователей и "
-            "ни одного пре-фильтра — документы и LLM выключены для всего рынка"
-        )
+            "ни одного пре-фильтра — документы и LLM выключены для всего рынка",
+        ))
 
     if MATCH_STALE_HOURS > 0:
         age = match_age_hours(session)
         if age is not None and age > MATCH_STALE_HOURS:
-            problems.append(
+            problems.append(Problem(
+                "match-stale",
                 f"⚠️ Последний матч был {age:.0f}ч назад (порог {MATCH_STALE_HOURS}ч) — "
-                f"матчинг мог встать даже при живом LLM."
-            )
+                f"матчинг мог встать даже при живом LLM.",
+            ))
 
     ok, err = check_ows_api()
     if not ok:
-        problems.append(
-            f"❌ OWS API не отвечает ({err}) — скрейпинг на медленном HTML-фолбэке"
-        )
+        problems.append(Problem(
+            "ows-down",
+            f"❌ OWS API не отвечает ({err}) — скрейпинг на медленном HTML-фолбэке",
+        ))
 
     token_problem = ows_token_problem()
     if token_problem:
-        problems.append(token_problem)
+        problems.append(Problem("ows-token", token_problem))
 
     degraded = api_degraded_reason()
     if degraded:
-        problems.append(
-            f"⚠️ Источник деградировал на HTML-фолбэк (последняя причина: {degraded})"
-        )
+        problems.append(Problem(
+            "api-degraded",
+            f"⚠️ Источник деградировал на HTML-фолбэк (последняя причина: {degraded})",
+        ))
 
     # Лицензию Tumar проверяем только когда автоподача сконфигурирована — иначе
     # на инстансе без автоподачи это ложный шум.
     if AUTOSUBMIT_AGENT_URL:
         tumar = tumar_license_problem()
         if tumar:
-            problems.append(tumar)
+            problems.append(Problem("tumar-license", tumar))
 
     return problems
 
 
-def _alert_allowed() -> bool:
-    """SET NX EX: первый алерт в окне проходит, остальные молчат.
+def _alertable(problems: list[str]) -> list[str]:
+    """Отсеять проблемы, о которых уже сообщали в текущем окне cooldown.
 
-    Если Redis недоступен — разрешаем. Лучше лишнее сообщение, чем тишина:
+    SET NX EX на КАЖДЫЙ код отдельно, а не один ключ на весь прогон: 2026-08-11
+    общий ключ занял алерт про `llm-down`, и всплывшая следом независимая
+    `match-stale` попала под чужой cooldown и не ушла вовсе. Своё окно у
+    каждого вида проблемы: новая пробивает тишину сразу, повтор той же молчит.
+
+    Если Redis недоступен — шлём всё. Лучше лишнее сообщение, чем тишина:
     именно тишина и стоила нам двух недель.
     """
     try:
@@ -282,10 +310,25 @@ def _alert_allowed() -> bool:
 
         url = os.environ.get("GZ_REDIS_URL", "redis://localhost:6379/0")
         client = redis.Redis.from_url(url, decode_responses=True)
-        return bool(client.set(_ALERT_KEY, "1", nx=True, ex=ALERT_COOLDOWN_S))
     except Exception as e:  # noqa: BLE001
         log.warning("health: дедуп через Redis недоступен (%s) — шлём алерт", e)
-        return True
+        return problems
+
+    fresh: list[str] = []
+    for p in problems:
+        # getattr — на случай обычной строки: без кода дедупить нечем, и
+        # умолчание «пропустить» безопаснее умолчания «замолчать».
+        code = getattr(p, "code", None)
+        if code is None:
+            fresh.append(p)
+            continue
+        try:
+            if client.set(f"{_ALERT_KEY}:{code}", "1", nx=True, ex=ALERT_COOLDOWN_S):
+                fresh.append(p)
+        except Exception as e:  # noqa: BLE001
+            log.warning("health: дедуп %s не сработал (%s) — шлём", code, e)
+            fresh.append(p)
+    return fresh
 
 
 def _admin_chat_ids(session: Session) -> list[str]:
@@ -314,18 +357,21 @@ def run_health_check(session: Session, *, notify: bool = True) -> list[str]:
         log.warning("health: GZ_TELEGRAM_BOT_TOKEN не задан — алерт некуда слать")
         return problems
 
-    if not _alert_allowed():
-        log.info("health: алерт подавлен (cooldown %dс)", ALERT_COOLDOWN_S)
-        return problems
-
+    # Получателей ищем ДО дедупа: иначе ключи cooldown встали бы на проблему,
+    # о которой никому не сообщили, и она замолчала бы на все 6 часов зря.
     chat_ids = _admin_chat_ids(session)
     if not chat_ids:
         log.warning("health: нет админов с telegram_chat_id — алерт некуда слать")
         return problems
 
+    fresh = _alertable(problems)
+    if not fresh:
+        log.info("health: алерт подавлен (cooldown %dс)", ALERT_COOLDOWN_S)
+        return problems
+
     from ..notify.telegram import send_message
 
-    text = "<b>goszakup: проблема</b>\n\n" + "\n".join(problems) + f"\n\n{PUBLIC_BASE_URL}/expenses"
+    text = "<b>goszakup: проблема</b>\n\n" + "\n".join(fresh) + f"\n\n{PUBLIC_BASE_URL}/expenses"
     for chat_id in chat_ids:
         ok, err = send_message(chat_id, text)
         if not ok:

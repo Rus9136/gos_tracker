@@ -442,6 +442,9 @@ def reanalyze(
     force: bool = typer.Option(
         False, "--force", help="игнорировать sha256+version (перегнать заведомо)"
     ),
+    include_past: bool = typer.Option(
+        False, "--include-past", help="брать и неактуальные лоты (по умолчанию нет)"
+    ),
     verbose: bool = typer.Option(False, "-v"),
 ) -> None:
     """Прогнать LLM-классификацию по скачанным лотам без обращения к goszakup."""
@@ -463,7 +466,13 @@ def reanalyze(
             )
         )
         if lot_id is not None:
+            # Точечный запуск бьёт по конкретному лоту — актуальность не гейтим.
             stmt = stmt.where(Lot.id == lot_id)
+        elif not include_past:
+            # Иначе кандидатами становится весь исторический watchlist (на
+            # 08.2026 — 9.5k лотов), и после бампа ANALYZER_VERSION прогон
+            # начинает перегонять за деньги давно закрытые лоты.
+            stmt = stmt.where(Lot.is_actual.is_(True))
         # Дофильтровка обязательна: SQL — надмножество, а `force` ниже
         # переписывает analyzer_version, и лот вне watchlist остался бы с
         # «__force__» навсегда (analyze_and_save его всё равно пропустит).
@@ -484,9 +493,14 @@ def reanalyze(
             if analyze_and_save(s, lot):
                 s.commit()
                 done += 1
+                # SessionLocal живёт с expire_on_commit=False, поэтому у лота
+                # без прежнего анализа relationship остаётся закешированным
+                # None — обращение к полям роняло весь прогон.
+                s.refresh(lot, ["analysis"])
+                a = lot.analysis
                 typer.echo(
-                    f"  ✓ lot {lot.id}: {lot.analysis.dev_category} "
-                    f"({lot.analysis.analysis_confidence})"
+                    f"  ✓ lot {lot.id}: {a.dev_category if a else '?'} "
+                    f"({a.analysis_confidence if a else '?'})"
                 )
             else:
                 skipped += 1
