@@ -1,5 +1,9 @@
-# Зависимости Windows submit-agent (ставить НА WINDOWS-узле, не в основной проект).
+# Зависимости submit-agent (ставить НА УЗЛЕ с Tumar, не в основной проект).
 # Намеренно минимум — агент самодостаточен, пакет goszakup не нужен.
 httpx>=0.27
 playwright>=1.40
-pywinauto>=0.6.8
+# Только для Windows-узла: автоматизация нативного окна цены. На macOS вместо
+# него — Accessibility API (pyobjc), см. README.
+pywinauto>=0.6.8; sys_platform == "win32"
+# Только для recon-стенда tumar_probe.py (прямые вызовы CryptoSocket).
+websocket-client>=1.7
