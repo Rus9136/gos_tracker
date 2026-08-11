@@ -62,6 +62,7 @@
         <th class="num" style="width:150px">Сумма побед ₸</th>
         <th class="num" style="width:90px" title="Статус «Второй победитель» в заявках">2-е место</th>
         <th class="num" style="width:80px" title="Всего заявок в lot_bids (есть только у объявлений, опрошенных после дедлайна)">Заявок</th>
+        <th class="num" style="width:110px" title="Среднее число участников на выигранных лотах: 1.0 — берёт там, где больше никто не подаётся">Ср. конкурентов</th>
         <th style="width:260px">Контакты</th>
         <th style="width:40px"></th>
       </tr>
@@ -78,6 +79,10 @@
         <td class="num mono">{{ r.won_total|n if r.won_total else '—' }}</td>
         <td class="num mono">{{ r.seconds or '—' }}</td>
         <td class="num mono">{{ r.bids or '—' }}</td>
+        <td class="num mono">
+          {%- if r.avg_rivals is none -%}<span class="dimer">—</span>
+          {%- else -%}<span class="{{ 'strong' if r.avg_rivals < 1.5 else '' }}">{{ "%.1f"|format(r.avg_rivals) }}</span>{%- endif -%}
+        </td>
         <td onclick="event.stopPropagation()">
           {% if r.phone or r.email or r.website %}
           <div style="font-size:12.5px; line-height:1.5">
@@ -92,7 +97,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="dim" style="text-align:center; padding:32px">Ничего не найдено — уточните фильтры</td></tr>
+      <tr><td colspan="9" class="dim" style="text-align:center; padding:32px">Ничего не найдено — уточните фильтры</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -101,7 +106,9 @@
     <span class="dim" style="font-size:12px">
       Победы — из карточек лотов и договоров; «2-е место» и «Заявок» — из
       синка заявок (есть только у объявлений, опрошенных после дедлайна, —
-      прочерк не значит «не участвовал»). Контакты — реестр участников OWS,
+      прочерк не значит «не участвовал»). «Ср. конкурентов» — среднее число
+      участников на выигранных лотах, считается только по тем победам, где
+      заявки уже опрошены. Контакты — реестр участников OWS,
       обновление: <span class="mono">cli supplier-contacts-sync</span>.
     </span>
   </div>

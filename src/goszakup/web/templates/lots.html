@@ -1,6 +1,6 @@
 {% extends "_layout.html" %}
 {% from "_macros/icons.html" import icon %}
-{% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge %}
+{% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge, rivals_tag %}
 {% block title %}{{ title }} — Goszakup Tracker{% endblock %}
 {% block content %}
 
@@ -200,6 +200,11 @@
         <th style="width:320px">Резюме ТЗ от LLM</th>
         <th style="width:160px">Категория</th>
         <th style="width:200px">Статус</th>
+        {# У актуальных лотов заявки ещё закрыты (sealed-bid) — колонка была бы
+           сплошным прочерком, поэтому только на прошедших/избранных. #}
+        {% if not is_actual_page %}
+        <th style="width:120px" title="Число заявок по лоту. Публикуется только после окончания приёма — прочерк значит «ещё не опрашивали»">Участников</th>
+        {% endif %}
         <th class="num" style="width:140px">Сумма ₸</th>
         <th style="width:130px">Регион</th>
         <th style="width:150px">До конца приёма</th>
@@ -249,6 +254,9 @@
         </td>
         <td @click="window.location='/lot/{{ lot.id }}'">{{ cat_tag(lot.category) }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'">{{ status_pill(lot.status_code, mini=True) }}</td>
+        {% if not is_actual_page %}
+        <td @click="window.location='/lot/{{ lot.id }}'">{{ rivals_tag(lot.bids_count) }}</td>
+        {% endif %}
         <td class="num strong mono" @click="window.location='/lot/{{ lot.id }}'" style="font-size:13.5px">{{ lot.plan_amount|n }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'" class="dim">{{ region_name(lot.kato) or '—' }}</td>
         <td @click="window.location='/lot/{{ lot.id }}'">
@@ -269,7 +277,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="12" class="dim" style="text-align:center; padding:32px">Ничего не найдено</td></tr>
+      <tr><td colspan="{{ 12 if is_actual_page else 13 }}" class="dim" style="text-align:center; padding:32px">Ничего не найдено</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -315,6 +323,11 @@
         <div class="num mono strong" style="font-size:18px">{{ lot.plan_amount|n }} ₸</div>
         <div class="dim mono" style="font-size:11px">{{ region_name(lot.kato) or '—' }} • {{ lot.first_seen|dt }}</div>
       </div>
+      {% if lot.bids_count is not none %}
+      <div class="flex items-center gap-1 mt-2" style="font-size:12px">
+        <span class="dim">Участников:</span> {{ rivals_tag(lot.bids_count) }}
+      </div>
+      {% endif %}
       {% set deadline = lot.announcement.application_end if lot.announcement else None %}
       {% if deadline %}
       <div class="flex items-center gap-1 mt-2" style="font-size:12px">

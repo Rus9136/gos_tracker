@@ -55,6 +55,21 @@
   {%- endif -%}
 {%- endmacro -%}
 
+{# Число участников по лоту (lot.bids_count). NULL и 0 — разные вещи:
+   заявки OWS отдаёт только после дедлайна и только по объявлениям, которые
+   опросил bids-sync, поэтому прочерк значит «не знаем», а не «никого». #}
+{%- macro rivals_tag(n, compact=False) -%}
+  {%- if n is none -%}
+    <span class="dimer" title="Заявки ещё не опрашивали — они публикуются только после окончания приёма">—</span>
+  {%- elif n == 0 -%}
+    <span class="badge warn" title="Опросили после дедлайна: заявок не подавали">{% if not compact %}никто не подался{% else %}0{% endif %}</span>
+  {%- elif n == 1 -%}
+    <span class="badge ok" title="Единственный участник — конкуренции не было">{% if not compact %}1 — без конкуренции{% else %}1{% endif %}</span>
+  {%- else -%}
+    <span class="mono {{ 'dim' if n > 5 else '' }}" title="Участников по лоту: {{ n }}">{{ n }}</span>
+  {%- endif -%}
+{%- endmacro -%}
+
 {# Inline-spark SVG. values — список чисел; w/h — размеры. #}
 {%- macro sparkline(values, w=80, h=24, color="var(--accent)") -%}
   {%- if not values or values|length < 2 -%}

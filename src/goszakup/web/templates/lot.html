@@ -1,6 +1,6 @@
 {% extends "_layout.html" %}
 {% from "_macros/icons.html" import icon %}
-{% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge %}
+{% from "_macros/pills.html" import status_pill, cat_tag, dev_tag, risk_badge, rivals_tag %}
 {% block title %}Лот #{{ lot.number or lot.id }} — Goszakup Tracker{% endblock %}
 {% block content %}
 
@@ -106,6 +106,7 @@
               {{ anno.application_end|dt if anno.application_end else '—' }}
             {% else %}<span class="dim">—</span>{% endif %}
           </dd>
+          <dt>Участников</dt><dd>{{ rivals_tag(lot.bids_count) }}</dd>
         </dl>
       </div>
     </div>

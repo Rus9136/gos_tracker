@@ -151,6 +151,25 @@ def apply_winner_from_bid(lot: Lot, row: LotBid) -> bool:
     return True
 
 
+def recount_bids(session: Session, anno_id: int) -> None:
+    """Число участников по каждому лоту опрошенного объявления.
+
+    Ноль проставляется явно — «опросили, никто не подался» это и есть лот с
+    нулевой конкуренцией, и отличить его от «не опрашивали» можно только
+    записью (NULL). Восстановить факт опроса из пустой lot_bids невозможно.
+    """
+    counts = dict(
+        session.execute(
+            select(LotBid.lot_id, func.count(LotBid.id))
+            .join(Lot, Lot.id == LotBid.lot_id)
+            .where(Lot.announcement_id == anno_id)
+            .group_by(LotBid.lot_id)
+        ).all()
+    )
+    for lot in session.scalars(select(Lot).where(Lot.announcement_id == anno_id)):
+        lot.bids_count = counts.get(lot.id, 0)
+
+
 def sync_announcement_bids(
     session: Session, client: OwsClient, anno_id: int, stats: BidsSyncStats
 ) -> None:
@@ -165,6 +184,7 @@ def sync_announcement_bids(
     if anno is not None:
         anno.bids_synced_at = datetime.now(UTC)
     if not apps:
+        recount_bids(session, anno_id)
         return
     lot_ids = {
         int(al["lotId"])
@@ -189,6 +209,7 @@ def sync_announcement_bids(
             row = session.get(LotBid, int(app_lot["id"]))
             if row is not None and apply_winner_from_bid(lot, row):
                 stats.winners_filled += 1
+    recount_bids(session, anno_id)
 
 
 def sync_bids(

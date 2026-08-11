@@ -9,7 +9,9 @@ jobs/supplier_contacts.py). К goszakup НЕ ходит — чистый SQL п�
 - сумма победы — договор, при его отсутствии плановая сумма лота;
 - вторые места и участия — `lot_bids` (только объявления, опрошенные
   bids-sync после дедлайна; у старых лотов заявок в БД нет — «0 участий»
-  значит «нет данных», а не «не участвовал»).
+  значит «нет данных», а не «не участвовал»);
+- средняя конкуренция на победах — `lots.bids_count` (там же и ограничение:
+  у неопрошенных лотов он NULL и в среднее не входит).
 """
 
 from __future__ import annotations
@@ -40,6 +42,11 @@ class SupplierRow:
     won_total: float = 0.0
     seconds: int = 0
     bids: int = 0
+    # Среднее число участников на лотах, которые поставщик ВЫИГРАЛ. Считается
+    # по победам, а не по заявкам: победы известны почти всегда, заявки — лишь
+    # по опрошенным после дедлайна объявлениям. NULL-лоты AVG отбрасывает сам,
+    # поэтому None здесь значит «ни по одной победе конкуренция не известна».
+    avg_rivals: float | None = None
     org_id: int | None = None
     email: str = ""
     phone: str = ""
@@ -77,6 +84,7 @@ def build_supplier_report(
             func.coalesce(
                 func.sum(func.coalesce(contract_sq, Lot.plan_amount)), 0
             ).label("total"),
+            func.avg(Lot.bids_count).label("avg_rivals"),
         )
         .where(Lot.winner_bin.is_not(None), Lot.winner_bin != "", *conds)
         .group_by(Lot.winner_bin)
@@ -104,9 +112,13 @@ def build_supplier_report(
         ).where(year_cond)
 
     rows: dict[str, SupplierRow] = {}
-    for bin_, name, wins, total in session.execute(wins_q):
+    for bin_, name, wins, total, avg_rivals in session.execute(wins_q):
         rows[bin_] = SupplierRow(
-            bin=bin_, name=name or "", wins=wins, won_total=float(total or 0)
+            bin=bin_,
+            name=name or "",
+            wins=wins,
+            won_total=float(total or 0),
+            avg_rivals=float(avg_rivals) if avg_rivals is not None else None,
         )
     for bin_, name, bids, seconds in session.execute(bids_q):
         row = rows.setdefault(bin_, SupplierRow(bin=bin_))
@@ -154,6 +166,7 @@ def render_csv(rows: list[SupplierRow]) -> str:
             "Сумма побед, тг",
             "Вторых мест",
             "Заявок",
+            "Ср. участников на победах",
             "Телефон",
             "Email",
             "Сайт",
@@ -169,6 +182,7 @@ def render_csv(rows: list[SupplierRow]) -> str:
                 round(r.won_total),
                 r.seconds,
                 r.bids,
+                round(r.avg_rivals, 1) if r.avg_rivals is not None else "",
                 r.phone,
                 r.email,
                 r.website,

@@ -137,7 +137,7 @@ def test_empty_response_still_marks_polled(session):
     """Пустой ответ — самый важный случай для отметки: без неё объявление
     вернулось бы в выборку следующим же прогоном и так по кругу."""
     anno_id = 900003
-    _make_lot(session, 700001, anno_id)
+    lot = _make_lot(session, 700001, anno_id)
     stats = BidsSyncStats()
 
     sync_announcement_bids(session, _fake_client([]), anno_id, stats)
@@ -145,6 +145,27 @@ def test_empty_response_still_marks_polled(session):
 
     assert stats.bids_seen == 0
     assert session.get(Announcement, anno_id).bids_synced_at is not None
+    # Ноль участников — это и есть «конкуренции не было», а не «не знаем».
+    assert lot.bids_count == 0
+
+
+def test_bids_count_counts_participants_and_zeroes_lots_without_bids(session):
+    apps = _bids_fixture()
+    anno_id = 900005
+    contested_id = apps[0]["AppLots"][0]["lotId"]
+    _make_lot(session, contested_id, anno_id)
+    # Второй лот того же объявления: заявок по нему нет — опросили и пусто.
+    quiet = _make_lot(session, 700002, anno_id)
+    assert quiet.bids_count is None  # до опроса — «нет данных»
+
+    sync_announcement_bids(session, _fake_client(apps), anno_id, BidsSyncStats())
+    session.commit()
+
+    expected = sum(
+        1 for a in apps for al in a["AppLots"] if al["lotId"] == contested_id
+    )
+    assert session.get(Lot, contested_id).bids_count == expected
+    assert quiet.bids_count == 0
 
 
 def test_selection_respects_grace_recheck_and_winner(session):

@@ -177,7 +177,9 @@ erDiagram
   организатор / поставщик; роль не колонка, а производная от связей —
   `orgs.py`), `announcements` (PK = anno_id с сайта),
   `lots` (PK = lot_id, центральная таблица; `category` — слаг вертикали,
-  NULL = «прочее», правило #24), `lot_status_history`,
+  NULL = «прочее», правило #24; `bids_count` — число участников,
+  NULL = «не опрашивали», 0 = «никто не подался», правило #22),
+  `lot_status_history`,
   `documents` (sha256 + simhash для дедупа шаблонных ТЗ), `contracts`
   (уникальность `(lot_id, contract_number)` — два писателя: HTML detail и
   API-синк), `lot_bids` (PK = `TrdAppLots.id` из API — пересинк

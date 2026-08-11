@@ -272,6 +272,13 @@ class Lot(Base):
     # Сумму победителя вкладка не публикует — фактическая сумма в contracts.
     winner_bin: Mapped[str | None] = mapped_column(String(20), index=True)
     winner_name: Mapped[str | None] = mapped_column(String(500))
+    # Число участников по лоту (строк в lot_bids). Денормализация: считать
+    # GROUP BY по многомиллионной lot_bids на каждый показ списка дорого.
+    # NULL и 0 — РАЗНЫЕ вещи: NULL значит «объявление ещё не опрашивали»
+    # (заявки видны только после дедлайна, правило #22), 0 — «опросили и
+    # заявок не было». Ноль и есть искомая нулевая конкуренция, поэтому
+    # смешивать его с «нет данных» нельзя. Ставит jobs/bids.recount_bids.
+    bids_count: Mapped[int | None] = mapped_column(Integer, index=True)
     is_actual: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     # Ручная пометка «интересный лот» из UI (звёздочка на карточке/в списке).
     # Не связана с автоматикой пайплайна — выставляется только пользователем.
