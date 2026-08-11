@@ -141,9 +141,15 @@
         </td>
         <td class="dim mono" style="font-size:12px">{{ u.last_login_at|dt if u.last_login_at else '—' }}</td>
         <td>
-          <details>
+          <details class="row-edit">
             <summary class="btn sm" style="cursor:pointer">Изменить</summary>
-            <div class="card" style="position:absolute; z-index:30; margin-top:6px; width:520px; box-shadow:0 12px 40px rgba(0,0,0,.4)">
+            <div class="row-edit-backdrop" onclick="this.closest('details').removeAttribute('open')"></div>
+            <div class="card row-edit-panel">
+              <div class="row-edit-head">
+                <span>Пользователь {{ u.username }}</span>
+                <button type="button" class="btn sm"
+                        onclick="this.closest('details').removeAttribute('open')">{{ icon("x", 13) }}</button>
+              </div>
               <form method="post" action="/users/{{ u.id }}/edit">
                 <div class="card-body" style="display:grid; grid-template-columns: 1fr 1fr; gap:12px">
                   <div class="field">
@@ -162,7 +168,7 @@
                   </div>
                   {{ role_field(u) }}
                   {{ scope_fields(u) }}
-                  <div style="grid-column: 1 / -1">
+                  <div class="row-edit-foot" style="grid-column: 1 / -1">
                     <button type="submit" class="btn primary">{{ icon("check", 13) }} Сохранить</button>
                   </div>
                 </div>
