@@ -272,7 +272,9 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
    из уже посчитанного `Document.sha256` (не дублируем алгоритм). При правках
    промпта или схемы `AnalysisResult` менять `ANALYZER_VERSION` в `classify/llm.py`
    — следующий прогон автоматически перегонит старые записи. Текущая версия —
-   `llm-v3-gpt-oss-120b-ru` (русский `tz_summary` обязателен в промпте, схеме
+   `llm-v4-gpt-oss-120b-brief` (`tz_summary` — бриф для участника в 4-7
+   предложений: объём, ключевые требования, сроки/оплата, подводные камни;
+   русский обязателен в промпте, схеме
    Pydantic и tool-schema; не откатывайте без бампа версии).
 
 9. **На goszakup LLM ходит ТОЛЬКО по явному действию пользователя.**
@@ -777,7 +779,9 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
   (очередь `goszakup_daily`, шлётся из `daily_actor`).
 - `classify/llm.py` — LLM-классификатор ТЗ + чат по ТЗ. Pydantic-схема +
   Cerebras tool calling (OpenAI-формат, `strict: True`); модель — `gpt-oss-120b`
-  по умолчанию; `reasoning_effort="low"` (задача структурная); ANALYZER_VERSION
+  по умолчанию; `reasoning_effort="low"` в анализе (задача структурная) и
+  `"medium"` в чате (вопрос по 10-30 страницам ТЗ); `MAX_TZ_CHARS`=60K с
+  маркером обрезки в конце текста; ANALYZER_VERSION
   для идемпотентности; `pick_tz_document` (предпочитает «техническую
   спецификацию» над «конкурсной документацией»; PDF > DOCX); `extract_text(path)`
   диспатчит PDF (pdfplumber) / DOCX (python-docx). Без OCR.
