@@ -1738,11 +1738,16 @@ def query_delete(
 @app.get("/matched", response_class=HTMLResponse)
 def matched_page(
     request: Request,
-    query_id: int | None = None,
+    query_id: str = "",
+    method: str = "",
     db: Session = Depends(get_db),
     user: User = Depends(require_page("matched")),
 ):
     """Подходящие лоты — чистый SQL по кешу UserLotMatch, без LLM."""
+    # GET-форма шлёт `query_id=` пустым при «Все запросы» — типизированный
+    # `int | None` на это отвечал бы 422.
+    query_id = _maybe_int(query_id)
+    method = method.strip()
     # Выключенные запросы (active=False) в подбор не попадают: ни в фильтр,
     # ни в выборку матчей.
     queries = db.scalars(
@@ -1753,6 +1758,7 @@ def matched_page(
     query_ids = [q.id for q in queries]
 
     rows = []
+    methods: list[str] = []
     if query_ids:
         match_filter = [
             UserLotMatch.user_query_id.in_(query_ids),
@@ -1761,6 +1767,21 @@ def matched_page(
         ]
         if query_id is not None:
             match_filter.append(UserLotMatch.user_query_id == query_id)
+
+        # Варианты способа закупки — только те, что реально есть среди матчей
+        # этого пользователя (а не по всему рынку): список короткий и
+        # выборка идёт по тем же индексам, что и сама страница.
+        methods = list(
+            db.scalars(
+                select(Lot.method)
+                .join(UserLotMatch, UserLotMatch.lot_id == Lot.id)
+                .where(*match_filter, Lot.method.is_not(None), Lot.method != "")
+                .distinct()
+                .order_by(Lot.method)
+            ).all()
+        )
+        if method:
+            match_filter.append(Lot.method == method)
 
         # Список — про лоты, а не про пары: лот под несколькими запросами
         # показываем один раз с лучшим баллом. Раньше тянули ВСЕ матчи с
@@ -1800,6 +1821,8 @@ def matched_page(
             "queries": queries,
             "rows": rows,
             "active_query_id": query_id,
+            "methods": methods,
+            "active_method": method,
         },
     )
 

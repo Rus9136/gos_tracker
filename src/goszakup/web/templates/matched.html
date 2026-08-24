@@ -12,16 +12,28 @@
 </div>
 
 {% if queries %}
-<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+<form method="get" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
   <label class="dim" style="font-size:13px">Запрос:</label>
-  <select class="input" style="max-width:320px"
-          onchange="location = this.value ? '/matched?query_id=' + this.value : '/matched'">
+  <select class="input" name="query_id" style="max-width:320px" onchange="this.form.submit()">
     <option value="" {{ 'selected' if active_query_id is none else '' }}>Все запросы</option>
     {% for q in queries %}
     <option value="{{ q.id }}" {{ 'selected' if active_query_id == q.id else '' }}>{{ q.name }}</option>
     {% endfor %}
   </select>
-</div>
+  <label class="dim" style="font-size:13px;margin-left:8px">Способ закупки:</label>
+  <select class="input" name="method" style="max-width:320px" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not active_method else '' }}>Все способы</option>
+    {% for m in methods %}
+    <option value="{{ m }}" {{ 'selected' if active_method == m else '' }}>{{ m }}</option>
+    {% endfor %}
+    {% if active_method and active_method not in methods %}
+    <option value="{{ active_method }}" selected>{{ active_method }}</option>
+    {% endif %}
+  </select>
+  {% if active_query_id is not none or active_method %}
+  <a href="/matched" class="dim" style="font-size:13px">Сбросить</a>
+  {% endif %}
+</form>
 {% endif %}
 
 <div class="card">
@@ -32,6 +44,7 @@
         <th style="width:64px">Балл</th>
         <th>Лот</th>
         <th style="width:200px">Заказчик</th>
+        <th style="width:150px">Способ</th>
         <th class="num" style="width:130px">Сумма ₸</th>
         <th style="width:130px">До конца приёма</th>
         <th>Почему подходит</th>
@@ -45,10 +58,11 @@
           <span class="badge {{ 'ok' if m.score >= 75 else 'muted' }}">{{ m.score }}</span>
         </td>
         <td>
-          <a href="/lot/{{ lot.id }}" class="strong">{{ lot.name or '—' }}</a>
+          <a href="/lot/{{ lot.id }}" class="strong" target="_blank" rel="noopener">{{ lot.name or '—' }}</a>
           <div class="dim mono" style="font-size:12px">{{ lot.enstru or '' }}</div>
         </td>
         <td class="dim" style="font-size:13px">{{ lot.customer.name if lot.customer else '—' }}</td>
+        <td class="dim" style="font-size:13px">{{ lot.method or '—' }}</td>
         <td class="num mono">{{ lot.plan_amount|n }}</td>
         <td>
           {% set deadline = lot.announcement.application_end if lot.announcement else None %}
@@ -63,7 +77,7 @@
         <td class="dim" style="font-size:12px">{{ q.name }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">
+      <tr><td colspan="8" class="dim" style="text-align:center;padding:24px">
         Подходящих лотов пока нет. Создайте запрос на вкладке
         <a href="/queries">«Мои запросы»</a> — матчинг идёт в фоне.
       </td></tr>

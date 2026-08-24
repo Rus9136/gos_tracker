@@ -446,13 +446,22 @@
 
     {# Chat #}
     {% if has_downloaded_doc %}
+    <div class="chat-backdrop" id="chat-backdrop" hidden></div>
     <div class="card" id="chat-root" data-lot-id="{{ lot.id }}">
       <div class="card-head">
         <div>
-          <div class="card-title flex items-center gap-2">{{ icon("sparkle", 13) }} Чат по ТЗ</div>
+          <div class="card-title flex items-center gap-2">{{ icon("sparkle", 13) }} Чат по ТЗ
+            <span class="chat-lot-name dim" style="font-weight:400">— {{ lot.name }}</span>
+          </div>
           <div class="card-sub">В контекст уходит ТЗ + поля объявления. История — в браузере.</div>
         </div>
-        <button class="btn sm ghost" type="button" id="chat-clear">Очистить</button>
+        <div class="flex items-center gap-1">
+          <button class="btn sm ghost" type="button" id="chat-clear">Очистить</button>
+          <button class="btn sm ghost" type="button" id="chat-expand" title="Развернуть чат (Esc — свернуть)">
+            <span class="chat-ico-expand">{{ icon("expand", 13) }}</span>
+            <span class="chat-ico-collapse">{{ icon("collapse", 13) }}</span>
+          </button>
+        </div>
       </div>
       <div class="card-body">
         <div class="chat chat-log" id="chat-list"></div>

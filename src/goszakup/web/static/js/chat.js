@@ -17,6 +17,11 @@
   const inputEl = document.getElementById("chat-input");
   const sendBtn = document.getElementById("chat-send");
   const clearBtn = document.getElementById("chat-clear");
+  const expandBtn = document.getElementById("chat-expand");
+  const backdrop = document.getElementById("chat-backdrop");
+  // Режим «развёрнут» общий для всех лотов: раз выбрал большое окно —
+  // на следующем лоте оно откроется сразу.
+  const EXPAND_KEY = "gz.chat.expanded";
 
   let messages = [];
   let pending = false;
@@ -99,6 +104,33 @@
       messages = []; save(); render();
     }
   });
+
+  // Место карточки в боковой колонке: .lot-side — position:sticky, а sticky
+  // создаёт stacking context, и z-index развёрнутой карточки действовал бы
+  // только внутри колонки — сайдбар (z-index 20) и топбар ложились сверху.
+  // Поэтому на время раскрытия карточку с затемнением уносим в <body>.
+  const anchor = document.createComment("chat-root");
+  root.before(anchor);
+
+  function setExpanded(on) {
+    if (on) {
+      document.body.append(backdrop, root);
+    } else {
+      anchor.after(backdrop, root);
+    }
+    root.classList.toggle("chat-expanded", on);
+    backdrop.hidden = !on;
+    document.body.style.overflow = on ? "hidden" : "";
+    try { localStorage.setItem(EXPAND_KEY, on ? "1" : "0"); } catch {}
+    listEl.scrollTop = listEl.scrollHeight;
+    if (on) inputEl.focus({ preventScroll: true });
+  }
+  expandBtn.addEventListener("click", () => setExpanded(!root.classList.contains("chat-expanded")));
+  backdrop.addEventListener("click", () => setExpanded(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && root.classList.contains("chat-expanded")) setExpanded(false);
+  });
+  try { if (localStorage.getItem(EXPAND_KEY) === "1") setExpanded(true); } catch {}
 
   // Quick-prompt чипы: data-quick="текст" подставляется в textarea.
   root.querySelectorAll("[data-quick]").forEach((el) => {

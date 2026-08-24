@@ -241,3 +241,66 @@ def test_matched_page_limits_to_page_size(client, db_session):
     assert len(shown) == PAGE_SIZE
     assert f"MATCHLOT{total:03d}" in body          # самый высокий балл показан
     assert "MATCHLOT001" not in body               # самый низкий отсечён LIMIT'ом
+
+
+def test_matched_page_filters_by_method(client, db_session):
+    db_session.add_all([Announcement(id=301, url="u/301"), Announcement(id=302, url="u/302")])
+    lot_a = Lot(id=21, url="u/301", announcement_id=301, name="Лот-конкурс",
+                plan_amount=2_000_000, is_actual=True, method="Открытый конкурс")
+    lot_b = Lot(id=22, url="u/302", announcement_id=302, name="Лот-ЗЦП",
+                plan_amount=1_000_000, is_actual=True,
+                method="Запрос ценовых предложений")
+    db_session.add_all([lot_a, lot_b])
+    q = UserQuery(user_id=0, name="Запрос", text="разработка")
+    db_session.add(q)
+    db_session.flush()
+    db_session.add_all([
+        UserLotMatch(user_query_id=q.id, lot_id=lot_a.id, matched=True, score=80,
+                     reason="конкурс", matcher_version="m", query_version=1),
+        UserLotMatch(user_query_id=q.id, lot_id=lot_b.id, matched=True, score=75,
+                     reason="зцп", matcher_version="m", query_version=1),
+    ])
+    db_session.commit()
+
+    r = client.get("/matched")
+    assert r.status_code == 200
+    assert "Лот-конкурс" in r.text and "Лот-ЗЦП" in r.text
+    # Оба способа попали в список вариантов фильтра.
+    assert '<option value="Открытый конкурс"' in r.text
+    assert '<option value="Запрос ценовых предложений"' in r.text
+
+    r = client.get("/matched", params={"method": "Открытый конкурс"})
+    assert r.status_code == 200
+    assert "Лот-конкурс" in r.text
+    assert "Лот-ЗЦП" not in r.text
+    # Список вариантов не сужается под активный фильтр — можно переключиться.
+    assert '<option value="Запрос ценовых предложений"' in r.text
+
+    # Способ, которого нет среди матчей — пусто, но не 500.
+    r = client.get("/matched", params={"method": "Аукцион"})
+    assert r.status_code == 200
+    assert "Лот-конкурс" not in r.text
+
+
+def test_matched_page_tolerates_empty_query_id(client, db_session):
+    # GET-форма фильтров шлёт `query_id=` пустым при «Все запросы».
+    r = client.get("/matched", params={"query_id": "", "method": ""})
+    assert r.status_code == 200
+    r = client.get("/matched", params={"query_id": "abc"})
+    assert r.status_code == 200
+
+
+def test_lot_page_renders_chat_with_expand_button(client, db_session):
+    from goszakup.db.models import Document
+    db_session.add(Announcement(id=401, url="u/401"))
+    db_session.add(Lot(id=31, url="u/401", announcement_id=401, name="Лот с ТЗ",
+                       plan_amount=1_000_000, is_actual=True))
+    db_session.add(Document(announcement_id=401, name="Техническая спецификация",
+                            url="u/doc", local_path="data/docs/401/tz.pdf"))
+    db_session.commit()
+
+    r = client.get("/lot/31")
+    assert r.status_code == 200
+    assert 'id="chat-root"' in r.text
+    assert 'id="chat-expand"' in r.text
+    assert 'id="chat-backdrop"' in r.text
