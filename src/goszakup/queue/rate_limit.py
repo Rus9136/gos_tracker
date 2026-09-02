@@ -44,14 +44,17 @@ class RedisSlotLimiter:
         self.delay = delay
         self.key = key
 
-    def acquire(self, hold_ttl: int | None = None) -> None:
+    def acquire(self, hold_ttl: float | None = None) -> None:
         # Цикл: пытаемся занять слот; если занят — спим оставшийся TTL.
         # PTTL даёт миллисекунды, точнее чем TTL. На случай гонки берём
         # max(0.05, ...) — иначе можем закрутиться в spin при ttl=0.
+        # TTL ставим в МИЛЛИСЕКУНДАХ: с `ex=int(delay)` любой sub-second delay
+        # округлялся до 1с, и GZ_API_DELAY<1 молча не действовал.
         if hold_ttl is None:
-            hold_ttl = max(1, int(self.delay))
+            hold_ttl = self.delay
+        hold_ms = max(50, int(hold_ttl * 1000))
         while True:
-            if self.redis.set(self.key, "1", nx=True, ex=hold_ttl):
+            if self.redis.set(self.key, "1", nx=True, px=hold_ms):
                 return
             ttl_ms = self.redis.pttl(self.key)
             sleep_s = max(0.05, (ttl_ms or 100) / 1000)
@@ -62,7 +65,7 @@ class RedisSlotLimiter:
         # длинный hold-TTL). Best-effort: если Redis отвалился — пайплайн и так
         # падает, отдельно не обрабатываем.
         try:
-            self.redis.set(self.key, "1", ex=max(1, int(self.delay)))
+            self.redis.set(self.key, "1", px=max(50, int(self.delay * 1000)))
         except Exception:  # noqa: BLE001
             pass
 

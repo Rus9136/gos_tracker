@@ -147,7 +147,10 @@ USER_AGENT = (
 )
 HTTP_HEADERS = {"User-Agent": USER_AGENT, "Accept-Language": "ru,en;q=0.8"}
 
-BASE_URL = "https://goszakup.gov.kz"
+# 2026-09: портал переехал на zakup.gov.kz, старый хост отдаёт 403 на все
+# пути. Прежний интерфейс (и все скрейперные пути ниже) живёт на old.*,
+# он же отвечает с зарубежного IP напрямую, без KZ-туннеля.
+BASE_URL = "https://old.goszakup.gov.kz"
 SEARCH_URL = f"{BASE_URL}/ru/search/lots"
 ANNOUNCE_URL = f"{BASE_URL}/ru/announce/index"
 # Карточка ценового предложения лота: единственная страница с цифровым «Код ТРУ».
