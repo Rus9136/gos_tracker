@@ -159,6 +159,13 @@ class Organization(Base):
     phone: Mapped[str | None] = mapped_column(String(100))
     email: Mapped[str | None] = mapped_column(String(200))
     website: Mapped[str | None] = mapped_column(String(300))
+    # Отрасль — слаг из industries.INDUSTRIES (пока только по ключевым словам
+    # названия), NULL = не определена. Ставится один раз, см. industries.py.
+    industry: Mapped[str | None] = mapped_column(String(20), index=True)
+    # Код ОКЭД из реестра участников OWS (`Subjects.okedList`, 5 цифр) и
+    # отметка опроса реестра — ставится и при пустом ответе (jobs/industry_sync).
+    oked: Mapped[str | None] = mapped_column(String(10))
+    oked_synced_at: Mapped[datetime | None] = mapped_column(TS_TYPE, index=True)
     # Когда контакты последний раз тянули из OWS Subjects (jobs/contacts.py).
     # Ставится и при пустом ответе — реестр покрывает не всех (особенно ИП),
     # без отметки такие организации вечно занимали бы верх выборки синка.

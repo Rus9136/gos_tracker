@@ -115,7 +115,9 @@ API. При добавлении актора, таблицы или фичи о
   в `.env` и `sudo systemctl restart goszakup-web.service`.
 - **`.env`**: лежит в корне, `chmod 600`. Содержит `CEREBRAS_API_KEY`,
   `GZ_USER`, `GZ_PASSWORD` (сид первого админа), **`GZ_SECRET_KEY`** (подпись
-  cookie-сессии), **`GZ_DATABASE_URL`** (postgresql+psycopg://...).
+  cookie-сессии), **`GZ_DATABASE_URL`** (postgresql+psycopg://...),
+  `GZ_PROXY_URL` (KZ-туннель) и **`GZ_OWS_USE_PROXY=1`** (с 2026-08-28 API
+  OWS тоже идёт через туннель — см. правило #21, DNS-инцидент FortiGuard).
   `GZ_NO_AUTH` **НЕ** выставлен — логин по форме обязателен. Не пушить.
 - **Сервисы systemd** (юзер `rus`, не `goszakup`/`www-data`):
   - `goszakup-web.service` — uvicorn на `127.0.0.1:8765`,
@@ -524,8 +526,26 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
     `download_document` из scraper/* напрямую в пайплайне — только через
     source. Ключевые факты (recon в `tests/fixtures/api/NOTES.md`): rate-limit
     API свой (`GZ_API_DELAY`=1с, Redis-ключ `goszakup:api_rate_limit`) и
-    НЕЗАВИСИМ от Crawl-delay HTML; OWS доступен без KZ-туннеля (API-клиент
-    ходит напрямую, `GZ_OWS_USE_PROXY=1` — закладка); даты API — алматинское
+    НЕЗАВИСИМ от Crawl-delay HTML; **`GZ_OWS_USE_PROXY=1` включён на проде
+    с 2026-08-28** — API-клиент ходит через тот же KZ-туннель, что и HTML.
+    Раньше OWS работал напрямую, но 27.08 `ows/v3bl/goszakup.gov.kz` с
+    зарубежных резолверов стали резолвиться в `208.91.112.55` — IP страницы
+    блокировки FortiGuard SDNS с self-signed сертификатом
+    `O=Fortinet, CN=Fortiguard SDNS Blocked Page`, отчего клиент падал с
+    `CERTIFICATE_VERIFY_FAILED` (симптом выглядит как поломка TLS, а причина
+    в DNS). Настоящий IP у KZ-NS `cnr1.online.kz` — 149.170.62.13, и по нему
+    TLS валиден, то есть геоблока по IP на OWS нет. **Одного прокси НЕ
+    хватило:** сбой интермиттентный (окно в несколько минут раз в несколько
+    часов), и KZ-резолвер тоже иногда отдаёт заглушку — 28.08 после
+    включения прокси контур продержался 7 часов и упал снова, уже как
+    `SOCKSHTTPSConnectionPool`. Поэтому DNS исключён из контура целиком:
+    **пин `149.170.62.13` в `/etc/hosts` на ОБОИХ узлах** — на прод-сервере
+    и на KZ-VPS туннеля (при `socks5h` имя резолвит прокси, поэтому пин
+    только на нашей стороне бесполезен). Один адрес на все хосты зоны
+    (`ows`/`goszakup`/`www`/`v3bl`), сверено по обоим NS `cnr1`/`cnr2.online.kz`.
+    Плата за пин — смена IP у goszakup положит доступ молча; ловится тем же
+    health-check («OWS не отвечает»), сверять командой
+    `dig +short @cnr1.online.kz ows.goszakup.gov.kz A`; даты API — алматинское
     время UTC+5; невалидный/истёкший токен = **404 «Invalid Route»**, не 401
     (ловится `OwsAuthError`); серверные фильтры — статусы/`amount:[от]`/
     customerBin, регион фильтруется клиентски по префиксу КАТО (2 цифры);
@@ -909,6 +929,25 @@ PGPASSWORD=$(grep '^GZ_DATABASE_URL=' .env | sed -E 's|.*//goszakup:([^@]+)@.*|\
 - `notify/telegram.py` — defensive-обёртка над Bot API `sendMessage`
   (`send_message(chat_id, text) -> (ok, error)`); `notify/render.py` —
   сборка HTML-текста уведомления по лоту/матчу (с экранированием).
+- `industries.py` — отрасль организации (`Organization.industry`, фильтр
+  «Отрасль» на `/organizations`): реестр `INDUSTRIES` (15 отраслей по
+  разделам ОКЭД: med/edu/gov/social/culture/science/utilities/transport/
+  construction/agro/mining/manufacturing/trade/it/finance),
+  `classify_industry(name, oked)` — ключевые слова названия ПЕРВИЧНЫ (только
+  у `med`, с исключениями: санаторные ясли-сады, медколледжи/медуниверситеты,
+  фитосанитария, ветеринария — не медучреждения), ОКЭД по первым двум
+  цифрам вторичен: у районной больницы в реестре может стоять 47731
+  «аптечная розница». `backfill_industries` (CLI `industry-backfill`,
+  `--force` — пересчитать все). Слаг ставится один раз в
+  `_get_or_create_org` и не перезаписывается — как вертикаль лота.
+- `jobs/industry_sync.py` — ОКЭД из реестра участников OWS (`Subjects.
+  okedList`, у больниц 86101, школ 85310, акиматов 84111) в
+  `Organization.oked` (CLI `industry-sync --limit N`). Серверного фильтра
+  по ОКЭД нет — один запрос на БИН при ~1 rps, поэтому ad-hoc и с потолком;
+  безбиновые заказчики из листинга (четверть) реестром не покрываются.
+  Отметка `oked_synced_at` ставится и при пустом ответе (паттерн правила
+  #22); контакты из того же ответа применяются и `contacts_synced_at`
+  ставится тоже — `supplier-contacts-sync` их не дёргает повторно.
 - `orgs.py` — роль организации как производная от связей, а не колонка:
   `customer_condition` / `organizer_condition` / `buyer_condition` /
   `supplier_condition` / `role_condition(role)`. `organizations` — одна

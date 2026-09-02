@@ -113,6 +113,7 @@ from ..jobs.supplier_report import (
     render_csv as render_suppliers_csv,
 )
 from ..observability import setup_sentry
+from ..industries import INDUSTRIES
 from ..orgs import buyer_condition, role_condition, supplier_condition
 from ..prefilter import PrefilterError, lot_passes_prefilter, normalize_prefilter
 from ..scope import lot_in_scope, plan_scope_conditions, scope_conditions
@@ -158,6 +159,7 @@ templates.env.filters["vertical"] = lambda s: VERTICAL_LABELS.get(
     s, "Прочее" if s == "other" else (s or "—")
 )
 templates.env.globals["VERTICAL_HUES"] = VERTICAL_HUES
+templates.env.globals["INDUSTRIES"] = INDUSTRIES
 # Статусы «пункт в плане, объявления ещё нет» — витрина /plans и врезки в
 # отчётах рисуют их иначе, чем уже объявленные.
 templates.env.globals["PLANNED_STATUSES"] = PLANNED_STATUSES
@@ -1111,17 +1113,20 @@ def organizations_list(
     q: str = "",
     sort: str = "-total",
     role: str = "",
+    industry: str = "",
     page: int = 1,
 ):
     # Страница про закупающих: колонки «Лотов / Актуальных / Сумма» считаются
     # по роли заказчика, поэтому поставщик дал бы строку из нулей. Роль —
     # производная от данных, см. orgs.py.
     role_cond = role_condition(role)
+    industry = industry if industry in INDUSTRIES else ""
     base = (
         select(
             Organization.id,
             Organization.bin,
             Organization.name,
+            Organization.industry,
             func.count(Lot.id).label("lots_cnt"),
             func.coalesce(func.sum(Lot.plan_amount), 0).label("total"),
             # `case` — стандартный SQL и работает в SQLite и Postgres.
@@ -1135,6 +1140,8 @@ def organizations_list(
     if q:
         like = f"%{q}%"
         base = base.where(or_(Organization.name.ilike(like), Organization.bin.ilike(like)))
+    if industry:
+        base = base.where(Organization.industry == industry)
 
     cols = {
         "name": Organization.name,
@@ -1150,6 +1157,8 @@ def organizations_list(
         count_stmt = count_stmt.where(
             or_(Organization.name.ilike(f"%{q}%"), Organization.bin.ilike(f"%{q}%"))
         )
+    if industry:
+        count_stmt = count_stmt.where(Organization.industry == industry)
     total = db.scalar(count_stmt)
     pages = max(1, ((total or 0) + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(1, min(page, pages))
@@ -1180,6 +1189,8 @@ def organizations_list(
             "q": q,
             "sort": sort,
             "role": role,
+            "industry": industry,
+            "industries": INDUSTRIES,
             "page": page,
             "pages": pages,
             "total": total,

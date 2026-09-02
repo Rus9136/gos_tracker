@@ -331,6 +331,51 @@ def plans_sync_cmd(
     )
 
 
+@app.command("industry-backfill")
+def industry_backfill_cmd(
+    force: bool = typer.Option(
+        False, "--force", help="Пересчитать и уже проставленные отрасли."
+    ),
+) -> None:
+    """Отрасль организаций (фильтр «Отрасль» на /organizations) по названию.
+
+    Чистая работа по БД, к goszakup не ходит. Без --force трогает только
+    строки с пустой отраслью.
+    """
+    _setup_logging(verbose=True)
+    from .industries import backfill_industries
+
+    init_db()
+    with SessionLocal() as s:
+        n = backfill_industries(s, force=force)
+    typer.echo(f"industry set for {n} organizations")
+
+
+@app.command("industry-sync")
+def industry_sync_cmd(
+    limit: int = typer.Option(
+        500, "--limit", help="Сколько организаций опросить за прогон."
+    ),
+) -> None:
+    """ОКЭД закупающих организаций из реестра участников OWS → отрасль.
+
+    Ad-hoc: до 2 запросов на организацию при ~1 rps, серверного фильтра
+    по ОКЭД нет. Опрошенные (в т.ч. не найденные) второй раз не дёргаются.
+    """
+    _setup_logging(verbose=True)
+    from .api.client import OwsClient
+    from .jobs.industry_sync import sync_industries
+
+    init_db()
+    with SessionLocal() as s:
+        stats = sync_industries(s, OwsClient(), limit=limit)
+    typer.echo(
+        f"processed={stats.processed} found={stats.found} "
+        f"not_found={stats.not_found} classified={stats.classified} "
+        f"errors={stats.errors}"
+    )
+
+
 @app.command("supplier-contacts-sync")
 def supplier_contacts_sync_cmd(
     limit: int = typer.Option(

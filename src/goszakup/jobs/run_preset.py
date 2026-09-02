@@ -24,6 +24,7 @@ from ..db.models import (
     Preset,
     ScrapeRun,
 )
+from ..industries import classify_industry
 from ..jobs.plans import plan_root_from_number
 from ..scraper.announce import AnnouncementDetail
 from ..scraper.modal_files import is_tz_like_name
@@ -59,7 +60,11 @@ def _get_or_create_org(
         # иначе на /organizations копились бы дубли заказчиков (P1, Гейт 2).
         try:
             with session.begin_nested():
-                org = Organization(bin=bin_, name=name or bin_ or "")
+                org = Organization(
+                    bin=bin_,
+                    name=name or bin_ or "",
+                    industry=classify_industry(name),
+                )
                 session.add(org)
                 session.flush()
         except IntegrityError:
@@ -70,6 +75,7 @@ def _get_or_create_org(
         org.bin = bin_
     if name and not org.name:
         org.name = name
+        org.industry = org.industry or classify_industry(name)
     return org
 
 

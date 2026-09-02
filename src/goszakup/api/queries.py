@@ -129,6 +129,7 @@ query($f: SubjectFiltersInput) {
     email
     phone
     website
+    okedList
     Address { addressType address phone }
   }
 }

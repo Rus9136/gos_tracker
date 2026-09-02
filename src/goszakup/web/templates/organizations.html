@@ -24,7 +24,7 @@
 </div>
 
 <form method="get" class="card mb-3">
-  <div class="card-body" style="display:grid; grid-template-columns: 2fr 1fr 1fr auto; gap:10px; align-items:end; padding:14px">
+  <div class="card-body" style="display:grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap:10px; align-items:end; padding:14px">
     <div class="field">
       <label>Поиск (название / БИН)</label>
       <div style="position:relative">
@@ -40,6 +40,15 @@
         <option value=""          {% if not role %}selected{% endif %}>Все закупающие</option>
         <option value="customer"  {% if role == 'customer'  %}selected{% endif %}>Заказчики</option>
         <option value="organizer" {% if role == 'organizer' %}selected{% endif %}>Организаторы</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Отрасль</label>
+      <select class="select" name="industry">
+        <option value="" {% if not industry %}selected{% endif %}>Все отрасли</option>
+        {% for ind in industries.values() %}
+        <option value="{{ ind.slug }}" {% if industry == ind.slug %}selected{% endif %}>{{ ind.label }}</option>
+        {% endfor %}
       </select>
     </div>
     <div class="field">
@@ -82,10 +91,15 @@
             <div class="avatar" style="background: oklch(0.30 0.06 {{ hue }}); color: var(--fg-0)">{{ (row.name or 'Z')[:1] }}</div>
             <div style="min-width:0">
               <div class="strong clamp-2" style="font-size:13.5px; max-width:560px">{{ row.name }}</div>
-              {% if row.actual_cnt and row.actual_cnt > 0 %}
-              <div class="flex items-center gap-1 mt-1">
+              {% if row.actual_cnt and row.actual_cnt > 0 or row.industry %}
+              <div class="flex items-center gap-2 mt-1">
+                {% if row.industry and row.industry in industries %}
+                <a class="badge" href="?industry={{ row.industry }}&role={{ role }}&sort={{ sort }}" onclick="event.stopPropagation()" title="Все организации отрасли">{{ industries[row.industry].label }}</a>
+                {% endif %}
+                {% if row.actual_cnt and row.actual_cnt > 0 %}
                 <span class="pulse"></span>
                 <span class="dim" style="font-size:11.5px">{{ row.actual_cnt }} актуальных лот{{ 'ов' if row.actual_cnt != 1 else '' }}</span>
+                {% endif %}
               </div>
               {% endif %}
             </div>
@@ -124,9 +138,9 @@
     <span>Показано <span class="strong">{{ rows|length }}</span> из {{ total|n }} организаций</span>
     {% if pages > 1 %}
     <div class="flex items-center gap-2">
-      {% if page > 1 %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&role={{ role }}&page={{ page - 1 }}">{{ icon("chevronLeft", 12) }} Назад</a>{% endif %}
+      {% if page > 1 %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&role={{ role }}&industry={{ industry }}&page={{ page - 1 }}">{{ icon("chevronLeft", 12) }} Назад</a>{% endif %}
       <span class="mono">{{ page }} / {{ pages }}</span>
-      {% if page < pages %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&role={{ role }}&page={{ page + 1 }}">Вперёд {{ icon("chevronRight", 12) }}</a>{% endif %}
+      {% if page < pages %}<a class="btn sm" href="?q={{ q }}&sort={{ sort }}&role={{ role }}&industry={{ industry }}&page={{ page + 1 }}">Вперёд {{ icon("chevronRight", 12) }}</a>{% endif %}
     </div>
     {% endif %}
   </div>

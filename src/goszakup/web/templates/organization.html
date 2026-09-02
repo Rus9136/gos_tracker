@@ -15,6 +15,7 @@
     <h1 class="page-title">{{ org.name }}</h1>
     <div class="page-sub">
       {% if org.bin %}БИН: <span class="mono strong" style="color: var(--accent-hi)">{{ org.bin }}</span> • {% endif %}
+      {% if org.industry and org.industry in INDUSTRIES %}<a href="/organizations?industry={{ org.industry }}">{{ INDUSTRIES[org.industry].label }}</a> • {% endif %}
       Лотов всего: <span class="strong">{{ (actual|length + past|length)|n }}</span>
       • Сумма плана: <span class="strong mono">{{ total_plan|n }} ₸</span>
     </div>

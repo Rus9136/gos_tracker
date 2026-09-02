@@ -67,6 +67,12 @@ flowchart TD
   одна таблица на заказчиков, организаторов и поставщиков, поэтому витрина
   `/organizations` и счётчики фильтруются условиями `orgs.py`
   (`buyer_condition` / `supplier_condition`), собранными по фактам участия.
+- **Отрасль организации — колонка `organizations.industry`** (слаг из
+  `industries.INDUSTRIES`, 15 отраслей по разделам ОКЭД). Два источника:
+  ключевые слова названия (только медицина, первичны) и код ОКЭД из реестра
+  участников OWS (`organizations.oked`, синк `jobs/industry_sync.py`,
+  CLI `industry-sync`). Ставится при создании и бэкофиллом
+  `cli industry-backfill`; фильтр «Отрасль» на `/organizations`.
 
 ## 2. Конвейер данных
 
